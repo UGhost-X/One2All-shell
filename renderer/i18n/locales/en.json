@@ -1,0 +1,62 @@
+{
+  "common": {
+    "appName": "One2All Console",
+    "dashboard": "Dashboard",
+    "dataAnnotation": "Data Annotation",
+    "settings": "Settings",
+    "logout": "Logout",
+    "view": "View",
+    "language": "Language"
+  },
+  "dashboard": {
+    "totalUsers": "Total Users",
+    "activeUsersDesc": "Active users in the system",
+    "revenue": "Revenue",
+    "revenueDesc": "Total revenue this month",
+    "activeSessions": "Active Sessions",
+    "activeSessionsDesc": "Currently active sessions",
+    "recentActivity": "Recent Activity",
+    "newUserRegistered": "New user registered",
+    "serverRestartScheduled": "Server restart scheduled",
+    "minutesAgo": "2 minutes ago",
+    "hourAgo": "1 hour ago"
+  },
+  "annotation": {
+    "tools": {
+      "select": "Select (V)",
+      "rect": "Rectangle (W)",
+      "polygon": "Polygon (P)",
+      "pan": "Pan (H)",
+      "zoomIn": "Zoom In",
+      "zoomOut": "Zoom Out",
+      "resetView": "Reset View",
+      "toggleCrosshair": "Toggle Crosshair",
+      "saveChanges": "Save",
+      "exit": "Exit"
+    },
+    "zoom": "Zoom",
+    "exportData": "Export Data",
+    "labels": "Labels ({count})",
+    "id": "ID",
+    "noAnnotations": "No annotations yet",
+    "startLabeling": "Select a tool to start labeling this image.",
+    "properties": "Properties",
+    "annotationLabel": "Annotation Label",
+    "labelPlaceholder": "Enter label name...",
+    "delete": "Delete",
+    "move": "Move",
+    "polygonHint": "Polygon: Click to add points, Double click to finish.",
+    "selectToModify": "Select an annotation above to modify its properties.",
+    "shortcuts": {
+      "rect": "Rect",
+      "polygon": "Polygon",
+      "delete": "Delete",
+      "cancel": "Cancel"
+    },
+    "defaultLabel": "Object",
+    "types": {
+      "rect": "Rect",
+      "polygon": "Polygon"
+    }
+  }
+}

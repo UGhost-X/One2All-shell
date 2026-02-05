@@ -1,0 +1,62 @@
+{
+  "common": {
+    "appName": "One2All 控制台",
+    "dashboard": "仪表盘",
+    "dataAnnotation": "数据标注",
+    "settings": "设置",
+    "logout": "退出登录",
+    "view": "查看",
+    "language": "语言"
+  },
+  "dashboard": {
+    "totalUsers": "用户总数",
+    "activeUsersDesc": "系统中的活跃用户",
+    "revenue": "收入",
+    "revenueDesc": "本月总收入",
+    "activeSessions": "活跃会话",
+    "activeSessionsDesc": "当前活跃会话数量",
+    "recentActivity": "最近动态",
+    "newUserRegistered": "新用户注册",
+    "serverRestartScheduled": "服务器重启计划",
+    "minutesAgo": "2 分钟前",
+    "hourAgo": "1 小时前"
+  },
+  "annotation": {
+    "tools": {
+      "select": "选择 (V)",
+      "rect": "矩形 (W)",
+      "polygon": "多边形 (P)",
+      "pan": "平移 (H)",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "resetView": "重置视图",
+      "toggleCrosshair": "切换十字线",
+      "saveChanges": "保存",
+      "exit": "返回"
+    },
+    "zoom": "缩放",
+    "exportData": "导出数据",
+    "labels": "标注 ({count})",
+    "id": "ID",
+    "noAnnotations": "暂无标注",
+    "startLabeling": "选择工具开始标注",
+    "properties": "属性",
+    "annotationLabel": "标注名称",
+    "labelPlaceholder": "请输入标注名称",
+    "delete": "删除",
+    "move": "移动",
+    "polygonHint": "多边形：单击添加点，双击完成",
+    "selectToModify": "选择上方标注以修改属性",
+    "shortcuts": {
+      "rect": "矩形",
+      "polygon": "多边形",
+      "delete": "删除",
+      "cancel": "取消"
+    },
+    "defaultLabel": "目标",
+    "types": {
+      "rect": "矩形",
+      "polygon": "多边形"
+    }
+  }
+}

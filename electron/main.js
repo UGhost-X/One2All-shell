@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Menu } = require('electron');
 const path = require('path');
 
 function createWindow() {
@@ -10,10 +10,13 @@ function createWindow() {
     },
   });
 
+  // 隐藏菜单栏
+  Menu.setApplicationMenu(null);
+
   const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:3000');
+    mainWindow.loadURL('http://localhost:3001');
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/.output/public/index.html'));
