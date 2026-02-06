@@ -6,7 +6,21 @@
     "settings": "Settings",
     "logout": "Logout",
     "view": "View",
-    "language": "Language"
+    "language": "Language",
+    "pin": "Pin to top",
+    "unpin": "Unpin from top",
+    "back": "Back"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "appearance": "Appearance",
+    "language": "Language",
+    "storage": "Storage",
+    "dataDir": "Data Storage Path",
+    "browse": "Browse",
+    "save": "Save Settings",
+    "saved": "Settings saved"
   },
   "dashboard": {
     "totalUsers": "Total Users",
@@ -19,7 +33,24 @@
     "newUserRegistered": "New user registered",
     "serverRestartScheduled": "Server restart scheduled",
     "minutesAgo": "2 minutes ago",
-    "hourAgo": "1 hour ago"
+    "hourAgo": "1 hour ago",
+    "imageSettings": "Image",
+    "cameraSettings": "Camera",
+    "productList": "Products",
+    "predictionResults": "Results",
+    "exposure": "Exposure",
+    "gain": "Gain",
+    "live": "Live",
+    "capture": "Capture",
+    "import": "Import",
+    "cameraStatus": "Status",
+    "config": "Config",
+    "add": "Add",
+    "delete": "Delete",
+    "disable": "Disable",
+    "enable": "Enable",
+    "clear": "Clear",
+    "addProduct": "Add Product"
   },
   "annotation": {
     "tools": {
@@ -41,8 +72,18 @@
     "noAnnotations": "No annotations yet",
     "startLabeling": "Select a tool to start labeling this image.",
     "properties": "Properties",
+    "currentAnnotations": "Current Annotations",
     "annotationLabel": "Annotation Label",
     "labelPlaceholder": "Enter label name...",
+    "labelManagement": "Label Management",
+    "addLabel": "Add Label",
+    "editLabel": "Edit Label",
+    "deleteLabel": "Delete Label",
+    "labelName": "Label Name",
+    "labelColor": "Label Color",
+    "labelType": "Shape Type",
+    "save": "Save",
+    "cancel": "Cancel",
     "delete": "Delete",
     "move": "Move",
     "polygonHint": "Polygon: Click to add points, Double click to finish.",
@@ -57,6 +98,18 @@
     "types": {
       "rect": "Rect",
       "polygon": "Polygon"
+    },
+    "schemes": {
+      "title": "Annotation Schemes",
+      "select": "Select Scheme",
+      "create": "Create New Scheme",
+      "name": "Scheme Name",
+      "namePlaceholder": "Enter scheme name...",
+      "noSchemes": "No schemes found, please create one",
+      "confirmCreate": "Confirm Create",
+      "boundTo": "Bound to Product: {name}",
+      "templateCount": "{count} label templates",
+      "close": "Close"
     }
   }
 }

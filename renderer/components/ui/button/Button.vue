@@ -34,7 +34,7 @@ export type ButtonVariants = VariantProps<typeof buttonVariants>
 </script>
 
 <script setup lang="ts">
-import { type HTMLAttributes } from 'vue'
+import { computed, type HTMLAttributes, useAttrs } from 'vue'
 import { Primitive, type PrimitiveProps } from 'radix-vue'
 import { cn } from '@/lib/utils'
 
@@ -47,13 +47,20 @@ interface Props extends PrimitiveProps {
 const props = withDefaults(defineProps<Props>(), {
   as: 'button',
 })
+
+const attrs = useAttrs()
+const delegatedProps = computed(() => {
+  const { class: _class, ...delegated } = attrs
+  return delegated
+})
 </script>
 
 <template>
   <Primitive
-    :as="as"
-    :as-child="asChild"
-    :class="cn(buttonVariants({ variant, size }), props.class)"
+    v-bind="delegatedProps"
+    :as="props.as"
+    :as-child="props.asChild"
+    :class="cn(buttonVariants({ variant: props.variant, size: props.size }), props.class, attrs.class as any)"
   >
     <slot />
   </Primitive>

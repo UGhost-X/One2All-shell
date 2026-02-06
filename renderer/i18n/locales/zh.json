@@ -6,7 +6,21 @@
     "settings": "设置",
     "logout": "退出登录",
     "view": "查看",
-    "language": "语言"
+    "language": "语言",
+    "pin": "固定在顶层",
+    "unpin": "取消顶层固定",
+    "back": "返回"
+  },
+  "settings": {
+    "title": "系统设置",
+    "general": "常规设置",
+    "appearance": "外观",
+    "language": "显示语言",
+    "storage": "存储设置",
+    "dataDir": "数据存储地址",
+    "browse": "浏览",
+    "save": "保存设置",
+    "saved": "设置已保存"
   },
   "dashboard": {
     "totalUsers": "用户总数",
@@ -19,7 +33,24 @@
     "newUserRegistered": "新用户注册",
     "serverRestartScheduled": "服务器重启计划",
     "minutesAgo": "2 分钟前",
-    "hourAgo": "1 小时前"
+    "hourAgo": "1 小时前",
+    "imageSettings": "图像设置",
+    "cameraSettings": "相机设置",
+    "productList": "产品列表",
+    "predictionResults": "预测结果",
+    "exposure": "曝光值",
+    "gain": "增益设置",
+    "live": "实况",
+    "capture": "拍照",
+    "import": "导入",
+    "cameraStatus": "相机状态",
+    "config": "配置信息",
+    "add": "新增",
+    "delete": "删除",
+    "disable": "停用",
+    "enable": "启用",
+    "clear": "清空",
+    "addProduct": "添加产品"
   },
   "annotation": {
     "tools": {
@@ -41,8 +72,18 @@
     "noAnnotations": "暂无标注",
     "startLabeling": "选择工具开始标注",
     "properties": "属性",
+    "currentAnnotations": "当前标注",
     "annotationLabel": "标注名称",
     "labelPlaceholder": "请输入标注名称",
+    "labelManagement": "标签管理",
+    "addLabel": "添加标签",
+    "editLabel": "编辑标签",
+    "deleteLabel": "删除标签",
+    "labelName": "标签名称",
+    "labelColor": "标签颜色",
+    "labelType": "形状类型",
+    "save": "保存",
+    "cancel": "取消",
     "delete": "删除",
     "move": "移动",
     "polygonHint": "多边形：单击添加点，双击完成",
@@ -57,6 +98,18 @@
     "types": {
       "rect": "矩形",
       "polygon": "多边形"
+    },
+    "schemes": {
+      "title": "标注方案",
+      "select": "选择标注方案",
+      "create": "创建新方案",
+      "name": "方案名称",
+      "namePlaceholder": "输入方案名称...",
+      "noSchemes": "暂无标注方案，请先创建一个",
+      "confirmCreate": "确认创建",
+      "boundTo": "绑定到产品: {name}",
+      "templateCount": "{count} 个标签模板",
+      "close": "关闭"
     }
   }
 }
