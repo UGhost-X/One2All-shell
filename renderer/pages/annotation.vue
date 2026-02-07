@@ -122,6 +122,7 @@ const fetchSchemes = async () => {
 }
 
 const schemeSelectValue = ref('')
+const schemeSelectOpen = ref(false)
 watch(activeSchemeId, () => {
   schemeSelectValue.value = activeSchemeId.value ? String(activeSchemeId.value) : ''
 }, { immediate: true })
@@ -130,6 +131,7 @@ const onSchemeValueChange = async (value: string) => {
   schemeSelectValue.value = value
   if (!schemeSelectValue.value) return
   await bindScheme(Number(schemeSelectValue.value))
+  schemeSelectOpen.value = false
 }
 
 const bindScheme = async (schemeId: number) => {
@@ -141,11 +143,14 @@ const bindScheme = async (schemeId: number) => {
       activeSchemeId.value = scheme.id
       const config = JSON.parse(scheme.config)
       labelConfigs.splice(0, labelConfigs.length, ...config.labels)
-      // Auto-select first label if available
-      if (labelConfigs.length > 0) {
-        activeLabelId.value = labelConfigs[0].id
-        activeTool.value = labelConfigs[0].type
+      if (config.customColors) {
+        customColors.splice(0, customColors.length, ...config.customColors)
+      } else {
+        customColors.splice(0, customColors.length)
       }
+      // Don't auto-select label anymore per user request
+      activeLabelId.value = null
+      activeTool.value = 'select'
     }
     showSchemeModal.value = false
   } catch (err) {
@@ -169,6 +174,37 @@ const createScheme = async () => {
   }
 }
 
+const showDeleteSchemeModal = ref(false)
+const schemeToDelete = ref<any>(null)
+
+const openDeleteSchemeModal = (scheme: any) => {
+  schemeToDelete.value = scheme
+  showDeleteSchemeModal.value = true
+}
+
+const confirmDeleteScheme = async () => {
+  const scheme = schemeToDelete.value
+  if (!scheme || !window.electronAPI) return
+  try {
+    await window.electronAPI.deleteScheme(scheme.id)
+    await fetchSchemes()
+
+    if (activeSchemeId.value === scheme.id) {
+      activeSchemeId.value = null
+      activeLabelId.value = null
+      labelConfigs.splice(0, labelConfigs.length)
+      customColors.splice(0, customColors.length)
+      activeTool.value = 'select'
+      showSchemeModal.value = true
+    }
+  } catch (err) {
+    console.error('Failed to delete scheme:', err)
+  } finally {
+    showDeleteSchemeModal.value = false
+    schemeToDelete.value = null
+  }
+}
+
 // --- Label Config State ---
 const labelConfigs = reactive<LabelConfig[]>([
   { id: '1', name: 'Label A', type: 'rect', color: '#3b82f6' },
@@ -179,12 +215,15 @@ const activeLabelId = ref<string | null>(null)
 
 // --- Label Management ---
 const isEditingLabel = ref(false)
+const isAddingMode = ref(false)
 const editingLabel = reactive<LabelConfig>({
   id: '',
   name: '',
   type: 'rect',
   color: '#3b82f6'
 })
+
+const customColors = reactive<string[]>([])
 
 const addNewLabel = async () => {
   // If no active scheme, create one first
@@ -199,29 +238,42 @@ const addNewLabel = async () => {
   }
 
   const newId = Math.random().toString(36).substr(2, 9)
-  const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899']
-  const randomColor = colors[Math.floor(Math.random() * colors.length)]
+  
+  // High contrast color palette
+  const palette = [...defaultPalette, ...customColors]
+  
+  // Find a color that isn't already used
+  const usedColors = labelConfigs.map(l => l.color.toLowerCase())
+  const availableColor = palette.find(c => !usedColors.includes(c.toLowerCase())) || palette[Math.floor(Math.random() * palette.length)]
   
   const newLabel: LabelConfig = {
     id: newId,
     name: `New Label ${labelConfigs.length + 1}`,
     type: 'rect',
-    color: randomColor
+    color: availableColor
   }
-  labelConfigs.push(newLabel)
   
-  // Save to DB immediately
-  if (activeSchemeId.value && window.electronAPI) {
-    await window.electronAPI.saveScheme({
-      id: activeSchemeId.value,
-      config: JSON.stringify({ labels: labelConfigs })
-    })
-  }
-
-  editLabel(newLabel)
+  editLabel(newLabel, true)
 }
 
-const editLabel = (config: LabelConfig) => {
+const defaultPalette = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', 
+  '#06b6d4', '#f97316', '#84cc16', '#14b8a6', '#6366f1', '#d946ef'
+]
+
+const fullPalette = computed(() => [...defaultPalette, ...customColors])
+
+const handleAddColor = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const color = input.value
+  if (color && !fullPalette.value.some(c => c.toLowerCase() === color.toLowerCase())) {
+    customColors.push(color)
+    editingLabel.color = color
+  }
+}
+
+const editLabel = (config: LabelConfig, isNew = false) => {
+  isAddingMode.value = isNew
   Object.assign(editingLabel, config)
   isEditingLabel.value = true
 }
@@ -283,44 +335,50 @@ const redo = () => {
 }
 
 const saveLabelConfig = async () => {
-  const index = labelConfigs.findIndex(c => c.id === editingLabel.id)
-  if (index !== -1) {
-    labelConfigs[index] = { ...editingLabel }
-    // Update existing annotations with this label
-    images.forEach(img => {
-      img.annotations.forEach((ann: any) => {
-        if (ann.labelId === editingLabel.id) {
-          ann.label = editingLabel.name
-          ann.color = editingLabel.color
-        }
+  if (isAddingMode.value) {
+    labelConfigs.push({ ...editingLabel })
+    activeLabelId.value = editingLabel.id
+  } else {
+    const index = labelConfigs.findIndex(c => c.id === editingLabel.id)
+    if (index !== -1) {
+      labelConfigs[index] = { ...editingLabel }
+      // Update existing annotations with this label
+      images.forEach(img => {
+        img.annotations.forEach((ann: any) => {
+          if (ann.labelId === editingLabel.id) {
+            ann.label = editingLabel.name
+            ann.color = editingLabel.color
+          }
+        })
       })
-    })
 
-    // If we have an active scheme, update it in DB
-    if (activeSchemeId.value && window.electronAPI) {
-      await window.electronAPI.saveScheme({
-        id: activeSchemeId.value,
-        config: JSON.stringify({ labels: labelConfigs })
-      })
-    }
-
-    if (activeLabelId.value === editingLabel.id) {
-      activeTool.value = editingLabel.type
-    }
-
-    // Update canvas if current image has annotations with this label
-    if (fCanvas.value) {
-      fCanvas.value.getObjects().forEach((obj: any) => {
-        if (obj.labelId === editingLabel.id) {
-          obj.set({
-            stroke: editingLabel.color,
-            fill: `${editingLabel.color}1A`
-          })
-        }
-      })
-      fCanvas.value.renderAll()
+      // Update canvas if current image has annotations with this label
+      if (fCanvas.value) {
+        fCanvas.value.getObjects().forEach((obj: any) => {
+          if (obj.labelId === editingLabel.id) {
+            obj.set({
+              stroke: editingLabel.color,
+              fill: `${editingLabel.color}1A`
+            })
+          }
+        })
+        fCanvas.value.renderAll()
+      }
     }
   }
+
+  // Save to DB
+  if (activeSchemeId.value && window.electronAPI) {
+    await window.electronAPI.saveScheme({
+      id: activeSchemeId.value,
+      config: JSON.stringify({ labels: labelConfigs, customColors })
+    })
+  }
+
+  if (activeLabelId.value === editingLabel.id) {
+    activeTool.value = editingLabel.type
+  }
+
   isEditingLabel.value = false
 }
 
@@ -334,7 +392,7 @@ const removeLabel = async (id: string) => {
     if (activeSchemeId.value && window.electronAPI) {
       await window.electronAPI.saveScheme({
         id: activeSchemeId.value,
-        config: JSON.stringify({ labels: labelConfigs })
+        config: JSON.stringify({ labels: labelConfigs, customColors })
       })
     }
   }
@@ -430,6 +488,7 @@ onMounted(async () => {
       height: clientHeight || 600,
       backgroundColor: 'transparent',
       selection: true,
+      uniformScaling: false,
     })
 
     initCanvasEvents()
@@ -507,24 +566,13 @@ const syncCanvasToViewer = () => {
   const cy = vp.h / 2
   
   const { cos, sin } = getRotationCosSin()
-  
-  // Fabric.js viewportTransform: [scaleX, skewY, skewX, scaleY, translateX, translateY]
-  // We need to apply scale, rotation and translation
-  // For rotation, it's more complex with viewportTransform. 
-  // Let's simplify: Fabric canvas stays at viewport size, we transform objects? 
-  // No, better to transform the whole viewport.
-  
   const a = cos * s
   const b = sin * s
   const c = -sin * s
   const d = cos * s
   const tx = cx + viewerPanX.value
   const ty = cy + viewerPanY.value
-  
-  // We also need to account for the fact that (0,0) in our logical image is its center.
-  // In Fabric, objects are relative to canvas (0,0).
-  // Our viewer layout uses translate(-50%, -50%) which means image center is at (tx, ty).
-  
+
   fCanvas.value.viewportTransform = [a, b, c, d, tx, ty]
   fCanvas.value.renderAll()
 }
@@ -533,6 +581,13 @@ const initCanvasEvents = () => {
   if (!fCanvas.value) return
 
   fCanvas.value.on('mouse:down', (opt) => {
+    // If clicking on an annotation, don't start drawing a new one
+    const target = opt.target as any
+    const targetId = target?.id ? String(target.id) : ''
+    if (targetId.startsWith('ann_')) {
+      return
+    }
+
     // We use getScenePoint to get coordinates in the transformed image space
     const pointer = fCanvas.value!.getScenePoint(opt.e)
     
@@ -550,7 +605,7 @@ const initCanvasEvents = () => {
         height: 0,
         fill: `${config.color}33`,
         stroke: config.color,
-        strokeWidth: 2 / viewerScale.value, // Keep stroke consistent regardless of zoom
+        strokeWidth: 2 / viewerScale.value,
         selectable: false,
       })
       fCanvas.value!.add(tempObj)
@@ -666,6 +721,54 @@ const initCanvasEvents = () => {
   fCanvas.value.on('selection:cleared', () => {
     selectedId.value = null
   })
+
+  fCanvas.value.on('object:modified', (e) => {
+    const obj = e.target as any
+    const objId = obj?.id ? String(obj.id) : ''
+    if (!objId.startsWith('ann_')) return
+
+    const current = images[currentImgIndex.value]
+    if (!current) return
+    const index = current.annotations.findIndex(a => a.id === objId)
+    if (index === -1) return
+
+    pushHistory()
+
+    const ann = current.annotations[index]
+    if (ann.type === 'rect') {
+      const left = Number(obj.left ?? 0)
+      const top = Number(obj.top ?? 0)
+      const w = Number(obj.width ?? 0) * Number(obj.scaleX ?? 1)
+      const h = Number(obj.height ?? 0) * Number(obj.scaleY ?? 1)
+      ann.points = [left, top, w, h]
+      obj.set({ width: w, height: h, scaleX: 1, scaleY: 1 })
+    } else if (ann.type === 'polygon') {
+      const left = Number(obj.left ?? 0)
+      const top = Number(obj.top ?? 0)
+      const scaleX = Number(obj.scaleX ?? 1)
+      const scaleY = Number(obj.scaleY ?? 1)
+      const pathOffset = obj.pathOffset ?? { x: 0, y: 0 }
+      
+      const points = (obj.points ?? []).map((p: any) => ({
+        x: (Number(p.x ?? 0) - Number(pathOffset.x ?? 0)) * scaleX + left,
+        y: (Number(p.y ?? 0) - Number(pathOffset.y ?? 0)) * scaleY + top,
+      }))
+      ann.points = points
+      // Reset scale after applying it to points
+      obj.set({
+        points: (obj.points ?? []).map((p: any) => ({
+          x: p.x * scaleX,
+          y: p.y * scaleY
+        })),
+        scaleX: 1,
+        scaleY: 1,
+        pathOffset: {
+          x: pathOffset.x * scaleX,
+          y: pathOffset.y * scaleY
+        }
+      })
+    }
+  })
 }
 
 const finishDrawing = () => {
@@ -697,22 +800,28 @@ const finishDrawing = () => {
       top: tempObj.top,
       width: tempObj.width,
       height: tempObj.height,
-      fill: `${color}1A`, // 10% opacity
+      fill: `${color}1A`,
       stroke: color,
       strokeWidth: 2,
-      lockMovementX: true,
-      lockMovementY: true,
-      lockScalingX: true,
-      lockScalingY: true,
+      lockMovementX: false,
+      lockMovementY: false,
+      lockScalingX: false,
+      lockScalingY: false,
       lockRotation: true,
-      hasControls: false,
+      lockScalingFlip: true,
+      hasControls: true,
       id: id as any,
       labelId: config.id as any,
       cornerColor: '#fff',
       cornerStrokeColor: color,
       cornerSize: 8,
+      cornerStyle: 'circle',
       transparentCorners: false,
+      padding: 5,
     } as any)
+
+    rect.setControlVisible('mtr', false);
+    
     fCanvas.value.add(rect)
     fCanvas.value.setActiveObject(rect)
   } else if (activeTool.value === 'polygon' && polygonPoints.length >= 3) {
@@ -734,16 +843,26 @@ const finishDrawing = () => {
       fill: `${color}1A`, // 10% opacity
       stroke: color,
       strokeWidth: 2,
-      lockMovementX: true,
-      lockMovementY: true,
-      lockScalingX: true,
-      lockScalingY: true,
+      lockMovementX: false,
+      lockMovementY: false,
+      lockScalingX: false,
+      lockScalingY: false,
       lockRotation: true,
-      hasControls: false,
+      lockScalingFlip: true,
+      hasControls: true,
+      cornerColor: '#fff',
+      cornerStrokeColor: color,
+      cornerSize: 8,
+      cornerStyle: 'circle',
+      transparentCorners: false,
+      padding: 5,
       id: id as any,
       labelId: config.id as any,
       objectCaching: false,
+      
     } as any)
+    //取消长柄
+    poly.setControlVisible('mtr', false);
     fCanvas.value.add(poly)
     fCanvas.value.setActiveObject(poly)
     
@@ -759,8 +878,6 @@ const finishDrawing = () => {
   
   tempObj = null
   startPoint = null
-  // Keep the same tool if drawing multiple
-  // activeTool.value = 'select' 
   fCanvas.value.renderAll()
 }
 
@@ -834,18 +951,21 @@ const drawAnnotation = (ann: Annotation) => {
       fill: `${ann.color}1A`, // 10% opacity
       stroke: ann.color,
       strokeWidth: 2,
-      lockMovementX: true,
-      lockMovementY: true,
-      lockScalingX: true,
-      lockScalingY: true,
+      lockMovementX: false,
+      lockMovementY: false,
+      lockScalingX: false,
+      lockScalingY: false,
       lockRotation: true,
-      hasControls: false,
+      lockScalingFlip: true,
+      hasControls: true,
       id: ann.id as any,
       labelId: ann.labelId as any,
       cornerColor: '#fff',
       cornerStrokeColor: ann.color,
-      cornerSize: 8,
+      cornerSize: 12,
+      cornerStyle: 'circle',
       transparentCorners: false,
+      padding: 5,
     } as any)
     fCanvas.value.add(rect)
   } else {
@@ -853,12 +973,19 @@ const drawAnnotation = (ann: Annotation) => {
       fill: `${ann.color}1A`, // 10% opacity
       stroke: ann.color,
       strokeWidth: 2,
-      lockMovementX: true,
-      lockMovementY: true,
-      lockScalingX: true,
-      lockScalingY: true,
+      lockMovementX: false,
+      lockMovementY: false,
+      lockScalingX: false,
+      lockScalingY: false,
       lockRotation: true,
-      hasControls: false,
+      lockScalingFlip: true,
+      hasControls: true,
+      cornerColor: '#fff',
+      cornerStrokeColor: ann.color,
+      cornerSize: 12,
+      cornerStyle: 'circle',
+      transparentCorners: false,
+      padding: 5,
       id: ann.id as any,
       labelId: ann.labelId as any,
       objectCaching: false,
@@ -897,7 +1024,10 @@ const highlightAnnotation = (id: string | null) => {
             offsetY: 0
           }
         })
-        fCanvas.value!.setActiveObject(obj)
+        // Only set active if not already active to avoid interfering with interactions
+        if (fCanvas.value!.getActiveObject() !== obj) {
+          fCanvas.value!.setActiveObject(obj)
+        }
       } else {
         // Reset to normal
         obj.set({
@@ -923,16 +1053,6 @@ const resetZoom = () => {
   syncCanvasToViewer()
 }
 
-const changeImage = async (dir: number) => {
-  const next = currentImgIndex.value + dir
-  if (next >= 0 && next < images.length) {
-    currentImgIndex.value = next
-    undoStack.length = 0
-    redoStack.length = 0
-    selectedId.value = null
-    loadImage(next)
-  }
-}
 
 const isSaving = ref(false)
 const saveAllChanges = async () => {
@@ -953,15 +1073,21 @@ const saveAllChanges = async () => {
     }, 1500)
   } catch (err) {
     console.error('Failed to save annotations:', err)
-    alert('保存失败')
+    alert(t('annotation.saveFailed'))
     isSaving.value = false
   }
 }
 
-// Watch for changes to current image's annotations and auto-save (optional)
-// watch(() => images[currentImgIndex.value]?.annotations, () => {
-//   saveAllChanges()
-// }, { deep: true })
+const handleNextStep = async () => {
+  await saveAllChanges()
+  // Wait a bit for the "Saved" state to show, then move to next image if available
+  setTimeout(async () => {
+    if (currentImgIndex.value < images.length - 1) {
+      currentImgIndex.value++
+      await loadImage(currentImgIndex.value)
+    }
+  }, 1000)
+}
 
 const getAnnotationCount = () => {
   if (!images[currentImgIndex.value]) return 0
@@ -977,7 +1103,10 @@ watch(activeTool, (tool) => {
 
 watch(activeLabelId, () => {
   const config = labelConfigs.find(c => c.id === activeLabelId.value)
-  if (!config) return
+  if (!config) {
+    activeTool.value = 'select'
+    return
+  }
   activeTool.value = config.type
 })
 
@@ -995,57 +1124,6 @@ watch(showLabelPanel, async () => {
   <div class="flex h-screen bg-background text-foreground overflow-hidden font-sans flex-col">
     <!-- Top Header -->
     <header class="h-14 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center justify-between px-4 z-20">
-      <div class="flex items-center gap-4">
-        <NuxtLink to="/">
-          <UiButton variant="ghost" size="icon" :title="t('annotation.tools.exit')">
-            <ChevronLeft class="h-5 w-5" />
-          </UiButton>
-        </NuxtLink>
-        <div class="h-6 w-[1px] bg-border"></div>
-        <h1 class="text-sm font-semibold truncate max-w-[200px]">{{ images[currentImgIndex]?.name }}</h1>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <UiButton 
-          variant="ghost" 
-          size="icon" 
-          @click="changeImage(-1)" 
-          :disabled="currentImgIndex === 0"
-        >
-          <ChevronLeft class="h-5 w-5" />
-        </UiButton>
-        <span class="text-xs font-medium min-w-[40px] text-center">
-          {{ currentImgIndex + 1 }} / {{ images.length }}
-        </span>
-        <UiButton 
-          variant="ghost" 
-          size="icon" 
-          @click="changeImage(1)" 
-          :disabled="currentImgIndex === images.length - 1"
-        >
-          <ChevronRight class="h-5 w-5" />
-        </UiButton>
-
-        <div class="h-6 w-[1px] bg-border mx-1"></div>
-
-        <UiButton 
-          variant="default" 
-          size="sm" 
-          class="gap-2 min-w-[100px]"
-          :title="t('annotation.tools.saveChanges')"
-          @click="saveAllChanges"
-          :disabled="isSaving"
-        >
-          <template v-if="isSaving">
-            <Check class="h-4 w-4" />
-            已保存
-          </template>
-          <template v-else>
-            <Save class="h-4 w-4" />
-            {{ t('annotation.tools.saveChanges') }}
-          </template>
-        </UiButton>
-      </div>
     </header>
 
     <div class="flex-1 flex overflow-hidden">
@@ -1057,20 +1135,30 @@ watch(showLabelPanel, async () => {
           class="h-10 w-10 rounded-xl transition-all"
           :class="{ 'bg-primary text-primary-foreground shadow-lg': showLabelPanel }"
           @click="showLabelPanel = !showLabelPanel"
-          title="标签管理"
+          :title="t('annotation.labelManagement')"
         >
           <Palette class="h-5 w-5" />
         </UiButton>
 
         <Separator class="w-8" />
 
-        <div class="flex flex-col gap-2">
+        <div class="mt-auto flex flex-col gap-2">
+          <UiButton 
+            variant="ghost" 
+            size="icon" 
+            class="h-10 w-10 rounded-xl text-muted-foreground hover:text-foreground"
+            @click="resetZoom"
+            :title="t('annotation.resetView')"
+          >
+            <Maximize class="h-5 w-5" />
+          </UiButton>
+
           <UiButton 
             variant="ghost" 
             size="icon" 
             class="h-10 w-10 rounded-xl"
             @click="undo"
-            title="撤销"
+            :title="t('annotation.undo')"
           >
             <Undo2 class="h-5 w-5" />
           </UiButton>
@@ -1080,31 +1168,25 @@ watch(showLabelPanel, async () => {
             size="icon" 
             class="h-10 w-10 rounded-xl"
             @click="redo"
-            title="重做"
+            :title="t('annotation.redo')"
           >
             <Redo2 class="h-5 w-5" />
           </UiButton>
-        </div>
-
-        <div class="mt-auto">
-          <UiButton 
-            variant="ghost" 
-            size="icon" 
-            class="h-10 w-10 rounded-xl text-muted-foreground hover:text-foreground"
-            @click="resetZoom"
-            title="重置视图"
-          >
-            <Maximize class="h-5 w-5" />
-          </UiButton>
+          <Separator class="w-8" />
+          <NuxtLink to="/">
+            <UiButton variant="ghost" size="icon" class="h-10 w-10 rounded-xl" :title="t('annotation.tools.exit')">
+              <ChevronLeft class="h-5 w-5" />
+            </UiButton>
+          </NuxtLink>
         </div>
       </aside>
 
       <!-- Expandable Label Sidebar -->
       <aside 
         class="border-r bg-muted/5 flex flex-col transition-all duration-300 ease-in-out overflow-hidden relative"
-        :class="showLabelPanel ? 'w-64' : 'w-0'"
+        :class="showLabelPanel ? 'w-56' : 'w-0'"
       >
-        <div class="w-64 flex flex-col h-full">
+        <div class="w-56 flex flex-col h-full">
           <!-- Sidebar Header -->
           <div class="h-14 border-b flex items-center justify-between px-4 bg-background/50 backdrop-blur-sm shrink-0">
             <div class="flex items-center gap-2 font-bold text-sm tracking-tight">
@@ -1118,68 +1200,74 @@ watch(showLabelPanel, async () => {
           <!-- Label Scheme Selector -->
           <div class="p-3 border-b bg-muted/20 shrink-0">
             <div class="flex items-center justify-between mb-2 px-1">
-              <span class="text-[11px] font-bold uppercase text-muted-foreground tracking-wider">标注方案</span>
+              <span class="text-[11px] font-bold uppercase text-muted-foreground tracking-wider">{{ t('annotation.labelScheme') }}</span>
               <div class="flex items-center gap-1">
-                <UiButton variant="ghost" size="icon" class="h-5 w-5 hover:bg-primary/10 hover:text-primary" @click="showSchemeModal = true" title="方案管理">
+                <UiButton variant="ghost" size="icon" class="h-5 w-5 hover:bg-primary/10 hover:text-primary" @click="showSchemeModal = true" :title="t('annotation.labelScheme')">    
                   <BookOpen class="h-3 w-3" />
                 </UiButton>
-                <UiButton variant="ghost" size="icon" class="h-5 w-5 hover:bg-primary/10 hover:text-primary" @click="addNewLabel" title="新增标签">
+                <UiButton variant="ghost" size="icon" class="h-5 w-5 hover:bg-primary/10 hover:text-primary" @click="addNewLabel" :title="t('annotation.addLabel')">
                   <Plus class="h-3 w-3" />
                 </UiButton>
               </div>
             </div>
-            <UiSelect :model-value="schemeSelectValue" @update:model-value="onSchemeValueChange">
-              <UiSelectTrigger class="h-8 px-2 py-1.5 rounded-lg shadow-sm text-xs font-medium">
+            <UiSelect :model-value="schemeSelectValue" v-model:open="schemeSelectOpen" @update:model-value="onSchemeValueChange">
+              <UiSelectTrigger class="h-8 px-2 py-1.5 rounded-lg shadow-sm text-xs font-medium w-full">
                 <div class="flex items-center gap-2">
                   <div class="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
-                  <UiSelectValue placeholder="未选择方案" />
+                  <UiSelectValue :placeholder="t('annotation.noSchemeSelected')" />
                 </div>
               </UiSelectTrigger>
-              <UiSelectContent>
+              <UiSelectContent class="w-[var(--radix-select-trigger-width)]">
                 <UiSelectItem v-for="s in schemes" :key="s.id" :value="String(s.id)">{{ s.name }}</UiSelectItem>
               </UiSelectContent>
             </UiSelect>
           </div>
 
           <!-- Label List -->
-          <div class="flex-1 overflow-y-auto custom-scrollbar p-2">
-            <div class="space-y-1">
+          <div class="flex-1 overflow-y-auto custom-scrollbar p-2" @click.self="activeLabelId = null">
+            <div class="space-y-2" @click.self="activeLabelId = null">
               <div 
                 v-for="config in labelConfigs" 
                 :key="config.id"
-                class="group relative flex items-center gap-2 p-2 rounded-lg transition-all cursor-pointer border border-transparent"
+                class="group relative flex items-center gap-3 p-2 rounded-xl transition-all cursor-pointer border-1 overflow-hidden mr-1.5 ml-1.5"
                 :class="[
                   activeLabelId === config.id 
-                    ? 'bg-primary/10 border-primary/20 shadow-sm' 
-                    : 'hover:bg-accent/50'
+                    ? 'shadow-md scale-[1.02] translate-x-1 z-10' 
+                    : 'border-transparent hover:scale-[1.01]'
                 ]"
-                @click="activeLabelId = config.id"
+                :style="{ 
+                  borderColor: activeLabelId === config.id ? config.color : 'transparent',
+                  backgroundColor: `${config.color}15`,
+                  backdropFilter: 'blur(4px)'
+                }"
+                @click.stop="activeLabelId = config.id"
               >
+                <!-- Type-based Marker -->
                 <div 
-                  class="w-3 h-3 rounded-sm shrink-0 shadow-inner" 
-                  :style="{ backgroundColor: config.color }"
+                  class="absolute -left-[2px] -top-[2px] -bottom-[2px] w-5 transition-all duration-300 z-10"
+                  :style="{ 
+                    backgroundColor: config.color,
+                    clipPath: config.type === 'rect'
+                      ? (activeLabelId === config.id ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(0 0, 60% 50%, 0 100%)')
+                      : (activeLabelId === config.id ? 'polygon(0 0, 100% 0, 25% 50%, 100% 100%, 0 100%)' : 'polygon(0 0, 70% 0, 15% 50%, 70% 100%, 0 100%)')
+                  }"
                 ></div>
-                <div class="flex-1 min-w-0">
+
+                <div class="flex-1 min-w-0 ml-4">
                   <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium truncate" :class="{ 'text-primary': activeLabelId === config.id }">
+                    <span class="text-xs font-bold truncate transition-colors" :class="{ 'text-foreground': activeLabelId === config.id, 'text-muted-foreground': activeLabelId !== config.id }">
                       {{ config.name }}
                     </span>
                     <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <UiButton variant="ghost" size="icon" class="h-6 w-6" title="编辑" @click.stop="editLabel(config)">
+                      <UiButton variant="ghost" size="icon" class="h-6 w-6 rounded-md" :title="t('annotation.edit')" @click.stop="editLabel(config)">
                         <Settings2 class="h-3.5 w-3.5" />
                       </UiButton>
-                      <UiButton variant="ghost" size="icon" class="h-6 w-6 hover:bg-destructive/10 hover:text-destructive" title="删除" @click.stop="removeLabel(config.id)">
+                      <UiButton variant="ghost" size="icon" class="h-6 w-6 rounded-md hover:bg-destructive/10 hover:text-destructive" :title="t('annotation.deleteLabel')" @click.stop="removeLabel(config.id)">
                         <Trash2 class="h-3.5 w-3.5" />
                       </UiButton>
                     </div>
                   </div>
                 </div>
-                
-                <!-- Active Indicator -->
-                <div 
-                  v-if="activeLabelId === config.id"
-                  class="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-primary rounded-r-full"
-                ></div>
               </div>
             </div>
           </div>
@@ -1199,7 +1287,7 @@ watch(showLabelPanel, async () => {
             class="absolute inset-0 bg-background/95 backdrop-blur-md z-20 flex flex-col p-4"
           >
             <div class="flex items-center justify-between mb-6">
-              <h3 class="text-sm font-bold tracking-tight">编辑标签</h3>
+              <h3 class="text-sm font-bold tracking-tight">{{ isAddingMode ? t('annotation.addLabel') : t('annotation.editLabel') }}</h3>
               <UiButton variant="ghost" size="icon" class="h-8 w-8 rounded-full" @click="isEditingLabel = false">
                 <ChevronLeft class="h-4 w-4" />
               </UiButton>
@@ -1207,12 +1295,12 @@ watch(showLabelPanel, async () => {
             
             <div class="space-y-5 flex-1">
               <div class="space-y-2">
-                <label class="text-[11px] font-bold uppercase text-muted-foreground ml-1">标签名称</label>
+                <label class="text-[11px] font-bold uppercase text-muted-foreground ml-1">{{ t('annotation.labelName') }}</label>
                 <UiInput v-model="editingLabel.name" class="h-9 bg-muted/30 focus-visible:ring-primary/30" />
               </div>
               
               <div class="space-y-2">
-                <label class="text-[11px] font-bold uppercase text-muted-foreground ml-1">标签类型</label>
+                <label class="text-[11px] font-bold uppercase text-muted-foreground ml-1">{{ t('annotation.labelType') }}</label>
                 <div class="grid grid-cols-2 gap-2">
                   <UiButton
                     variant="outline"
@@ -1222,7 +1310,7 @@ watch(showLabelPanel, async () => {
                     @click="editingLabel.type = 'rect'"
                   >
                     <Square class="h-4 w-4" />
-                    <span class="text-xs">矩形</span>
+                    <span class="text-xs">{{ t('annotation.types.rect') }}</span>
                   </UiButton>
                   <UiButton
                     variant="outline"
@@ -1232,28 +1320,45 @@ watch(showLabelPanel, async () => {
                     @click="editingLabel.type = 'polygon'"
                   >
                     <Hexagon class="h-4 w-4" />
-                    <span class="text-xs">多边形</span>
+                    <span class="text-xs">{{ t('annotation.types.polygon') }}</span>
                   </UiButton>
                 </div>
               </div>
               
               <div class="space-y-2">
-                <label class="text-[11px] font-bold uppercase text-muted-foreground ml-1">标签颜色</label>
-                <div class="grid grid-cols-5 gap-2 p-1">
+                <label class="text-[11px] font-bold uppercase text-muted-foreground ml-1">{{ t('annotation.labelColor') }}</label>
+                <div class="grid grid-cols-6 gap-2 p-1">
                   <button 
-                    v-for="color in ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#14b8a6', '#f97316', '#444']" 
+                    v-for="color in fullPalette" 
                     :key="color"
-                    class="w-8 h-8 rounded-lg border-2 transition-transform hover:scale-110 active:scale-95 shadow-sm"
-                    :class="editingLabel.color === color ? 'border-primary' : 'border-transparent'"
+                    class="w-7 h-7 rounded-lg border-2 transition-all hover:scale-110 active:scale-95 shadow-sm relative overflow-hidden"
+                    :class="[
+                      editingLabel.color === color ? 'border-primary ring-2 ring-primary/20' : 'border-transparent',
+                      labelConfigs.some(l => l.color.toLowerCase() === color.toLowerCase() && l.id !== editingLabel.id) ? 'opacity-20 cursor-not-allowed grayscale-[0.5]' : ''
+                    ]"
                     :style="{ backgroundColor: color }"
+                    :disabled="labelConfigs.some(l => l.color.toLowerCase() === color.toLowerCase() && l.id !== editingLabel.id)"
                     @click="editingLabel.color = color"
-                  ></button>
+                  >
+                    <div v-if="labelConfigs.some(l => l.color.toLowerCase() === color.toLowerCase() && l.id !== editingLabel.id)" class="absolute inset-0 flex items-center justify-center">
+                      <div class="w-full h-[2px] bg-white/50 rotate-45"></div>
+                    </div>
+                  </button>
+                  
+                  <div class="relative w-7 h-7 rounded-lg border-2 border-dashed border-muted-foreground/30 hover:border-primary/50 transition-colors flex items-center justify-center cursor-pointer hover:bg-muted/50">
+                    <Plus class="w-3 h-3 text-muted-foreground" />
+                    <input 
+                      type="color" 
+                      class="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                      @change="handleAddColor"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
             
             <UiButton class="w-full mt-auto shadow-lg shadow-primary/20" @click="saveLabelConfig">
-              保存更改
+              {{ isAddingMode ? t('annotation.confirmAdd') : t('annotation.saveChanges') }}
             </UiButton>
           </div>
         </Transition>
@@ -1308,6 +1413,26 @@ watch(showLabelPanel, async () => {
             </div>
           </div>
         </div>
+
+        <!-- Bottom fixed button -->
+        <div class="p-4 border-t bg-background mt-auto">
+          <UiButton 
+            variant="default" 
+            class="w-full gap-2 h-10 shadow-lg shadow-primary/20"
+            :title="t('annotation.tools.nextStep')"
+            @click="handleNextStep"
+            :disabled="isSaving"
+          >
+            <template v-if="isSaving">
+              <Check class="h-4 w-4" />
+              {{ t('annotation.saveSuccess') }}
+            </template>
+            <template v-else>
+              <ChevronRight class="h-4 w-4" />
+              {{ t('annotation.tools.nextStep') }}
+            </template>
+          </UiButton>
+        </div>
       </aside>
     </div>
     <!-- Scheme Selection Modal -->
@@ -1357,7 +1482,17 @@ watch(showLabelPanel, async () => {
                   {{ t('annotation.schemes.templateCount', { count: JSON.parse(scheme.config).labels.length }) }}
                 </div>
               </div>
-              <Check v-if="activeSchemeId === scheme.id" class="h-4 w-4 text-primary" />
+              <div class="flex items-center gap-1">
+                <Check v-if="activeSchemeId === scheme.id" class="h-4 w-4 text-primary" />
+                <UiButton
+                  variant="ghost"
+                  size="icon"
+                  class="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:bg-destructive/10"
+                  @click.stop="openDeleteSchemeModal(scheme)"
+                >
+                  <Trash2 class="h-4 w-4" />
+                </UiButton>
+              </div>
             </div>
           </div>
           <div v-else class="text-center py-8 text-muted-foreground">
@@ -1370,6 +1505,25 @@ watch(showLabelPanel, async () => {
 
         <UiCardFooter class="pt-2">
           <UiButton variant="outline" class="w-full" @click="showSchemeModal = false" :disabled="!activeSchemeId">{{ t('annotation.schemes.close') }}</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <div v-if="showDeleteSchemeModal" class="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200 border-destructive/20">
+        <UiCardHeader class="pb-2">
+          <UiCardTitle class="text-lg flex items-center gap-2 text-destructive">
+            <Trash2 class="h-5 w-5" />
+            {{ t('annotation.schemes.deleteTitle') }}
+          </UiCardTitle>
+          <UiCardDescription>
+            {{ t('annotation.schemes.deleteConfirm', { name: schemeToDelete?.name }) }}
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardFooter class="pt-2 flex gap-2 w-full">
+          <UiButton variant="outline" class="flex-1" @click="showDeleteSchemeModal = false">{{ t('annotation.cancel') }}</UiButton>
+          <UiButton variant="destructive" class="flex-1" @click="confirmDeleteScheme">{{ t('annotation.delete') }}</UiButton>
         </UiCardFooter>
       </UiCard>
     </div>

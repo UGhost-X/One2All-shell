@@ -63,6 +63,7 @@
       "resetView": "Reset View",
       "toggleCrosshair": "Toggle Crosshair",
       "saveChanges": "Save",
+      "nextStep": "Next Step",
       "exit": "Exit"
     },
     "zoom": "Zoom",
@@ -76,6 +77,8 @@
     "annotationLabel": "Annotation Label",
     "labelPlaceholder": "Enter label name...",
     "labelManagement": "Label Management",
+    "labelScheme": "Label Scheme",
+    "noSchemeSelected": "No scheme selected",
     "addLabel": "Add Label",
     "editLabel": "Edit Label",
     "deleteLabel": "Delete Label",
@@ -86,6 +89,9 @@
     "cancel": "Cancel",
     "delete": "Delete",
     "move": "Move",
+    "undo": "Undo",
+    "redo": "Redo",
+    "resetView": "Reset View",
     "polygonHint": "Polygon: Click to add points, Double click to finish.",
     "selectToModify": "Select an annotation above to modify its properties.",
     "shortcuts": {

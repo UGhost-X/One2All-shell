@@ -146,6 +146,16 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('db:delete-product', async (event, id) => {
+    // 获取产品信息以删除对应的图片文件
+    try {
+      const productDir = path.join(appSettings.dataPath, String(id));
+      if (fs.existsSync(productDir)) {
+        fs.rmSync(productDir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      console.error('Failed to delete product images:', err);
+    }
+
     return await prisma.product.delete({
       where: { id }
     });

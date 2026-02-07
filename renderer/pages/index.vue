@@ -393,7 +393,44 @@ const confirmAddProduct = async () => {
   }
 }
 
+const showDeleteModal = ref(false)
+const productToDelete = ref<any>(null)
+
+const openDeleteModal = (product: any) => {
+  productToDelete.value = product
+  showDeleteModal.value = true
+}
+
+const confirmDeleteProductAction = async () => {
+  if (!productToDelete.value) return
+  
+  const id = productToDelete.value.id
+  if (window.electronAPI) {
+    try {
+      await window.electronAPI.deleteProduct(id)
+      await fetchInitialData()
+      
+      // If the deleted product was selected, clear the selection and view
+      if (selectedProductId.value === id) {
+        selectedProductId.value = null
+        mainViewUrl.value = ''
+        mainViewState.value = 'empty'
+        viewerImageNatural.value = null
+        resetViewer()
+      }
+      
+      showToast('产品已删除', 'info')
+    } catch (err) {
+      console.error('Failed to delete product:', err)
+      showToast('删除失败', 'error')
+    }
+  }
+  showDeleteModal.value = false
+  productToDelete.value = null
+}
+
 const removeProduct = async (id: number) => {
+  // Legacy method kept for compatibility if needed, but we prefer openDeleteModal
   if (window.electronAPI) {
     await window.electronAPI.deleteProduct(id)
     await fetchInitialData()
@@ -1023,7 +1060,7 @@ onBeforeUnmount(() => {
                     variant="ghost" 
                     size="icon" 
                     class="h-6 w-6 text-destructive hover:bg-destructive/10"
-                    @click.stop="removeProduct(product.id)"
+                    @click.stop="openDeleteModal(product)"
                   >
                     <Trash2 class="h-3 w-3" />
                   </UiButton>
@@ -1100,6 +1137,25 @@ onBeforeUnmount(() => {
         <UiCardFooter class="gap-2 w-full">
           <UiButton variant="outline" class="flex-1" @click="showProductModal = false">取消</UiButton>
           <UiButton variant="default" class="flex-1" @click="confirmAddProduct" :disabled="!newProductName.trim()">确认新增</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div v-if="showDeleteModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200 border-destructive/20">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg text-destructive flex items-center gap-2">
+            <Trash2 class="h-5 w-5" />
+            确认删除
+          </UiCardTitle>
+          <UiCardDescription>
+            确定要删除 "{{ productToDelete?.name }}" 吗？此操作将永久删除该产品及其所有关联图片，无法恢复。
+          </UiCardDescription>
+        </UiCardHeader>
+        <UiCardFooter class="flex justify-end gap-2">
+          <UiButton variant="outline" @click="showDeleteModal = false">取消</UiButton>
+          <UiButton variant="destructive" @click="confirmDeleteProductAction">确认删除</UiButton>
         </UiCardFooter>
       </UiCard>
     </div>

@@ -63,7 +63,9 @@
       "resetView": "重置视图",
       "toggleCrosshair": "切换十字线",
       "saveChanges": "保存",
+      "nextStep": "下一步",
       "exit": "返回"
+      
     },
     "zoom": "缩放",
     "exportData": "导出数据",
@@ -76,6 +78,8 @@
     "annotationLabel": "标注名称",
     "labelPlaceholder": "请输入标注名称",
     "labelManagement": "标签管理",
+    "labelScheme": "标注方案",
+    "noSchemeSelected": "未选择标注方案",
     "addLabel": "添加标签",
     "editLabel": "编辑标签",
     "deleteLabel": "删除标签",
@@ -86,6 +90,14 @@
     "cancel": "取消",
     "delete": "删除",
     "move": "移动",
+    "undo": "撤销",
+    "redo": "重做",
+    "resetView": "重置视图",
+    "saveSuccess": "已保存",
+    "saveFailed": "保存失败",
+    "edit": "编辑",
+    "confirmAdd": "确认新增",
+    "saveChanges": "保存更改",
     "polygonHint": "多边形：单击添加点，双击完成",
     "selectToModify": "选择上方标注以修改属性",
     "shortcuts": {
@@ -109,6 +121,8 @@
       "confirmCreate": "确认创建",
       "boundTo": "绑定到产品: {name}",
       "templateCount": "{count} 个标签模板",
+      "deleteTitle": "删除标注方案",
+      "deleteConfirm": "确认删除方案“{name}”吗？删除后该方案将无法恢复，绑定该方案的产品会自动解除绑定。",
       "close": "关闭"
     }
   }
