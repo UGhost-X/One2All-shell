@@ -1,6 +1,6 @@
 <template>
   <div>
-    <NuxtPage />
+    <NuxtPage :keepalive="{ include: ['annotation'] }" />
   </div>
 </template>
 

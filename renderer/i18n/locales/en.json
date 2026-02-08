@@ -3,6 +3,8 @@
     "appName": "One2All Console",
     "dashboard": "Dashboard",
     "dataAnnotation": "Data Annotation",
+    "dataTraining": "Data Training",
+    "serviceDeployment": "Service Deployment",
     "settings": "Settings",
     "logout": "Logout",
     "view": "View",

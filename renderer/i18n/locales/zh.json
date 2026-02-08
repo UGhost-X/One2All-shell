@@ -3,6 +3,8 @@
     "appName": "One2All 控制台",
     "dashboard": "仪表盘",
     "dataAnnotation": "数据标注",
+    "dataTraining": "数据训练",
+    "serviceDeployment": "服务部署",
     "settings": "设置",
     "logout": "退出登录",
     "view": "查看",
