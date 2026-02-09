@@ -127,5 +127,100 @@
       "deleteConfirm": "确认删除方案“{name}”吗？删除后该方案将无法恢复，绑定该方案的产品会自动解除绑定。",
       "close": "关闭"
     }
+  },
+  "training": {
+    "augmentConfig": "数据增强配置",
+    "autoPreview": "自动预览",
+    "reset": "重置",
+    "preset": {
+      "basic": "基础",
+      "standard": "标准",
+      "heavy": "增强"
+    },
+    "geometric": {
+      "title": "几何变换",
+      "horizontalFlip": "水平翻转",
+      "verticalFlip": "垂直翻转",
+      "rotate": "旋转角度",
+      "maxAngle": "最大角度",
+      "pitch": "俯视/仰视 (Pitch)",
+      "yaw": "侧视/平移 (Yaw)",
+      "angleRange": "角度范围"
+    },
+    "visual": {
+      "title": "视觉效果",
+      "brightness": "亮度调节",
+      "contrast": "对比度调节",
+      "blur": "模糊效果",
+      "min": "最小",
+      "max": "最大",
+      "ksize": "卷积核大小"
+    },
+    "preview": {
+      "title": "预览设置",
+      "random": "随机预览",
+      "matrix": "切片矩阵",
+      "xAxis": "X轴 (横向渐变)",
+      "yAxis": "Y轴 (纵向渐变)",
+      "rows": "行数",
+      "cols": "列数",
+      "none": "无 (随机)",
+      "noneY": "无 (单行/列)",
+      "randomCount": "随机生成数量",
+      "totalPreview": "共 {count} 张预览",
+      "matrixInfo": "矩阵: {rows} × {cols}",
+      "randomMode": "随机模式",
+      "generate": "生成预览",
+      "generating": "正在生成...",
+      "clear": "清空预览",
+      "removeSelected": "剔除选中 ({count})",
+      "noAugmentations": "未启用"
+    },
+    "summary": {
+      "title": "训练准备就绪",
+      "product": "产品名称",
+      "baseImages": "基础图片",
+      "augmentations": "增强参数",
+      "totalImages": "预计增强图片",
+      "startTraining": "开始训练"
+    },
+    "view": {
+      "next": "下一步",
+      "noImage": "请先在标注页面选择图片",
+      "originalImage": "原始图片",
+      "augmentedImage": "增强预览",
+      "zoom": "缩放",
+      "selectedCount": "已选择 {count} 张",
+      "remove": "移除",
+      "backToOriginal": "返回原图",
+      "previewGenerating": "正在生成预览..."
+    },
+    "train": {
+      "epochs": "训练轮数",
+      "batchSize": "批大小",
+      "learningRate": "学习率",
+      "start": "开始训练",
+      "summary": "训练配置摘要",
+      "params": "训练参数",
+      "epochsValue": "轮数",
+      "batchValue": "批次",
+      "lrValue": "学习率",
+      "currentProduct": "当前产品",
+      "notSelected": "未选择",
+      "augmentedImages": "增强图片",
+      "imagesCount": "{count} 张",
+      "annotationsCount": "标注数量",
+      "annotationsValue": "{count} 个标注"
+    },
+    "monitor": {
+      "currentTask": "当前任务",
+      "product": "产品",
+      "backToParams": "返回训练参数",
+      "progress": "训练进度"
+    },
+    "messages": {
+      "success": "增强预览生成成功",
+      "failed": "增强请求失败"
+    }
   }
 }

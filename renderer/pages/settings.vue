@@ -7,14 +7,32 @@ import {
   Database
 } from 'lucide-vue-next'
 import { ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Input from '@/components/ui/input/Input.vue'
 import Label from '@/components/ui/label/Label.vue'
 
 const { t, locale, setLocale } = useI18n()
+const route = useRoute()
+const router = useRouter()
 
 const dataPath = ref('C:/Users/Public/One2All/Data')
 const isSaving = ref(false)
 const showSavedMessage = ref(false)
+
+const handleBack = async () => {
+  const from = route.query.from
+  if (typeof from === 'string' && from) {
+    await router.push(from)
+    return
+  }
+
+  if (window.history.length > 1) {
+    router.back()
+    return
+  }
+
+  await router.push('/')
+}
 
 onMounted(async () => {
   if (window.electronAPI?.getSettings) {
@@ -59,11 +77,9 @@ const changeLanguage = (lang: 'zh' | 'en') => {
     <!-- Header -->
     <header class="h-14 border-b flex items-center px-6 bg-card shrink-0 z-20 shadow-sm">
       <div class="flex items-center gap-4">
-        <NuxtLink to="/">
-          <UiButton variant="ghost" size="icon" class="h-8 w-8">
-            <ChevronLeft class="h-5 w-5" />
-          </UiButton>
-        </NuxtLink>
+        <UiButton variant="ghost" size="icon" class="h-8 w-8" @click="handleBack">
+          <ChevronLeft class="h-5 w-5" />
+        </UiButton>
         <h1 class="text-lg font-bold tracking-tight">{{ t('settings.title') }}</h1>
       </div>
     </header>

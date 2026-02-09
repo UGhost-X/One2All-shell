@@ -14,6 +14,11 @@ export default defineNuxtConfig({
     lazy: true,
     langDir: 'locales',
     defaultLocale: 'zh',
-    strategy: 'no_prefix'
+  strategy: 'no_prefix'
+  },
+  runtimeConfig: {
+    public: {
+      apiBase: process.env.PYTHON_PUBLIC_API_BASE || 'http://localhost:8000'
+    }
   }
 })

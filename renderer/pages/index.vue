@@ -25,7 +25,7 @@ import {
   Settings,
   Pencil
 } from 'lucide-vue-next'
-import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import Input from '@/components/ui/input/Input.vue'
 import Label from '@/components/ui/label/Label.vue'
@@ -38,21 +38,15 @@ import TabsTrigger from '@/components/ui/tabs/TabsTrigger.vue'
 
 const { t } = useI18n()
 const router = useRouter()
+const globalToast = inject<any>('toast')
 
 // Toast State
-const toast = ref<{ message: string; show: boolean; type: 'info' | 'error' }>({
-  message: '',
-  show: false,
-  type: 'info'
-})
-
-let toastTimer: any = null
 const showToast = (message: string, type: 'info' | 'error' = 'info') => {
-  toast.value = { message, show: true, type }
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
-    toast.value.show = false
-  }, 3000)
+  if (type === 'error') {
+    globalToast?.error(message)
+  } else {
+    globalToast?.info(message)
+  }
 }
 
 const isPinned = ref(false)
@@ -1161,24 +1155,6 @@ onBeforeUnmount(() => {
     </div>
 
     <input ref="importFileInput" type="file" accept="image/*" class="hidden" @change="handleImportFileChange" />
-
-    <!-- Toast Notification -->
-    <Transition
-      enter-active-class="transform ease-out duration-300 transition"
-      enter-from-class="translate-y-2 opacity-0 sm:translate-y-0 sm:translate-x-2"
-      enter-to-class="translate-y-0 opacity-100 sm:translate-x-0"
-      leave-active-class="transition ease-in duration-100"
-      leave-from-class="opacity-100"
-      leave-to-class="opacity-0"
-    >
-      <div v-if="toast.show" class="fixed bottom-6 right-6 z-[200] flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl border bg-card backdrop-blur-md animate-in slide-in-from-right-5">
-        <div :class="[
-          'w-2 h-2 rounded-full animate-pulse',
-          toast.type === 'error' ? 'bg-destructive' : 'bg-primary'
-        ]"></div>
-        <p class="text-sm font-medium">{{ toast.message }}</p>
-      </div>
-    </Transition>
   </div>
 </template>
 

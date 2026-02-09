@@ -119,5 +119,100 @@
       "templateCount": "{count} label templates",
       "close": "Close"
     }
+  },
+  "training": {
+    "augmentConfig": "Augmentation Config",
+    "autoPreview": "Auto Preview",
+    "reset": "Reset",
+    "preset": {
+      "basic": "Basic",
+      "standard": "Standard",
+      "heavy": "Heavy"
+    },
+    "geometric": {
+      "title": "Geometric Transform",
+      "horizontalFlip": "Horizontal Flip",
+      "verticalFlip": "Vertical Flip",
+      "rotate": "Rotation",
+      "maxAngle": "Max Angle",
+      "pitch": "Pitch",
+      "yaw": "Yaw",
+      "angleRange": "Angle Range"
+    },
+    "visual": {
+      "title": "Visual Effects",
+      "brightness": "Brightness",
+      "contrast": "Contrast",
+      "blur": "Blur",
+      "min": "Min",
+      "max": "Max",
+      "ksize": "Kernel Size"
+    },
+    "preview": {
+      "title": "Preview Settings",
+      "random": "Random Preview",
+      "matrix": "Slice Matrix",
+      "xAxis": "X Axis (Horiz Gradient)",
+      "yAxis": "Y Axis (Vert Gradient)",
+      "rows": "Rows",
+      "cols": "Cols",
+      "none": "None (Random)",
+      "noneY": "None (Single Row/Col)",
+      "randomCount": "Random Count",
+      "totalPreview": "{count} previews total",
+      "matrixInfo": "Matrix: {rows} × {cols}",
+      "randomMode": "Random Mode",
+      "generate": "Generate Preview",
+      "generating": "Generating...",
+      "clear": "Clear Preview",
+      "removeSelected": "Remove Selected ({count})",
+      "noAugmentations": "Not Enabled"
+    },
+    "summary": {
+      "title": "Ready for Training",
+      "product": "Product",
+      "baseImages": "Base Images",
+      "augmentations": "Augmentations",
+      "totalImages": "Estimated Images",
+      "startTraining": "Start Training"
+    },
+    "view": {
+      "next": "Next",
+      "noImage": "Please select an image in annotation page first",
+      "originalImage": "Original Image",
+      "augmentedImage": "Augmented Preview",
+      "zoom": "Zoom",
+      "selectedCount": "{count} selected",
+      "remove": "Remove",
+      "backToOriginal": "Back to Original",
+      "previewGenerating": "Generating preview..."
+    },
+    "train": {
+      "epochs": "Epochs",
+      "batchSize": "Batch Size",
+      "learningRate": "Learning Rate",
+      "start": "Start Training",
+      "summary": "Training Summary",
+      "params": "Parameters",
+      "epochsValue": "Epochs",
+      "batchValue": "Batch",
+      "lrValue": "LR",
+      "currentProduct": "Current Product",
+      "notSelected": "Not Selected",
+      "augmentedImages": "Augmented Images",
+      "imagesCount": "{count} images",
+      "annotationsCount": "Annotations",
+      "annotationsValue": "{count} annotations"
+    },
+    "monitor": {
+      "currentTask": "Current Task",
+      "product": "Product",
+      "backToParams": "Back to Parameters",
+      "progress": "Training Progress"
+    },
+    "messages": {
+      "success": "Augmentation preview generated successfully",
+      "failed": "Augmentation request failed"
+    }
   }
 }

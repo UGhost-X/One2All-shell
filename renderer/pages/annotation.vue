@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, reactive, onUnmounted, watch, nextTick, onActivated, onDeactivated } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Canvas, Rect, Polygon, FabricImage, Point, Line, Circle } from 'fabric'
 import { 
   Square, 
@@ -17,7 +17,10 @@ import {
   Settings2,
   Palette,
   BookOpen,
-  Maximize
+  Maximize,
+  Pin,
+  PinOff,
+  Settings
 } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { computed } from 'vue'
@@ -59,6 +62,14 @@ const fCanvas = ref<Canvas | null>(null)
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
+
+const isPinned = ref(false)
+const togglePin = async () => {
+  if (window.electronAPI) {
+    isPinned.value = await window.electronAPI.toggleAlwaysOnTop()
+  }
+}
 
 const steps = computed(() => [
   { key: 'annotation', label: t('common.dataAnnotation'), to: '/annotation' },
@@ -430,6 +441,10 @@ const unbindWindowListeners = () => {
 }
 
 onMounted(async () => {
+  if (window.electronAPI) {
+    isPinned.value = await window.electronAPI.isAlwaysOnTop()
+  }
+
   // Handle image from route query
   const qProductId = route.query.productId
   const qImagePath = route.query.imagePath
@@ -458,16 +473,16 @@ onMounted(async () => {
       showSchemeModal.value = true
     }
 
+  // Normalize function for path comparison
+  const normalize = (p: string) => (p || '').replace(/\\/g, '/').toLowerCase()
+  const targetPath = imagePath.value ? normalize(imagePath.value) : ''
+
   // Load all images for this product
   if (productId.value && window.electronAPI) {
     const productImages = await window.electronAPI.getProductImages(productId.value)
     if (productImages && productImages.length > 0) {
       images.splice(0, images.length) // Clear existing demo images
       
-      // Normalize function for path comparison
-      const normalize = (p: string) => p.replace(/\\/g, '/').toLowerCase()
-      const targetPath = imagePath.value ? normalize(imagePath.value) : ''
-
       for (const pPath of productImages) {
         const savedAnnotations = await window.electronAPI.getAnnotations(productId.value, pPath)
         const annData = savedAnnotations ? JSON.parse(savedAnnotations.data) : []
@@ -485,6 +500,23 @@ onMounted(async () => {
         })
       }
 
+      // If we couldn't find the targetPath in productImages, but we have product.lastImagePath, add it
+      if (currentImgIndex.value === 0 && images.length > 0) {
+         // Check if the targetPath was found. If not, maybe it's not in the productImages list yet
+         const found = images.some(img => normalize(img.fullPath || '') === targetPath)
+         if (!found && imagePath.value) {
+            const savedAnnotations = await window.electronAPI.getAnnotations(productId.value, imagePath.value)
+            const annData = savedAnnotations ? JSON.parse(savedAnnotations.data) : []
+            currentImgIndex.value = images.length
+            images.push({
+              url: '',
+              fullPath: imagePath.value,
+              name: imagePath.value.split(/[\\/]/).pop() || 'image.jpg',
+              annotations: annData
+            })
+         }
+      }
+
       // Default to first if not found
       if (currentImgIndex.value >= images.length) {
         currentImgIndex.value = 0
@@ -496,6 +528,20 @@ onMounted(async () => {
         const dataUrl = await window.electronAPI.loadImage(curImg.fullPath)
         curImg.url = dataUrl || ''
       }
+    } else if (imagePath.value) {
+      // No product images but we have a direct path
+      const savedAnnotations = await window.electronAPI.getAnnotations(productId.value, imagePath.value)
+      const annData = savedAnnotations ? JSON.parse(savedAnnotations.data) : []
+      images.push({
+        url: '',
+        fullPath: imagePath.value,
+        name: imagePath.value.split(/[\\/]/).pop() || 'image.jpg',
+        annotations: annData
+      })
+      currentImgIndex.value = 0
+      const curImg = images[0]
+      const dataUrl = await window.electronAPI.loadImage(curImg.fullPath!)
+      curImg.url = dataUrl || ''
     }
   }
   }
@@ -602,8 +648,14 @@ const syncCanvasToViewer = () => {
   const b = sin * s
   const c = -sin * s
   const d = cos * s
-  const tx = cx + viewerPanX.value
-  const ty = cy + viewerPanY.value
+  
+  // To center the image (whose top-left is at 0,0) in the viewport:
+  // The center of the image in scene space is (w/2, h/2).
+  // We want this to map to the viewport center (cx + panX, cy + panY).
+  const imgW = viewerImageNatural.value.w
+  const imgH = viewerImageNatural.value.h
+  const tx = cx + viewerPanX.value - (a * imgW / 2 + c * imgH / 2)
+  const ty = cy + viewerPanY.value - (b * imgW / 2 + d * imgH / 2)
 
   fCanvas.value.viewportTransform = [a, b, c, d, tx, ty]
   fCanvas.value.renderAll()
@@ -772,6 +824,7 @@ const initCanvasEvents = () => {
       const top = Number(obj.top ?? 0)
       const w = Number(obj.width ?? 0) * Number(obj.scaleX ?? 1)
       const h = Number(obj.height ?? 0) * Number(obj.scaleY ?? 1)
+      // COCO bbox: [x, y, width, height]
       ann.points = [left, top, w, h]
       obj.set({ width: w, height: h, scaleX: 1, scaleY: 1 })
     } else if (ann.type === 'polygon') {
@@ -785,7 +838,8 @@ const initCanvasEvents = () => {
         x: (Number(p.x ?? 0) - Number(pathOffset.x ?? 0)) * scaleX + left,
         y: (Number(p.y ?? 0) - Number(pathOffset.y ?? 0)) * scaleY + top,
       }))
-      ann.points = points
+      // COCO segmentation: [x1, y1, x2, y2, ...]
+      ann.points = points.flatMap((p: any) => [p.x, p.y])
       // Reset scale after applying it to points
       obj.set({
         points: (obj.points ?? []).map((p: any) => ({
@@ -822,6 +876,7 @@ const finishDrawing = () => {
       type: 'rect',
       labelId: config.id,
       label: config.name,
+      // COCO bbox: [x, y, width, height]
       points: [tempObj.left, tempObj.top, tempObj.width, tempObj.height],
       color
     }
@@ -862,7 +917,8 @@ const finishDrawing = () => {
       type: 'polygon',
       labelId: config.id,
       label: config.name,
-      points: polygonPoints.map(p => ({ x: p.x, y: p.y })),
+      // COCO segmentation: [x1, y1, x2, y2, ...]
+      points: polygonPoints.flatMap(p => [p.x, p.y]),
       color
     }
     
@@ -947,12 +1003,12 @@ const loadImage = async (index: number) => {
     viewerImageNatural.value = { w: img.width, h: img.height }
     updateViewerViewportSize()
     
-    // Position image at 0,0 with center origin
+    // Position image at 0,0 with top-left origin for COCO compatibility
     img.set({
       left: 0,
       top: 0,
-      originX: 'center',
-      originY: 'center',
+      originX: 'left',
+      originY: 'top',
       selectable: false,
       evented: false,
       hoverCursor: 'default'
@@ -1001,7 +1057,18 @@ const drawAnnotation = (ann: Annotation) => {
     } as any)
     fCanvas.value.add(rect)
   } else {
-    const poly = new Polygon(ann.points, {
+    // COCO segmentation is [x1, y1, x2, y2, ...]
+    // Need to convert to [{x, y}, ...] for fabric.Polygon
+    const points: {x: number, y: number}[] = []
+    if (Array.isArray(ann.points)) {
+      for (let i = 0; i < ann.points.length; i += 2) {
+        if (typeof ann.points[i] === 'number' && typeof ann.points[i+1] === 'number') {
+          points.push({ x: ann.points[i], y: ann.points[i+1] })
+        }
+      }
+    }
+
+    const poly = new Polygon(points.length > 0 ? points : (ann.points as any), {
       fill: `${ann.color}1A`, // 10% opacity
       stroke: ann.color,
       strokeWidth: 2,
@@ -1112,12 +1179,19 @@ const saveAllChanges = async () => {
 
 const handleNextStep = async () => {
   await saveAllChanges()
-  // Wait a bit for the "Saved" state to show, then move to next image if available
+  // Wait a bit for the "Saved" state to show, then move to training page
   setTimeout(async () => {
-    if (currentImgIndex.value < images.length - 1) {
-      currentImgIndex.value++
-      await loadImage(currentImgIndex.value)
-    }
+    const currentImg = images[currentImgIndex.value]
+    if (!currentImg) return
+    
+    router.push({
+      path: '/training',
+      query: {
+        productId: productId.value,
+        productName: productName.value,
+        imagePath: currentImg.fullPath
+      }
+    })
   }, 1000)
 }
 
@@ -1156,6 +1230,13 @@ watch(showLabelPanel, async () => {
   <div class="flex h-screen bg-background text-foreground overflow-hidden font-sans flex-col">
     <!-- Top Header -->
     <header class="h-14 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center px-4 z-20">
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-primary-foreground">
+          <Settings2 class="h-5 w-5" />
+        </div>
+        <h1 class="text-lg font-bold tracking-tight">{{ t('common.appName') }}</h1>
+      </div>
+
       <div class="flex-1 flex items-center justify-center">
         <nav class="step-nav">
           <NuxtLink
@@ -1171,6 +1252,24 @@ watch(showLabelPanel, async () => {
             <span class="step-label">{{ step.label }}</span>
           </NuxtLink>
         </nav>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <UiButton 
+          variant="ghost" 
+          size="icon" 
+          @click="togglePin"
+          :title="isPinned ? t('common.unpin') : t('common.pin')"
+          :class="{ 'text-primary bg-primary/10': isPinned }"
+        >
+          <component :is="isPinned ? PinOff : Pin" class="h-4 w-4" />
+        </UiButton>
+        
+        <NuxtLink :to="{ path: '/settings', query: { from: route.fullPath } }">
+          <UiButton variant="ghost" size="icon" :title="t('common.settings')">
+            <Settings class="h-4 w-4" />
+          </UiButton>
+        </NuxtLink>
       </div>
     </header>
 
@@ -1462,8 +1561,19 @@ watch(showLabelPanel, async () => {
           </div>
         </div>
 
-        <!-- Bottom fixed button -->
-        <div class="p-4 border-t bg-background mt-auto">
+        <!-- Bottom fixed buttons -->
+        <div class="p-4 border-t bg-background mt-auto space-y-2">
+          <div v-if="currentImgIndex < images.length - 1" class="flex gap-2">
+            <UiButton 
+              variant="outline" 
+              class="flex-1 gap-2 h-10"
+              @click="goToNextImage"
+              :disabled="isSaving"
+            >
+              <ChevronRight class="h-4 w-4" />
+              {{ t('annotation.nextImage') || '下一张' }}
+            </UiButton>
+          </div>
           <UiButton 
             variant="default" 
             class="w-full gap-2 h-10 shadow-lg shadow-primary/20"

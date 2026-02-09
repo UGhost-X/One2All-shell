@@ -47,7 +47,7 @@ const handleUpdateModelValue = (v: number[] | undefined) => {
     :class="cn('relative flex w-full touch-none select-none items-center', props.class)"
     @update:model-value="handleUpdateModelValue"
   >
-    <SliderTrack class="relative h-2 w-full grow overflow-hidden rounded-full bg-secondary">
+    <SliderTrack class="relative h-2 w-full grow overflow-hidden rounded-full bg-oklch(87% 0.065 274.039) border border-input/50">
       <SliderRange class="absolute h-full bg-primary" />
     </SliderTrack>
     <SliderThumb
