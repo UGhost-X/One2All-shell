@@ -44,6 +44,20 @@ model Annotation {
   @@index([imagePath])
 }
 
+model DatasetVersion {
+  id          Int      @id @default(autoincrement())
+  productId   Int
+  displayName String   @default("")
+  versionName String
+  moduleName  String   @default("data_augmentation")
+  savePath    String
+  imageCount  Int
+  config      String   // JSON string of augmentation config used
+  createdAt   DateTime @default(now())
+  
+  @@index([productId])
+}
+
 model Camera {
   id        Int      @id @default(autoincrement())
   name      String

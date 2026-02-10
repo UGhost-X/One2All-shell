@@ -307,6 +307,234 @@ app.whenReady().then(() => {
     }
   });
 
+  // 保存数据集
+  ipcMain.handle('storage:save-dataset', async (event, { productId, versionName, moduleName, images, cocoData }) => {
+    try {
+      const baseDir = appSettings.dataPath;
+      const targetDir = path.join(baseDir, String(productId), moduleName || 'data_augmentation', versionName);
+      
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      // 保存图片
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        const fileName = `image_${i + 1}.jpg`;
+        const filePath = path.join(targetDir, fileName);
+        const base64Data = img.imageUrl.split(',')[1];
+        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+        
+        // 更新 COCO 数据中的文件名
+        if (cocoData.images[i]) {
+          cocoData.images[i].file_name = fileName;
+        }
+      }
+
+      // 保存 COCO JSON
+      const cocoPath = path.join(targetDir, 'annotations.json');
+      fs.writeFileSync(cocoPath, JSON.stringify(cocoData, null, 2), 'utf-8');
+
+      return { success: true, path: targetDir };
+    } catch (err) {
+      console.error('Failed to save dataset:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 加载数据集
+  ipcMain.handle('storage:load-dataset', async (event, { id, savePath }) => {
+    try {
+      let finalPath = savePath;
+      
+      // If savePath is missing, try to find the version and derive it
+      if (!finalPath && id) {
+        const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+        const version = await prisma.datasetVersion.findUnique({ where: { id: numericId } });
+        if (version) {
+          if (version.savePath) {
+            finalPath = version.savePath;
+          } else {
+            finalPath = path.join(
+              appSettings.dataPath,
+              String(version.productId),
+              version.moduleName || 'data_augmentation',
+              version.versionName
+            );
+          }
+        }
+      }
+
+      if (!finalPath || !fs.existsSync(finalPath)) {
+        throw new Error(`Save path does not exist: ${finalPath}`);
+      }
+
+      const cocoPath = path.join(finalPath, 'annotations.json');
+      if (!fs.existsSync(cocoPath)) {
+        throw new Error('Annotations file not found');
+      }
+
+      const cocoData = JSON.parse(fs.readFileSync(cocoPath, 'utf-8'));
+      const images = [];
+
+      for (const imgEntry of cocoData.images) {
+        const imgPath = path.join(finalPath, imgEntry.file_name);
+        if (fs.existsSync(imgPath)) {
+          const buffer = fs.readFileSync(imgPath);
+          const base64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
+          
+          // 获取该图片的所有标注
+          const imgAnnotations = cocoData.annotations.filter(ann => ann.image_id === imgEntry.id);
+          
+          images.push({
+            id: imgEntry.id,
+            imageUrl: base64,
+            width: imgEntry.width,
+            height: imgEntry.height,
+            annotations: imgAnnotations.map(ann => {
+              // 转换回前端需要的格式 (points, type 等)
+              // 注意：保存时我们转成了 COCO 格式，加载时需要还原
+              // 这里的还原逻辑需要匹配保存时的转换逻辑
+              let type = 'polygon';
+              let points = ann.segmentation[0];
+              
+              // 简单的启发式判断：如果是 8 个点且符合矩形特征，可能是 rect
+              if (ann.segmentation[0].length === 8) {
+                const p = ann.segmentation[0];
+                if (p[0] === p[6] && p[1] === p[3] && p[2] === p[4] && p[5] === p[7]) {
+                  type = 'rect';
+                  points = [p[0], p[1], p[2] - p[0], p[5] - p[1]]; // [x, y, w, h]
+                }
+              }
+
+              return {
+                id: ann.id,
+                categoryId: ann.category_id,
+                type,
+                points
+              };
+            })
+          });
+        }
+      }
+
+      return { success: true, images };
+    } catch (err) {
+      console.error('Failed to load dataset:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 数据库版本控制
+  ipcMain.handle('db:save-dataset-version', async (event, data) => {
+    return await prisma.datasetVersion.create({
+      data
+    });
+  });
+
+  ipcMain.handle('db:get-dataset-versions', async (event, productId) => {
+    return await prisma.datasetVersion.findMany({
+      where: { productId },
+      orderBy: { createdAt: 'desc' }
+    });
+  });
+
+  ipcMain.handle('db:delete-dataset-version', async (event, id) => {
+    try {
+      // id might be string or number depending on how it's passed
+      const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+      
+      const version = await prisma.datasetVersion.findUnique({
+        where: { id: numericId }
+      });
+
+      if (version) {
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+        const candidates = [
+          version.savePath,
+          path.join(
+            appSettings.dataPath,
+            String(version.productId),
+            version.moduleName || 'data_augmentation',
+            version.versionName
+          )
+        ]
+          .filter(Boolean)
+          .map(p => path.normalize(String(p).trim()));
+
+        const uniqueCandidates = Array.from(new Set(candidates));
+        let deletedAny = false;
+        const failedCandidates = [];
+
+        for (const candidatePath of uniqueCandidates) {
+          if (!candidatePath) continue;
+          if (!fs.existsSync(candidatePath)) continue;
+          try {
+            let realCandidatePath = candidatePath;
+            try {
+              realCandidatePath = fs.realpathSync.native(candidatePath);
+            } catch {}
+
+            console.log('Deleting physical data at:', realCandidatePath);
+
+            let lastErr = null;
+            for (let attempt = 0; attempt < 8; attempt++) {
+              try {
+                // Try Node.js fs.rmSync first
+                fs.rmSync(realCandidatePath, { recursive: true, force: true });
+              } catch (err) {
+                lastErr = err;
+              }
+
+              // If still exists, try Windows shell command (more robust for locked files)
+              if (fs.existsSync(realCandidatePath) && process.platform === 'win32') {
+                try {
+                  require('child_process').execSync(`rmdir /s /q "${realCandidatePath}"`);
+                } catch (cmdErr) {
+                  lastErr = cmdErr;
+                }
+              }
+
+              if (!fs.existsSync(realCandidatePath)) {
+                deletedAny = true;
+                lastErr = null;
+                break;
+              }
+              
+              // Wait before retry
+              await sleep(200);
+            }
+
+            if (lastErr) {
+              failedCandidates.push({ path: realCandidatePath, error: lastErr?.message || String(lastErr) });
+            } else if (fs.existsSync(realCandidatePath)) {
+              failedCandidates.push({ path: realCandidatePath, error: 'Path still exists after deletion attempts' });
+            }
+          } catch (rmErr) {
+            console.error('Failed to delete physical data at:', candidatePath, rmErr);
+            failedCandidates.push({ path: candidatePath, error: rmErr?.message || String(rmErr) });
+          }
+        }
+
+        if (!deletedAny) {
+          console.warn('No physical data deleted. savePath:', version.savePath);
+        }
+        if (failedCandidates.length > 0) {
+          throw new Error(`物理数据删除失败：${failedCandidates.map(f => `${f.path} (${f.error})`).join('; ')}`);
+        }
+      } else {
+        console.warn('Dataset version not found for deletion, id:', numericId);
+      }
+
+      return await prisma.datasetVersion.delete({
+        where: { id: numericId }
+      });
+    } catch (err) {
+      console.error('Failed to delete dataset version:', err);
+      throw err;
+    }
+  });
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

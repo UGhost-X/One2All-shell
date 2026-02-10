@@ -27,7 +27,7 @@ const props = defineProps<{
         <Check class="h-4 w-4" />
       </SelectItemIndicator>
     </span>
-    <SelectItemText>
+    <SelectItemText class="block w-full">
       <slot />
     </SelectItemText>
   </SelectItem>

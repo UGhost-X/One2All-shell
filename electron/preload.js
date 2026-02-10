@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveImage: (data) => ipcRenderer.invoke('storage:save-image', data),
   loadImage: (path) => ipcRenderer.invoke('storage:load-image', path),
   getProductImages: (productId) => ipcRenderer.invoke('storage:get-product-images', productId),
+  saveDataset: (data) => ipcRenderer.invoke('storage:save-dataset', data),
+  loadDataset: (params) => ipcRenderer.invoke('storage:load-dataset', params),
+  saveDatasetVersion: (data) => ipcRenderer.invoke('db:save-dataset-version', data),
+  getDatasetVersions: (productId) => ipcRenderer.invoke('db:get-dataset-versions', productId),
+  deleteDatasetVersion: (id) => ipcRenderer.invoke('db:delete-dataset-version', id),
 });
 
 window.addEventListener('DOMContentLoaded', () => {

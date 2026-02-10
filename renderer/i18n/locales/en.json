@@ -11,7 +11,12 @@
     "language": "Language",
     "pin": "Pin to top",
     "unpin": "Unpin from top",
-    "back": "Back"
+    "back": "Back",
+    "deleteSuccess": "Deleted successfully",
+    "deleteFailed": "Delete failed",
+    "confirmDelete": "Confirm Delete",
+    "cancel": "Cancel",
+    "confirm": "Confirm"
   },
   "settings": {
     "title": "Settings",
@@ -185,7 +190,28 @@
       "selectedCount": "{count} selected",
       "remove": "Remove",
       "backToOriginal": "Back to Original",
-      "previewGenerating": "Generating preview..."
+      "previewGenerating": "Generating preview...",
+      "saveDataset": "Save Dataset",
+      "saving": "Saving...",
+      "saveDialogTitle": "Save Dataset",
+      "datasetName": "Name",
+      "datasetNamePlaceholder": "Enter name (Required)",
+      "versionName": "Version Name",
+      "versionPlaceholder": "Enter version (e.g. v1.0)",
+      "historyVersion": "History Version",
+      "historyVersionPlaceholder": "Select version to rollback",
+      "cancel": "Cancel",
+      "confirmSave": "Confirm Save",
+      "nameRequired": "Name is required",
+      "versionRequired": "Version is required",
+      "rollbackSuccess": "Parameters rolled back",
+      "rollbackFailed": "Rollback failed: Parse error",
+      "saveSuccess": "Dataset saved successfully",
+      "saveFailed": "Failed to save dataset",
+      "unsavedWarning": "Current data is unsaved, proceed anyway?",
+      "confirmNext": "Confirm Next",
+      "saveFirst": "Save First",
+      "deleteVersionWarning": "Are you sure you want to delete this dataset version? This will also delete the physical data on disk and cannot be undone."
     },
     "train": {
       "epochs": "Epochs",
@@ -213,6 +239,18 @@
     "messages": {
       "success": "Augmentation preview generated successfully",
       "failed": "Augmentation request failed"
+    },
+    "params": {
+      "horizontal_flip": "H-Flip",
+      "vertical_flip": "V-Flip",
+      "rotate": "Rotate",
+      "brightness": "Brightness",
+      "contrast": "Contrast",
+      "blur": "Blur",
+      "pitch": "Pitch",
+      "yaw": "Yaw",
+      "x": "X-Axis",
+      "y": "Y-Axis"
     }
   }
 }

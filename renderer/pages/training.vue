@@ -47,7 +47,216 @@ const currentAnnotations = ref<any[]>([])
 const augmentedResults = ref<any[]>([])
 const labelConfigs = ref<any[]>([])
 
+const versionName = ref('v1.0')
+const isSaved = ref(false)
+const datasetVersions = ref<any[]>([])
+const selectedDatasetVersionId = ref<string>('')
+const isVersionSelectOpen = ref(false)
+
+const showSaveDialog = ref(false)
+const showDeleteConfirm = ref(false)
+const deletingVersionId = ref<number | null>(null)
+
+const confirmDeleteVersion = (id: number) => {
+  deletingVersionId.value = id
+  showDeleteConfirm.value = true
+  isVersionSelectOpen.value = false
+}
+
+const handleDeleteVersion = async () => {
+  if (deletingVersionId.value == null) return
+  
+  try {
+    // If deleting the currently selected version, clear selection first to release file locks
+    if (selectedDatasetVersionId.value === String(deletingVersionId.value)) {
+      selectedDatasetVersionId.value = ''
+      // Wait for UI to update and release resources
+      await nextTick()
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+
+    await window.electronAPI.deleteDatasetVersion(deletingVersionId.value)
+    toast?.success(t('common.deleteSuccess'))
+    if (productId.value) {
+      datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
+    }
+  } catch (err: any) {
+    toast?.error(`${t('common.deleteFailed')}: ${err.message}`)
+  } finally {
+    showDeleteConfirm.value = false
+    deletingVersionId.value = null
+  }
+}
+const saveDisplayName = ref('')
+const saveVersionName = ref('')
+const isSavingDataset = ref(false)
+
+// Reset isSaved when augmented results change
+watch(augmentedResults, () => {
+  if (isRollingBack.value) return
+  isSaved.value = false
+})
+
 const currentPreset = ref<'none' | 'basic' | 'standard' | 'heavy' | 'custom'>('none')
+
+const parseVersionIndex = (name: string) => {
+  const m = /^v(\d+)$/.exec((name || '').trim())
+  if (!m) return null
+  const n = Number(m[1])
+  return Number.isFinite(n) ? n : null
+}
+
+const getNextVersionName = (versions: any[]) => {
+  let max = 0
+  for (const v of versions || []) {
+    const n = parseVersionIndex(v?.versionName)
+    if (n != null) max = Math.max(max, n)
+  }
+  return `v${Math.max(1, max + 1)}`
+}
+
+const openSaveDialog = () => {
+  if (augmentedResults.value.length === 0) return
+  saveDisplayName.value = ''
+  saveVersionName.value = getNextVersionName(datasetVersions.value)
+  showSaveDialog.value = true
+}
+
+const closeSaveDialog = () => {
+  showSaveDialog.value = false
+}
+
+const confirmSaveDataset = async () => {
+  if (!saveDisplayName.value.trim()) {
+    toast?.error(t('training.view.nameRequired'))
+    return
+  }
+  if (!saveVersionName.value.trim()) {
+    toast?.error(t('training.view.versionRequired'))
+    return
+  }
+  await handleSaveDataset({ displayName: saveDisplayName.value.trim(), versionName: saveVersionName.value.trim() })
+}
+
+const handleSaveDataset = async (opts?: { displayName: string; versionName: string }) => {
+  if (augmentedResults.value.length === 0) return
+  if (!productId.value) return
+
+  try {
+    isSavingDataset.value = true
+    if (opts?.versionName) versionName.value = opts.versionName
+
+    // Prepare COCO data for all augmented images
+    const cocoData = {
+      images: augmentedResults.value.map((res, idx) => ({
+        id: idx + 1,
+        width: res.width,
+        height: res.height,
+        file_name: `image_${idx + 1}.jpg`
+      })),
+      annotations: augmentedResults.value.flatMap((res, resIdx) => 
+        res.annotations.map((ann: any, annIdx: number) => {
+          // Recalculate bbox and area for the augmented image
+          const calculateBbox = (points: any, type: string) => {
+            if (type === 'rect') return points
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            for (let i = 0; i < points.length; i += 2) {
+              const x = points[i]; const y = points[i+1]
+              minX = Math.min(minX, x); minY = Math.min(minY, y)
+              maxX = Math.max(maxX, x); maxY = Math.max(maxY, y)
+            }
+            return [minX, minY, maxX - minX, maxY - minY]
+          }
+          const calculateArea = (points: any, type: string) => {
+            if (type === 'rect') return points[2] * points[3]
+            let area = 0
+            for (let i = 0; i < points.length; i += 2) {
+              const j = (i + 2) % points.length
+              area += points[i] * points[j + 1]; area -= points[j] * points[i + 1]
+            }
+            return Math.abs(area) / 2
+          }
+
+          const bbox = calculateBbox(ann.points, ann.type)
+          const area = calculateArea(ann.points, ann.type)
+          let segmentation: number[][] = []
+          if (ann.type === 'rect') {
+            const [x, y, w, h] = ann.points
+            segmentation = [[x, y, x + w, y, x + w, y + h, x, y + h]]
+          } else {
+            segmentation = [ann.points]
+          }
+
+          return {
+            id: resIdx * 1000 + annIdx + 1,
+            image_id: resIdx + 1,
+            category_id: ann.categoryId || 1,
+            segmentation,
+            area,
+            bbox,
+            iscrowd: 0
+          }
+        })
+      ),
+      categories: labelConfigs.value.map((l, idx) => ({
+        id: idx + 1,
+        name: l.name,
+        supercategory: 'none'
+      }))
+    }
+
+    const saveResult = await window.electronAPI.saveDataset(JSON.parse(JSON.stringify({
+      productId: productId.value,
+      versionName: opts?.versionName || versionName.value,
+      moduleName: 'data_augmentation',
+      images: augmentedResults.value,
+      cocoData
+    })))
+
+    if (saveResult.success) {
+      // Save version info to DB
+      await window.electronAPI.saveDatasetVersion(JSON.parse(JSON.stringify({
+        productId: productId.value,
+        displayName: opts?.displayName || '',
+        versionName: opts?.versionName || versionName.value,
+        moduleName: 'data_augmentation',
+        savePath: saveResult.path,
+        imageCount: augmentedResults.value.length,
+        config: JSON.stringify({
+          preset: currentPreset.value,
+          augmentConfig: augmentConfig.value,
+          sliceConfig: sliceConfig.value
+        })
+      })))
+
+      isSaved.value = true
+      toast?.success(t('training.view.saveSuccess'))
+      
+      // Refresh versions
+      datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
+      versionName.value = getNextVersionName(datasetVersions.value)
+      selectedDatasetVersionId.value = ''
+      closeSaveDialog()
+    } else {
+      throw new Error(saveResult.error)
+    }
+  } catch (err: any) {
+    console.error('Save dataset error:', err)
+    toast?.error(`${t('training.view.saveFailed')}: ${err.message}`)
+  } finally {
+    isSavingDataset.value = false
+  }
+}
+
+const showUnsavedDialog = ref(false)
+
+const handleNextStep = () => {
+  if (augmentedResults.value.length > 0 && !isSaved.value) {
+    showUnsavedDialog.value = true
+  } else {
+    innerStep.value = 'train'
+  }
+}
 
 const presetsData = ref({
   none: {
@@ -93,15 +302,24 @@ const presetsData = ref({
     pitch: { enabled: true, angle: [20] },
     yaw: { enabled: true, angle: [20] },
     num_results: [1]
+  },
+  custom: {
+    horizontal_flip: { enabled: true, prob: [0.5] },
+    vertical_flip: { enabled: true, prob: [0.5] },
+    rotate: { enabled: true, angle: [45] },
+    brightness: { enabled: true, min: 0.8, max: 1.2 },
+    contrast: { enabled: true, min: 0.8, max: 1.2 },
+    blur: { enabled: true, ksize: [3] },
+    pitch: { enabled: true, angle: [10] },
+    yaw: { enabled: true, angle: [10] },
+    num_results: [1]
   }
 })
 
 const augmentConfig = computed({
-  get: () => presetsData.value[currentPreset.value === 'custom' ? 'standard' : currentPreset.value] || presetsData.value.none,
+  get: () => presetsData.value[currentPreset.value] || presetsData.value.none,
   set: (val) => {
-    if (currentPreset.value !== 'custom') {
-      presetsData.value[currentPreset.value] = val
-    }
+    presetsData.value[currentPreset.value] = val
   }
 })
 
@@ -115,7 +333,7 @@ const updateConfig = (fn: (cfg: any) => void) => {
   fn(presetsData.value[currentPreset.value])
 }
 
-const applyPreset = (type: 'none' | 'basic' | 'standard' | 'heavy') => {
+const applyPreset = (type: 'none' | 'basic' | 'standard' | 'heavy' | 'custom') => {
   currentPreset.value = type
 }
 
@@ -179,6 +397,101 @@ const sliceConfig = ref({
   cols: [3],
   x: 'none',
   y: 'none',
+})
+
+const parseDatasetConfig = (raw: string) => {
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && (parsed.augmentConfig || parsed.sliceConfig || parsed.preset)) {
+      return parsed
+    }
+    return { augmentConfig: parsed }
+  } catch {
+    return null
+  }
+}
+
+const isRollingBack = ref(false)
+  
+  const applyDatasetVersion = async (v: any) => {
+    isRollingBack.value = true
+    selectedIndices.value.clear()
+    const cfg = parseDatasetConfig(v?.config || '')
+    if (!cfg) {
+      toast?.error(t('training.view.rollbackFailed'))
+      isRollingBack.value = false
+      return
+    }
+
+    // Load images and annotations from disk
+    try {
+      if (v.id) {
+        const loadResult = await window.electronAPI.loadDataset({ id: v.id, savePath: v.savePath })
+        if (loadResult.success) {
+          // Enrich loaded data with label names and colors from current labelConfigs
+          augmentedResults.value = loadResult.images.map((img: any) => ({
+            ...img,
+            annotations: img.annotations.map((ann: any) => {
+              const labelInfo = labelConfigs.value[ann.categoryId - 1] || {}
+              return {
+                ...ann,
+                color: labelInfo.color || '#3b82f6',
+                label: labelInfo.name || `Label ${ann.categoryId}`
+              }
+            })
+          }))
+          
+          if (augmentedResults.value.length > 0) {
+            augmentedImageUrl.value = augmentedResults.value[0].imageUrl
+          }
+        } else {
+          console.warn('Failed to load physical data:', loadResult.error)
+          toast?.error(`${t('training.view.rollbackFailed')}: ${loadResult.error}`)
+        }
+      }
+    } catch (err: any) {
+      console.error('Error loading dataset version data:', err)
+      toast?.error(`${t('training.view.rollbackFailed')}: ${err.message}`)
+    }
+
+    if (cfg.sliceConfig) sliceConfig.value = JSON.parse(JSON.stringify(cfg.sliceConfig))
+  if (cfg.augmentConfig) {
+    if (cfg.preset && cfg.preset !== 'custom' && cfg.preset !== 'none') {
+      presetsData.value[cfg.preset] = JSON.parse(JSON.stringify(cfg.augmentConfig))
+      currentPreset.value = cfg.preset
+    } else {
+      presetsData.value.custom = JSON.parse(JSON.stringify(cfg.augmentConfig))
+      currentPreset.value = 'custom'
+    }
+  } else if (cfg.preset) {
+    currentPreset.value = cfg.preset
+  }
+
+  versionName.value = v?.versionName || versionName.value
+  isSaved.value = true
+  toast?.success(t('training.view.rollbackSuccess'))
+  
+  nextTick(() => {
+    isRollingBack.value = false
+  })
+}
+
+// Watch for changes after rollback to generate temporary version
+watch([presetsData, sliceConfig], () => {
+  if (isRollingBack.value) return
+  if (selectedDatasetVersionId.value && isSaved.value) {
+    // If we were on a saved version and made changes
+    isSaved.value = false
+    selectedDatasetVersionId.value = ''
+    versionName.value = getNextVersionName(datasetVersions.value)
+  }
+}, { deep: true })
+
+watch(selectedDatasetVersionId, (id) => {
+  if (!id) return
+  const v = datasetVersions.value.find(vv => String(vv.id) === String(id))
+  if (!v) return
+  applyDatasetVersion(v)
 })
 
 const isXSelectOpen = ref(false)
@@ -489,6 +802,13 @@ onMounted(async () => {
         const config = JSON.parse(product.scheme.config)
         labelConfigs.value = config.labels || []
       }
+
+      // Load dataset versions
+      datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
+      versionName.value = getNextVersionName(datasetVersions.value)
+
+      // Default to basic augmentation
+      applyPreset('basic')
     }
   }
 })
@@ -581,8 +901,36 @@ onMounted(async () => {
               </div>
             </div>
 
+            <div class="space-y-1.5 shrink-0">
+              <Label class="text-[10px] text-muted-foreground">{{ t('training.view.historyVersion') }}</Label>
+              <UiSelect v-model="selectedDatasetVersionId" v-model:open="isVersionSelectOpen">
+                <UiSelectTrigger class="h-8 text-xs bg-background w-full px-2 gap-2">
+                  <UiSelectValue :placeholder="t('training.view.historyVersionPlaceholder')" />
+                </UiSelectTrigger>
+                <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
+                  <UiSelectItem v-for="v in datasetVersions" :key="v.id" :value="String(v.id)" class="group pr-2">
+                    <div class="flex items-center w-full gap-2">
+                      <span class="flex-1 min-w-0 truncate">{{ v.displayName ? `${v.displayName} (${v.versionName})` : v.versionName }}</span>
+                      <UiButton 
+                        variant="ghost" 
+                        size="icon" 
+                        class="h-5 w-5 opacity-0 group-hover:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all shrink-0" 
+                        @click.stop="confirmDeleteVersion(v.id)"
+                        @pointerdown.stop
+                        @pointerup.stop
+                        @mousedown.stop
+                        @mouseup.stop
+                      >
+                        <X class="h-3.5 w-3.5" />
+                      </UiButton>
+                    </div>
+                  </UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+            </div>
+            <Separator />
             <!-- 快捷预设 -->
-            <div class="grid grid-cols-3 gap-2 shrink-0">
+            <div class="grid grid-cols-4 gap-2 shrink-0">
               <UiButton 
                 variant="outline" 
                 size="sm" 
@@ -609,6 +957,15 @@ onMounted(async () => {
                 @click="applyPreset('heavy')"
               >
                 {{ t('training.preset.heavy') }}
+              </UiButton>
+              <UiButton 
+                variant="outline" 
+                size="sm" 
+                class="h-8 text-xs" 
+                :class="{ 'bg-primary text-primary-foreground border-primary': currentPreset === 'custom' }"
+                @click="applyPreset('custom')"
+              >
+                {{ t('training.preset.custom') }}
               </UiButton>
             </div>
             
@@ -829,7 +1186,7 @@ onMounted(async () => {
               <UiButton class="w-full" variant="secondary" @click="handleAugment" :disabled="isAugmenting">
                 {{ isAugmenting ? t('training.preview.generating') : t('training.preview.generate') }}
               </UiButton>
-              <UiButton class="w-full" @click="innerStep = 'train'">{{ t('training.view.next') }}</UiButton>
+              <UiButton class="w-full" @click="handleNextStep">{{ t('training.view.next') }}</UiButton>
             </div>
           </aside>
 
@@ -861,9 +1218,17 @@ onMounted(async () => {
                     </UiButton>
                   </div>
 
-                  <UiButton variant="ghost" size="sm" class="h-8 text-xs gap-2" @click="augmentedImageUrl = ''; augmentedResults = []; selectedIndices.clear()">
-                    <X class="h-3 w-3" />
-                    {{ t('training.view.backToOriginal') }}
+                  <UiButton size="sm" class="h-8 text-xs" @click="openSaveDialog" :disabled="isSaved || isSavingDataset">
+                    {{ isSavingDataset ? t('training.view.saving') : t('training.view.saveDataset') }}
+                  </UiButton>
+                  <UiButton
+                    variant="ghost"
+                    size="sm"
+                    class="h-8 w-8 p-0"
+                    @click="augmentedImageUrl = ''; augmentedResults = []; selectedIndices.clear()"
+                    :title="t('training.view.backToOriginal')"
+                  >
+                    <X class="h-4 w-4" />
                   </UiButton>
                 </div>
               </div>
@@ -903,14 +1268,14 @@ onMounted(async () => {
                   <!-- Augmented Results Grid -->
                   <template v-else>
                     <div class="flex-1 w-full h-full overflow-auto bg-muted/30 p-4">
-                      <div :class="['grid gap-4 items-start content-start mx-auto transition-all origin-top-left']"
+                      <div :class="['grid gap-4 items-center content-start mx-auto transition-all origin-top-left']"
                           :style="{
                             gridTemplateColumns: `repeat(${previewGridCols}, 1fr)`,
                             width: `${previewImageSize[0]}%`
                           }">
                         <div v-for="(res, idx) in augmentedResults" :key="idx" 
-                            class="relative group border-2 rounded-lg overflow-hidden bg-background shadow-sm transition-all cursor-pointer hover:border-primary/50"
-                            :class="[selectedIndices.has(idx) ? 'border-primary ring-2 ring-primary/20' : 'border-transparent']"
+                            class="relative group w-full bg-background shadow-sm transition-all cursor-pointer hover:border-primary/50 rounded-lg overflow-hidden border-2 bg-clip-padding"
+                            :class="[selectedIndices.has(idx) ? 'border-primary ring-2 ring-primary/20' : 'border-border']"
                             @click="toggleImageSelection(idx)"
                             @dblclick="previewImage = res.imageUrl">
                           <div class="relative w-full">
@@ -939,10 +1304,12 @@ onMounted(async () => {
                             </div>
                           </div>
                           <!-- Params Info -->
-                          <div v-if="res.params" class="absolute  bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] p-1.5 mr-0 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                            <div class="flex flex-wrap gap-x-2 gap-y-1">
-                              <span v-for="(val, key) in res.params" :key="key" class="whitespace-nowrap">
-                                {{ key }}: {{ typeof val === 'number' ? val.toFixed(2) : val }}
+                          <div v-if="res.params" 
+                              class="absolute -bottom-[2px] -left-[2px] -right-[15px] bg-black/60 text-white text-[10px] p-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 overflow-hidden"
+                              :title="Object.entries(res.params).map(([k, v]) => `${t('training.params.' + k)}: ${typeof v === 'number' ? v.toFixed(2) : v}`).join(', ')">
+                            <div class="whitespace-nowrap truncate">
+                              <span v-for="(val, key, index) in res.params" :key="key">
+                                {{ index > 0 ? ', ' : '' }}{{ t('training.params.' + key) }}: {{ typeof val === 'number' ? val.toFixed(2) : val }}
                               </span>
                             </div>
                           </div>
@@ -1039,6 +1406,68 @@ onMounted(async () => {
     </main>
 
     <!-- Full Image Preview Modal -->
+    <div v-if="showUnsavedDialog" class="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full space-y-4 animate-in zoom-in-95 duration-200">
+        <div class="flex items-center gap-3 text-destructive">
+          <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+            <Settings class="h-5 w-5" />
+          </div>
+          <h3 class="font-bold text-lg">{{ t('training.view.unsavedWarning') }}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground">{{ t('training.view.unsavedWarning') }}</p>
+        <div class="flex gap-3 pt-2">
+          <UiButton variant="outline" class="flex-1" @click="showUnsavedDialog = false">{{ t('training.view.saveFirst') }}</UiButton>
+          <UiButton variant="destructive" class="flex-1" @click="innerStep = 'train'; showUnsavedDialog = false">{{ t('training.view.confirmNext') }}</UiButton>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showSaveDialog" class="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="closeSaveDialog">
+      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-md w-full space-y-4 animate-in zoom-in-95 duration-200" @click.stop>
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-lg">{{ t('training.view.saveDialogTitle') }}</h3>
+          <UiButton variant="ghost" size="sm" class="h-8 w-8 p-0" @click="closeSaveDialog">
+            <X class="h-4 w-4" />
+          </UiButton>
+        </div>
+
+        <div class="space-y-3">
+          <div class="space-y-1.5">
+            <Label class="text-xs">{{ t('training.view.datasetName') }}</Label>
+            <Input v-model="saveDisplayName" :placeholder="t('training.view.datasetNamePlaceholder')" class="h-9 text-sm px-3" />
+          </div>
+          <div class="space-y-1.5">
+            <Label class="text-xs">{{ t('training.view.versionName') }}</Label>
+            <Input v-model="saveVersionName" :placeholder="t('training.view.versionPlaceholder')" class="h-9 text-sm px-3" />
+          </div>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <UiButton variant="outline" class="flex-1" @click="closeSaveDialog" :disabled="isSavingDataset">{{ t('training.view.cancel') }}</UiButton>
+          <UiButton class="flex-1" @click="confirmSaveDataset" :disabled="isSavingDataset">
+            {{ isSavingDataset ? t('training.view.saving') : t('training.view.confirmSave') }}
+          </UiButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Confirmation Dialog -->
+    <div v-if="showDeleteConfirm" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="showDeleteConfirm = false">
+      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full space-y-4 animate-in zoom-in-95 duration-200" @click.stop>
+        <div class="flex items-center gap-3 text-destructive">
+          <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+            <X class="h-5 w-5" />
+          </div>
+          <h3 class="font-bold text-lg">{{ t('common.confirmDelete') }}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground">{{ t('training.view.deleteVersionWarning') }}</p>
+        <div class="flex gap-3 pt-2">
+          <UiButton variant="outline" class="flex-1" @click="showDeleteConfirm = false">{{ t('common.cancel') }}</UiButton>
+          <UiButton variant="destructive" class="flex-1" @click="handleDeleteVersion">{{ t('common.confirm') }}</UiButton>
+        </div>
+      </div>
+    </div>
+
     <div v-if="previewImage" 
          class="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 md:p-12 animate-in fade-in zoom-in duration-200"
          @click="previewImage = null">
