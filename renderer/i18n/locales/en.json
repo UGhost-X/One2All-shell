@@ -214,10 +214,19 @@
       "deleteVersionWarning": "Are you sure you want to delete this dataset version? This will also delete the physical data on disk and cannot be undone."
     },
     "train": {
+      "dataVersion": "Data Version",
+      "dataVersionPlaceholder": "Select data version for training",
+      "projectId": "Project ID",
+      "projectVersion": "Project Version",
+      "runCount": "Run Count",
+      "modelName": "Model Name",
       "epochs": "Epochs",
       "batchSize": "Batch Size",
       "learningRate": "Learning Rate",
       "start": "Start Training",
+      "starting": "Starting...",
+      "startFailed": "Failed to start training",
+      "noData": "No training data, please generate or load a dataset first",
       "summary": "Training Summary",
       "params": "Parameters",
       "epochsValue": "Epochs",
@@ -228,11 +237,20 @@
       "augmentedImages": "Augmented Images",
       "imagesCount": "{count} images",
       "annotationsCount": "Annotations",
-      "annotationsValue": "{count} annotations"
+      "annotationsValue": "{count} annotations",
+      "labelSelection": "Label Selection",
+      "noLabels": "No labels available",
+      "selectedLabelsCount": "{count} labels selected",
+      "allLabelsSelected": "Train all labels if none selected"
     },
     "monitor": {
       "currentTask": "Current Task",
       "product": "Product",
+      "task": "Task",
+      "taskPlaceholder": "Select a task to view progress",
+      "status": "Status",
+      "logs": "Logs",
+      "metrics": "Metrics",
       "backToParams": "Back to Parameters",
       "progress": "Training Progress"
     },

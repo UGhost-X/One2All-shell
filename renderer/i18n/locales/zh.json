@@ -224,10 +224,19 @@
       "deleteVersionWarning": "确认要删除这个数据集版本吗？此操作将同时删除磁盘上的物理数据且无法恢复。"
     },
     "train": {
+      "dataVersion": "数据版本",
+      "dataVersionPlaceholder": "选择用于训练的数据版本",
+      "projectId": "项目 ID",
+      "projectVersion": "项目版本",
+      "runCount": "运行次数",
+      "modelName": "模型名称",
       "epochs": "训练轮数",
       "batchSize": "批大小",
       "learningRate": "学习率",
       "start": "开始训练",
+      "starting": "启动中...",
+      "startFailed": "启动训练失败",
+      "noData": "没有可用于训练的数据，请先生成或加载数据集",
       "summary": "训练配置摘要",
       "params": "训练参数",
       "epochsValue": "轮数",
@@ -238,11 +247,20 @@
       "augmentedImages": "增强图片",
       "imagesCount": "{count} 张",
       "annotationsCount": "标注数量",
-      "annotationsValue": "{count} 个标注"
+      "annotationsValue": "{count} 个标注",
+      "labelSelection": "训练标签选择",
+      "noLabels": "暂无标签可供选择",
+      "selectedLabelsCount": "已选择 {count} 个标签",
+      "allLabelsSelected": "未选择标签将训练全部"
     },
     "monitor": {
       "currentTask": "当前任务",
       "product": "产品",
+      "task": "任务",
+      "taskPlaceholder": "选择任务以查看进度",
+      "status": "状态",
+      "logs": "日志",
+      "metrics": "指标",
       "backToParams": "返回训练参数",
       "progress": "训练进度"
     },

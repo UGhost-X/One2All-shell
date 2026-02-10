@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch, nextTick, inject } from 'vue'
+import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
@@ -53,6 +53,8 @@ const datasetVersions = ref<any[]>([])
 const selectedDatasetVersionId = ref<string>('')
 const isVersionSelectOpen = ref(false)
 
+const lastSavedVersionId = ref<number | null>(null)
+
 const showSaveDialog = ref(false)
 const showDeleteConfirm = ref(false)
 const deletingVersionId = ref<number | null>(null)
@@ -67,10 +69,8 @@ const handleDeleteVersion = async () => {
   if (deletingVersionId.value == null) return
   
   try {
-    // If deleting the currently selected version, clear selection first to release file locks
     if (selectedDatasetVersionId.value === String(deletingVersionId.value)) {
       selectedDatasetVersionId.value = ''
-      // Wait for UI to update and release resources
       await nextTick()
       await new Promise(resolve => setTimeout(resolve, 100))
     }
@@ -214,8 +214,7 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
     })))
 
     if (saveResult.success) {
-      // Save version info to DB
-      await window.electronAPI.saveDatasetVersion(JSON.parse(JSON.stringify({
+      const savedVersion = await window.electronAPI.saveDatasetVersion(JSON.parse(JSON.stringify({
         productId: productId.value,
         displayName: opts?.displayName || '',
         versionName: opts?.versionName || versionName.value,
@@ -228,6 +227,7 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
           sliceConfig: sliceConfig.value
         })
       })))
+      if (savedVersion?.id != null) lastSavedVersionId.value = savedVersion.id
 
       isSaved.value = true
       toast?.success(t('training.view.saveSuccess'))
@@ -250,11 +250,261 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
 
 const showUnsavedDialog = ref(false)
 
+const settingsDataPath = ref('')
+
+const trainDatasetVersionId = ref<string>('')
+const trainDatasetResults = ref<any[]>([])
+
+const trainProjectVersion = ref('v1')
+const trainRunCount = ref(1)
+const selectedTrainLabelNames = ref<string[]>([])
+const trainModelName = ref('STFPM')
+
+const isTrainingStarting = ref(false)
+const trainTasks = ref<{ label: string; task_id: string }[]>([])
+
+const monitorTaskId = ref('')
+const monitorStatus = ref('')
+const monitorProgress = ref(0)
+const monitorLogs = ref<string[]>([])
+const monitorMetrics = ref<any[]>([])
+let monitorEventSource: EventSource | null = null
+
+const enrichedLoadedImages = (images: any[]) => {
+  return (images || []).map((img: any) => ({
+    ...img,
+    annotations: (img.annotations || []).map((ann: any) => {
+      const labelInfo = labelConfigs.value[ann.categoryId - 1] || {}
+      return {
+        ...ann,
+        color: labelInfo.color || '#3b82f6',
+        label: labelInfo.name || `Label ${ann.categoryId}`
+      }
+    })
+  }))
+}
+
+const loadTrainDatasetFromVersion = async (id: string) => {
+  const v = datasetVersions.value.find(vv => String(vv.id) === String(id))
+  if (!v) throw new Error('Version not found')
+  const loadResult = await window.electronAPI?.loadDataset?.({ id: v.id, savePath: v.savePath })
+  if (!loadResult?.success) throw new Error(loadResult?.error || 'Load failed')
+  trainDatasetResults.value = enrichedLoadedImages(loadResult.images || [])
+}
+
+const enterTrainStep = async (opts?: { useCurrent?: boolean }) => {
+  if (opts?.useCurrent) {
+    trainDatasetVersionId.value = ''
+    trainDatasetResults.value = JSON.parse(JSON.stringify(augmentedResults.value || []))
+    innerStep.value = 'train'
+    return
+  }
+
+  const preferred =
+    (lastSavedVersionId.value != null ? String(lastSavedVersionId.value) : '') ||
+    (selectedDatasetVersionId.value ? String(selectedDatasetVersionId.value) : '') ||
+    (datasetVersions.value?.[0]?.id != null ? String(datasetVersions.value[0].id) : '')
+
+  if (!preferred) {
+    trainDatasetVersionId.value = ''
+    trainDatasetResults.value = JSON.parse(JSON.stringify(augmentedResults.value || []))
+    innerStep.value = 'train'
+    return
+  }
+
+  trainDatasetVersionId.value = preferred
+  try {
+    await loadTrainDatasetFromVersion(preferred)
+  } catch (err: any) {
+    trainDatasetResults.value = JSON.parse(JSON.stringify(augmentedResults.value || []))
+    toast?.error(`${t('training.view.rollbackFailed')}: ${err.message}`)
+  }
+  innerStep.value = 'train'
+}
+
 const handleNextStep = () => {
   if (augmentedResults.value.length > 0 && !isSaved.value) {
     showUnsavedDialog.value = true
-  } else {
-    innerStep.value = 'train'
+    return
+  }
+  enterTrainStep()
+}
+
+const trainDataVersionName = computed(() => {
+  if (!trainDatasetVersionId.value) return ''
+  const v = datasetVersions.value.find(vv => String(vv.id) === String(trainDatasetVersionId.value))
+  return v?.versionName || ''
+})
+
+const trainImagesCount = computed(() => trainDatasetResults.value.length)
+const trainAnnotationsCount = computed(() => {
+  let n = 0
+  for (const img of trainDatasetResults.value || []) n += (img.annotations || []).length
+  return n
+})
+
+watch(trainDatasetVersionId, async (id) => {
+  if (!id) return
+  if (innerStep.value !== 'train') return
+  try {
+    await loadTrainDatasetFromVersion(id)
+  } catch (err: any) {
+    toast?.error(`${t('training.view.rollbackFailed')}: ${err.message}`)
+  }
+})
+
+const closeMonitorStream = () => {
+  if (monitorEventSource) {
+    monitorEventSource.close()
+    monitorEventSource = null
+  }
+}
+
+watch(monitorTaskId, (taskId) => {
+  closeMonitorStream()
+  monitorStatus.value = ''
+  monitorProgress.value = 0
+  monitorLogs.value = []
+  monitorMetrics.value = []
+  if (!taskId) return
+
+  const apiBase = config.public.apiBase || 'http://localhost:8000'
+  const url = `${apiBase.replace(/\/$/, '')}/train/events/${encodeURIComponent(taskId)}`
+  monitorEventSource = new EventSource(url)
+  monitorEventSource.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data || '{}')
+      monitorStatus.value = data.status || ''
+      monitorProgress.value = Number(data.progress || 0)
+      if (Array.isArray(data.new_logs) && data.new_logs.length > 0) {
+        monitorLogs.value = monitorLogs.value.concat(data.new_logs.map((x: any) => String(x)))
+      }
+      if (Array.isArray(data.metrics)) monitorMetrics.value = data.metrics
+    } catch {}
+  }
+  monitorEventSource.onerror = () => {
+    closeMonitorStream()
+  }
+})
+
+watch(innerStep, (step) => {
+  if (step !== 'monitor') closeMonitorStream()
+})
+
+onBeforeUnmount(() => {
+  closeMonitorStream()
+})
+
+const buildTrainCocoData = (results: any[]) => {
+  const calculateBbox = (points: any, type: string) => {
+    if (type === 'rect') return points
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (let i = 0; i < points.length; i += 2) {
+      const x = points[i]
+      const y = points[i + 1]
+      minX = Math.min(minX, x); minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y)
+    }
+    return [minX, minY, maxX - minX, maxY - minY]
+  }
+  const calculateArea = (points: any, type: string) => {
+    if (type === 'rect') return points[2] * points[3]
+    let area = 0
+    for (let i = 0; i < points.length; i += 2) {
+      const j = (i + 2) % points.length
+      area += points[i] * points[j + 1]
+      area -= points[j] * points[i + 1]
+    }
+    return Math.abs(area) / 2
+  }
+
+  const images = (results || []).map((img, idx) => ({
+    id: idx + 1,
+    width: Number(img.width || 0),
+    height: Number(img.height || 0),
+    file_name: `image_${idx + 1}.jpg`
+  }))
+
+  let annId = 1
+  const annotations = (results || []).flatMap((img, idx) => {
+    return (img.annotations || []).map((ann: any) => {
+      const bbox = calculateBbox(ann.points, ann.type)
+      const area = calculateArea(ann.points, ann.type)
+      const segmentation = ann.type === 'rect'
+        ? [[bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3], bbox[0], bbox[1] + bbox[3]]]
+        : [ann.points]
+      return {
+        id: annId++,
+        image_id: idx + 1,
+        category_id: ann.categoryId || 1,
+        bbox,
+        points: ann.points,
+        segmentation,
+        area,
+        iscrowd: 0,
+        label: ann.label,
+        type: ann.type
+      }
+    })
+  })
+
+  const categories = labelConfigs.value.map((l, idx) => ({
+    id: idx + 1,
+    name: l.name,
+    supercategory: 'none'
+  }))
+
+  return { images, annotations, categories }
+}
+
+const startTraining = async () => {
+  if (isTrainingStarting.value) return
+  if (!productId.value) return
+  if (!trainDatasetResults.value || trainDatasetResults.value.length === 0) {
+    toast?.error(t('training.train.noData'))
+    return
+  }
+
+  isTrainingStarting.value = true
+  try {
+    const settings = await window.electronAPI?.getSettings?.()
+    const basePath = settings?.dataPath || settingsDataPath.value || ''
+    const images = trainDatasetResults.value.map((img: any) => String(img.imageUrl || '').split(',')[1] || '')
+    const cocoData = buildTrainCocoData(trainDatasetResults.value)
+
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiUrl = `${apiBase.replace(/\/$/, '')}/train/anomaly`
+
+    const payload = {
+      images,
+      coco_data: cocoData,
+      base_path: basePath,
+      project_id: String(productId.value),
+      version: String(trainProjectVersion.value || 'v1'),
+      data_version: String(trainDataVersionName.value || versionName.value || 'v1'),
+      run_count: Math.max(1, Math.round(Number(trainRunCount.value || 1))),
+      model_name: String(trainModelName.value || 'STFPM'),
+      epochs: Math.round(Number(trainConfig.value.epochs[0] || 50)),
+      batch_size: Math.round(Number(trainConfig.value.batchSize[0] || 8)),
+      learning_rate: Number(trainConfig.value.learningRate || 0.01),
+      label_names: selectedTrainLabelNames.value.length > 0 ? selectedTrainLabelNames.value : null
+    }
+
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    trainTasks.value = Array.isArray(data.tasks) ? data.tasks : []
+    monitorTaskId.value = trainTasks.value[0]?.task_id || ''
+    innerStep.value = 'monitor'
+  } catch (err: any) {
+    toast?.error(`${t('training.train.startFailed')}: ${err.message}`)
+  } finally {
+    isTrainingStarting.value = false
   }
 }
 
@@ -322,16 +572,6 @@ const augmentConfig = computed({
     presetsData.value[currentPreset.value] = val
   }
 })
-
-// Add a helper to update config that marks as custom if needed
-const updateConfig = (fn: (cfg: any) => void) => {
-  // If we are on a preset and change something, we could either:
-  // 1. Update that preset's memory (user requested "temporary memory capability")
-  // 2. Switch to custom (less ideal if they want memory per preset)
-  // The user said: "switching back shouldn't reset, should have memory"
-  // So we just update the current preset's data.
-  fn(presetsData.value[currentPreset.value])
-}
 
 const applyPreset = (type: 'none' | 'basic' | 'standard' | 'heavy' | 'custom') => {
   currentPreset.value = type
@@ -423,12 +663,10 @@ const isRollingBack = ref(false)
       return
     }
 
-    // Load images and annotations from disk
     try {
       if (v.id) {
         const loadResult = await window.electronAPI.loadDataset({ id: v.id, savePath: v.savePath })
         if (loadResult.success) {
-          // Enrich loaded data with label names and colors from current labelConfigs
           augmentedResults.value = loadResult.images.map((img: any) => ({
             ...img,
             annotations: img.annotations.map((ann: any) => {
@@ -764,6 +1002,11 @@ const getSvgPoints = (ann: any) => {
 onMounted(async () => {
   if (window.electronAPI) {
     isPinned.value = await window.electronAPI.isAlwaysOnTop()
+  }
+
+  if (window.electronAPI?.getSettings) {
+    const settings = await window.electronAPI.getSettings()
+    if (settings?.dataPath) settingsDataPath.value = settings.dataPath
   }
 
   const qProductId = route.query.productId
@@ -1329,6 +1572,44 @@ onMounted(async () => {
         <div v-else-if="innerStep === 'train'" class="grid grid-cols-[360px,1fr] gap-6">
           <aside class="border rounded-xl bg-background p-4 space-y-4">
             <div class="space-y-1">
+              <Label>{{ t('training.train.dataVersion') }}</Label>
+              <UiSelect v-model="trainDatasetVersionId">
+                <UiSelectTrigger class="h-9 text-xs bg-background w-full px-2 gap-2">
+                  <UiSelectValue :placeholder="t('training.train.dataVersionPlaceholder')" />
+                </UiSelectTrigger>
+                <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
+                  <UiSelectItem v-for="v in datasetVersions" :key="v.id" :value="String(v.id)" class="pr-2">
+                    <div class="flex items-center w-full gap-2">
+                      <span class="flex-1 min-w-0 truncate">{{ v.displayName ? `${v.displayName} (${v.versionName})` : v.versionName }}</span>
+                    </div>
+                  </UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.modelName') }}</Label>
+                <Input v-model="trainModelName" class="h-9 text-xs px-2" />
+              </div>
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.runCount') }}</Label>
+                <Input type="number" v-model="trainRunCount" min="1" step="1" class="h-9 text-xs px-2" />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.projectId') }}</Label>
+                <Input :model-value="String(productId ?? '')" disabled class="h-9 text-xs px-2" />
+              </div>
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.projectVersion') }}</Label>
+                <Input v-model="trainProjectVersion" class="h-9 text-xs px-2" />
+              </div>
+            </div>
+
+            <div class="space-y-1">
               <div class="flex justify-between">
                 <Label>{{ t('training.train.epochs') }}</Label>
                 <span class="text-xs font-medium">{{ trainConfig.epochs[0] }}</span>
@@ -1342,12 +1623,40 @@ onMounted(async () => {
               </div>
               <Slider v-model="trainConfig.batchSize" :min="1" :max="64" />
             </div>
+
             <div class="space-y-1">
-              <Label>{{ t('training.train.learningRate') }}</Label>
-              <Input type="number" v-model="trainConfig.learningRate" step="0.0001" class="w-28" />
+              <Label class="text-xs">{{ t('training.train.learningRate') }}</Label>
+              <Input type="number" v-model="trainConfig.learningRate" step="0.0001" class="h-9 text-xs px-2" />
             </div>
+
+            <div class="space-y-2">
+              <Label class="text-xs">{{ t('training.train.labelSelection') }}</Label>
+              <div class="border rounded-md p-2 max-h-[120px] overflow-y-auto bg-muted/5 space-y-1.5">
+                <div v-for="label in labelConfigs" :key="label.name" class="flex items-center gap-2">
+                  <input 
+                    type="checkbox" 
+                    :id="'label-' + label.name"
+                    :value="label.name"
+                    v-model="selectedTrainLabelNames"
+                    class="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                  />
+                  <label :for="'label-' + label.name" class="text-xs cursor-pointer select-none truncate flex-1">
+                    {{ label.name }}
+                  </label>
+                </div>
+                <div v-if="labelConfigs.length === 0" class="text-[10px] text-muted-foreground italic py-1">
+                  {{ t('training.train.noLabels') }}
+                </div>
+              </div>
+              <div class="text-[10px] text-muted-foreground">
+                {{ selectedTrainLabelNames.length > 0 ? t('training.train.selectedLabelsCount', { count: selectedTrainLabelNames.length }) : t('training.train.allLabelsSelected') }}
+              </div>
+            </div>
+
             <Separator />
-            <UiButton class="w-full" @click="innerStep = 'monitor'">{{ t('training.train.start') }}</UiButton>
+            <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || trainDatasetResults.length === 0">
+              {{ isTrainingStarting ? t('training.train.starting') : t('training.train.start') }}
+            </UiButton>
           </aside>
           <section class="border rounded-xl bg-background p-4">
             <div class="text-sm font-bold mb-4">{{ t('training.train.summary') }}</div>
@@ -1370,11 +1679,15 @@ onMounted(async () => {
               </div>
               <div class="rounded-lg border p-4 bg-muted/10">
                 <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.augmentedImages') }}</div>
-                <div class="text-sm font-medium">{{ t('training.train.imagesCount', { count: augmentedResults.length > 0 ? augmentedResults.length : requestedNumResults }) }}</div>
+                <div class="text-sm font-medium">{{ t('training.train.imagesCount', { count: trainImagesCount }) }}</div>
               </div>
               <div class="rounded-lg border p-4 bg-muted/10">
                 <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.annotationsCount') }}</div>
-                <div class="text-sm font-medium">{{ t('training.train.annotationsValue', { count: currentAnnotations.length }) }}</div>
+                <div class="text-sm font-medium">{{ t('training.train.annotationsValue', { count: trainAnnotationsCount }) }}</div>
+              </div>
+              <div class="rounded-lg border p-4 bg-muted/10">
+                <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.dataVersion') }}</div>
+                <div class="text-sm font-medium">{{ trainDataVersionName || '-' }}</div>
               </div>
             </div>
           </section>
@@ -1386,6 +1699,22 @@ onMounted(async () => {
               <Label>{{ t('training.monitor.currentTask') }}</Label>
               <div class="text-sm">{{ t('training.monitor.product') }} {{ productName || t('training.train.notSelected') }}</div>
             </div>
+            <div class="space-y-1">
+              <Label class="text-xs">{{ t('training.monitor.task') }}</Label>
+              <UiSelect v-model="monitorTaskId">
+                <UiSelectTrigger class="h-9 text-xs bg-background w-full px-2 gap-2">
+                  <UiSelectValue :placeholder="t('training.monitor.taskPlaceholder')" />
+                </UiSelectTrigger>
+                <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
+                  <UiSelectItem v-for="tItem in trainTasks" :key="tItem.task_id" :value="tItem.task_id" class="pr-2">
+                    <div class="flex items-center w-full gap-2">
+                      <span class="flex-1 min-w-0 truncate">{{ tItem.label }}</span>
+                    </div>
+                  </UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+              <div class="text-xs text-muted-foreground">{{ t('training.monitor.status') }}: {{ monitorStatus || '-' }}</div>
+            </div>
             <Separator />
             <UiButton @click="innerStep = 'train'">{{ t('training.monitor.backToParams') }}</UiButton>
           </aside>
@@ -1393,12 +1722,22 @@ onMounted(async () => {
             <div class="rounded-lg border p-6">
               <div class="text-sm font-bold mb-2">{{ t('training.monitor.progress') }}</div>
               <div class="w-full h-2 bg-muted rounded-full overflow-hidden">
-                <div class="h-2 bg-primary w-1/3"></div>
+                <div class="h-2 bg-primary" :style="{ width: `${Math.max(0, Math.min(100, monitorProgress))}%` }"></div>
               </div>
             </div>
             <div class="grid grid-cols-2 gap-4">
-              <div class="rounded-lg border p-6 h-48"></div>
-              <div class="rounded-lg border p-6 h-48"></div>
+              <div class="rounded-lg border p-4 h-80 overflow-auto">
+                <div class="text-sm font-bold mb-2">{{ t('training.monitor.logs') }}</div>
+                <div class="text-xs font-mono whitespace-pre-wrap break-words">
+                  {{ monitorLogs.join('\n') }}
+                </div>
+              </div>
+              <div class="rounded-lg border p-4 h-80 overflow-auto">
+                <div class="text-sm font-bold mb-2">{{ t('training.monitor.metrics') }}</div>
+                <div class="text-xs font-mono whitespace-pre-wrap break-words">
+                  {{ JSON.stringify(monitorMetrics, null, 2) }}
+                </div>
+              </div>
             </div>
           </section>
         </div>
@@ -1417,7 +1756,7 @@ onMounted(async () => {
         <p class="text-sm text-muted-foreground">{{ t('training.view.unsavedWarning') }}</p>
         <div class="flex gap-3 pt-2">
           <UiButton variant="outline" class="flex-1" @click="showUnsavedDialog = false">{{ t('training.view.saveFirst') }}</UiButton>
-          <UiButton variant="destructive" class="flex-1" @click="innerStep = 'train'; showUnsavedDialog = false">{{ t('training.view.confirmNext') }}</UiButton>
+          <UiButton variant="destructive" class="flex-1" @click="enterTrainStep({ useCurrent: true }); showUnsavedDialog = false">{{ t('training.view.confirmNext') }}</UiButton>
         </div>
       </div>
     </div>

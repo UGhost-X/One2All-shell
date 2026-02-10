@@ -26,6 +26,12 @@ declare global {
       saveSettings: (settings: any) => Promise<any>
       saveImage: (data: { productId: number; fileName: string; dataUrl: string }) => Promise<string>
       loadImage: (path: string) => Promise<string | null>
+      getProductImages: (productId: number) => Promise<string[]>
+      saveDataset: (data: { productId: number; versionName: string; moduleName: string; images: any[]; cocoData: any }) => Promise<any>
+      loadDataset: (params: { id?: number | string; savePath?: string }) => Promise<any>
+      saveDatasetVersion: (data: any) => Promise<any>
+      getDatasetVersions: (productId: number) => Promise<any[]>
+      deleteDatasetVersion: (id: number | string) => Promise<any>
     }
   }
 }
