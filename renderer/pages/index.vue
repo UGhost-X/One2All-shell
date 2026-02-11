@@ -35,6 +35,7 @@ import Tabs from '@/components/ui/tabs/Tabs.vue'
 import TabsContent from '@/components/ui/tabs/TabsContent.vue'
 import TabsList from '@/components/ui/tabs/TabsList.vue'
 import TabsTrigger from '@/components/ui/tabs/TabsTrigger.vue'
+import Progress from '@/components/ui/progress/Progress.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -1092,9 +1093,7 @@ onBeforeUnmount(() => {
                     <span class="text-muted-foreground uppercase tracking-tight">{{ item.label }}</span>
                     <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
                   </div>
-                  <div class="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                    <div class="h-full bg-primary/60" :style="{ width: item.score + '%' }"></div>
-                  </div>
+                  <Progress :model-value="item.score" class="h-1.5" />
                 </div>
               </div>
             </div>

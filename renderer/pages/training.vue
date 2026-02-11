@@ -1,9 +1,30 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, Settings2, Pin, PinOff, Settings } from 'lucide-vue-next'
+import { X, Settings2, Pin, PinOff, Settings, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal } from 'lucide-vue-next'
+import { Line } from 'vue-chartjs'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend
+} from 'chart.js'
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend
+)
 import UiButton from '@/components/ui/button/Button.vue'
 import Input from '@/components/ui/input/Input.vue'
 import Label from '@/components/ui/label/Label.vue'
@@ -14,6 +35,9 @@ import UiSelectContent from '@/components/ui/select/SelectContent.vue'
 import UiSelectItem from '@/components/ui/select/SelectItem.vue'
 import UiSelectTrigger from '@/components/ui/select/SelectTrigger.vue'
 import UiSelectValue from '@/components/ui/select/SelectValue.vue'
+import Progress from '@/components/ui/progress/Progress.vue'
+
+definePageMeta({ keepalive: true })
 
 const { t } = useI18n()
 const route = useRoute()
@@ -261,14 +285,201 @@ const selectedTrainLabelNames = ref<string[]>([])
 const trainModelName = ref('STFPM')
 
 const isTrainingStarting = ref(false)
-const trainTasks = ref<{ label: string; task_id: string }[]>([])
+const isStoppingTask = ref(false)
+const isStoppingGroup = ref(false)
+const trainTasks = ref<{ label: string; task_id: string; status?: string; progress?: number }[]>([])
+const trainGroupId = ref('')
+const monitorGroupProgress = ref(0)
+const monitorGroupStatus = ref('')
+const activeMonitorTab = ref('overview')
 
 const monitorTaskId = ref('')
+const isTaskSelectOpen = ref(false)
 const monitorStatus = ref('')
 const monitorProgress = ref(0)
 const monitorLogs = ref<string[]>([])
 const monitorMetrics = ref<any[]>([])
 let monitorEventSource: EventSource | null = null
+let groupPollingTimer: any = null
+
+const startGroupPolling = () => {
+  stopGroupPolling()
+  groupPollingTimer = setInterval(async () => {
+    if (!trainGroupId.value) return
+    try {
+      const apiBase = config.public.apiBase || 'http://localhost:8000'
+      const url = `${apiBase.replace(/\/$/, '')}/train/status/group/${trainGroupId.value}`
+      const res = await fetch(url)
+      if (res.ok) {
+        const data = await res.json()
+        monitorGroupProgress.value = data.progress || 0
+        monitorGroupStatus.value = data.status || ''
+        if (Array.isArray(data.tasks)) {
+          // Update individual task status/progress in the list
+          trainTasks.value = trainTasks.value.map(t => {
+            const remote = data.tasks.find((rt: any) => rt.task_id === t.task_id)
+            return remote ? { ...t, status: remote.status, progress: remote.progress } : t
+          })
+        }
+        if (data.status === 'completed' || data.status === 'failed') {
+          stopGroupPolling()
+        }
+      }
+    } catch (err) {
+      console.error('Group polling failed:', err)
+    }
+  }, 3000)
+}
+
+const stopGroupPolling = () => {
+  if (groupPollingTimer) {
+    clearInterval(groupPollingTimer)
+    groupPollingTimer = null
+  }
+}
+
+onBeforeUnmount(() => {
+  closeMonitorStream()
+  stopGroupPolling()
+})
+
+type TrainMetricPoint = {
+  epoch: number
+  iter: number
+  total_iters: number
+  loss: number
+  lr: number
+}
+
+const cleanedMonitorMetrics = computed<TrainMetricPoint[]>(() => {
+  const arr = Array.isArray(monitorMetrics.value) ? monitorMetrics.value : []
+  return arr
+    .map((m: any) => ({
+      epoch: Number(m?.epoch),
+      iter: Number(m?.iter),
+      total_iters: Number(m?.total_iters),
+      loss: Number(m?.loss),
+      lr: Number(m?.lr)
+    }))
+    .filter(m =>
+      Number.isFinite(m.epoch) &&
+      Number.isFinite(m.iter) &&
+      Number.isFinite(m.total_iters) &&
+      Number.isFinite(m.loss) &&
+      Number.isFinite(m.lr)
+    )
+})
+
+const latestMonitorMetric = computed(() => {
+  const arr = cleanedMonitorMetrics.value
+  return arr.length > 0 ? arr[arr.length - 1] : null
+})
+
+const normalizeProgressPercent = (v: any) => {
+  let n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  if (n > 0 && n <= 1) n = n * 100
+  const clamped = Math.max(0, Math.min(100, n))
+  if (clamped >= 99) return 100
+  return Math.round(clamped)
+}
+
+const chartOptions = computed(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  scales: {
+    y: {
+      beginAtZero: false,
+      grid: { color: 'rgba(200, 200, 200, 0.1)' },
+      ticks: { font: { size: 10 } },
+      title: { display: true, text: t('training.monitor.loss'), font: { size: 10 } }
+    },
+    y1: {
+      position: 'right' as const,
+      beginAtZero: true,
+      grid: { drawOnChartArea: false },
+      ticks: { font: { size: 10 } },
+      title: { display: true, text: t('training.monitor.lr'), font: { size: 10 } }
+    },
+    x: {
+      grid: { display: false },
+      ticks: {
+        font: { size: 10 },
+        maxRotation: 0,
+        autoSkip: true,
+        maxTicksLimit: 10,
+        callback: (_: any, index: any) => {
+          const idx = Number(index)
+          const m = cleanedMonitorMetrics.value[idx]
+          if (!m) return ''
+          // 只显示轮次
+          return `${t('training.monitor.epoch')}${m.epoch}`
+        }
+      }
+    }
+  },
+  plugins: {
+    legend: { 
+      display: true, 
+      position: 'top' as const, 
+      align: 'end' as const,
+      labels: { boxWidth: 10, font: { size: 10 } } 
+    },
+    tooltip: {
+      mode: 'index',
+      intersect: false,
+      backgroundColor: 'rgba(255, 255, 255, 0.9)',
+      titleColor: '#000',
+      bodyColor: '#666',
+      borderColor: 'rgba(0, 0, 0, 0.1)',
+      borderWidth: 1,
+      padding: 8,
+      bodyFont: { size: 11 },
+      callbacks: {
+        title: (items: any[]) => {
+          const idx = items?.[0]?.dataIndex
+          const m = cleanedMonitorMetrics.value?.[idx]
+          if (!m) return ''
+          // Tooltip 保持详细信息（轮次 + 迭代），方便用户查看具体进度
+          return `${t('training.monitor.epoch')} ${m.epoch} · ${t('training.monitor.iter')} ${m.iter}`
+        }
+      }
+    }
+  },
+  elements: {
+    point: { radius: 0, hoverRadius: 4 },
+    line: { tension: 0.3 }
+  }
+}))
+
+const combinedChartData = computed(() => ({
+  labels: cleanedMonitorMetrics.value.map((_, idx) => String(idx)),
+  datasets: [
+    {
+      label: t('training.monitor.loss'),
+      data: cleanedMonitorMetrics.value.map(m => m.loss),
+      borderColor: 'hsl(var(--primary))',
+      backgroundColor: 'hsl(var(--primary) / 0.1)',
+      borderWidth: 2,
+      fill: true,
+      yAxisID: 'y',
+    },
+    {
+      label: t('training.monitor.lr'),
+      data: cleanedMonitorMetrics.value.map(m => m.lr),
+      borderColor: '#10b981',
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      yAxisID: 'y1',
+    }
+  ]
+}))
+
+const formatMetricNumber = (v: number) => {
+  if (!Number.isFinite(v)) return '-'
+  const s = v.toFixed(6)
+  return s.replace(/0+$/, '').replace(/\.$/, '')
+}
 
 const enrichedLoadedImages = (images: any[]) => {
   return (images || []).map((img: any) => ({
@@ -360,6 +571,111 @@ const closeMonitorStream = () => {
   }
 }
 
+const openMonitorStream = (taskId: string) => {
+  closeMonitorStream()
+  if (!taskId) return
+  const apiBase = config.public.apiBase || 'http://localhost:8000'
+  const url = `${apiBase.replace(/\/$/, '')}/train/events/${encodeURIComponent(taskId)}`
+  monitorEventSource = new EventSource(url)
+  const onAnyEvent = (e: MessageEvent) => {
+    applyMonitorPayload((e as any)?.data)
+  }
+  monitorEventSource.onmessage = onAnyEvent
+  monitorEventSource.addEventListener('metrics', onAnyEvent as any)
+  monitorEventSource.addEventListener('metric', onAnyEvent as any)
+  monitorEventSource.addEventListener('logs', onAnyEvent as any)
+  monitorEventSource.addEventListener('log', onAnyEvent as any)
+  monitorEventSource.addEventListener('progress', onAnyEvent as any)
+  monitorEventSource.addEventListener('status', onAnyEvent as any)
+  monitorEventSource.onerror = () => {
+    closeMonitorStream()
+  }
+}
+
+const normalizeToArray = (v: any): any[] | null => {
+  if (!v) return null
+  if (Array.isArray(v)) return v
+  if (typeof v === 'string') {
+    try {
+      const parsed = JSON.parse(v)
+      return normalizeToArray(parsed)
+    } catch {
+      return null
+    }
+  }
+  if (typeof v === 'object') {
+    if (Array.isArray((v as any).metrics)) return (v as any).metrics
+    if (Array.isArray((v as any).data)) return (v as any).data
+    if (Array.isArray((v as any).items)) return (v as any).items
+  }
+  return null
+}
+
+const mergeMetricPoints = (incoming: any[], mode: 'replace' | 'append') => {
+  const base = mode === 'replace' ? [] : (Array.isArray(monitorMetrics.value) ? monitorMetrics.value : [])
+  const merged = base.concat(incoming || [])
+  const seen = new Set<string>()
+  const out: any[] = []
+  for (const m of merged) {
+    const epoch = Number((m as any)?.epoch)
+    const iter = Number((m as any)?.iter)
+    const key = `${epoch}-${iter}`
+    if (Number.isFinite(epoch) && Number.isFinite(iter)) {
+      if (seen.has(key)) continue
+      seen.add(key)
+    }
+    out.push(m)
+  }
+  monitorMetrics.value = out
+}
+
+const applyMonitorPayload = (raw: any) => {
+  let data: any = raw
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data || '{}')
+    } catch {
+      data = { message: raw }
+    }
+  }
+
+  if (data && typeof data === 'object') {
+    if (typeof data.status === 'string') monitorStatus.value = data.status
+    if (data.progress != null && data.progress !== '') {
+      const p = Number(data.progress)
+      if (Number.isFinite(p)) monitorProgress.value = p
+    }
+  }
+
+  const logsCandidate =
+    data?.new_logs ??
+    data?.logs ??
+    data?.log ??
+    data?.new_log ??
+    data?.message
+
+  const logsArr = normalizeToArray(logsCandidate)
+  if (logsArr && logsArr.length > 0) {
+    monitorLogs.value = monitorLogs.value.concat(logsArr.map((x: any) => String(x)))
+  } else if (typeof logsCandidate === 'string' && logsCandidate.trim()) {
+    monitorLogs.value = monitorLogs.value.concat([logsCandidate])
+  }
+
+  const metricsCandidate =
+    data?.new_metrics ??
+    data?.metrics ??
+    data?.metric ??
+    data?.new_metric
+
+  const metricsArr = normalizeToArray(metricsCandidate)
+  if (metricsArr && metricsArr.length > 0) {
+    const mode: 'replace' | 'append' = data?.new_metrics != null || data?.new_metric != null ? 'append' : 'replace'
+    mergeMetricPoints(metricsArr, mode)
+  } else if (Array.isArray(data)) {
+    mergeMetricPoints(data, 'replace')
+  }
+}
+
 watch(monitorTaskId, (taskId) => {
   closeMonitorStream()
   monitorStatus.value = ''
@@ -368,31 +684,21 @@ watch(monitorTaskId, (taskId) => {
   monitorMetrics.value = []
   if (!taskId) return
 
-  const apiBase = config.public.apiBase || 'http://localhost:8000'
-  const url = `${apiBase.replace(/\/$/, '')}/train/events/${encodeURIComponent(taskId)}`
-  monitorEventSource = new EventSource(url)
-  monitorEventSource.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data || '{}')
-      monitorStatus.value = data.status || ''
-      monitorProgress.value = Number(data.progress || 0)
-      if (Array.isArray(data.new_logs) && data.new_logs.length > 0) {
-        monitorLogs.value = monitorLogs.value.concat(data.new_logs.map((x: any) => String(x)))
-      }
-      if (Array.isArray(data.metrics)) monitorMetrics.value = data.metrics
-    } catch {}
-  }
-  monitorEventSource.onerror = () => {
-    closeMonitorStream()
-  }
+  openMonitorStream(taskId)
 })
 
 watch(innerStep, (step) => {
-  if (step !== 'monitor') closeMonitorStream()
+  if (step !== 'train') closeMonitorStream()
 })
 
-onBeforeUnmount(() => {
+onActivated(() => {
+  if (trainGroupId.value && !groupPollingTimer) startGroupPolling()
+  if (monitorTaskId.value && !monitorEventSource) openMonitorStream(monitorTaskId.value)
+})
+
+onDeactivated(() => {
   closeMonitorStream()
+  stopGroupPolling()
 })
 
 const buildTrainCocoData = (results: any[]) => {
@@ -457,6 +763,16 @@ const buildTrainCocoData = (results: any[]) => {
   return { images, annotations, categories }
 }
 
+const fetchTasks = async () => {
+  // fetchTasks 接口已弃用，不再从 /train/tasks 获取
+}
+
+watch(isTaskSelectOpen, (open) => {
+  if (open) {
+    fetchTasks()
+  }
+})
+
 const startTraining = async () => {
   if (isTrainingStarting.value) return
   if (!productId.value) return
@@ -484,7 +800,7 @@ const startTraining = async () => {
       data_version: String(trainDataVersionName.value || versionName.value || 'v1'),
       run_count: Math.max(1, Math.round(Number(trainRunCount.value || 1))),
       model_name: String(trainModelName.value || 'STFPM'),
-      epochs: Math.round(Number(trainConfig.value.epochs[0] || 50)),
+      epochs: Math.round(Number(trainConfig.value.epochs[0] || 10)),
       batch_size: Math.round(Number(trainConfig.value.batchSize[0] || 8)),
       learning_rate: Number(trainConfig.value.learningRate || 0.01),
       label_names: selectedTrainLabelNames.value.length > 0 ? selectedTrainLabelNames.value : null
@@ -498,13 +814,60 @@ const startTraining = async () => {
 
     if (!res.ok) throw new Error(await res.text())
     const data = await res.json()
+    trainGroupId.value = data.group_id || ''
     trainTasks.value = Array.isArray(data.tasks) ? data.tasks : []
     monitorTaskId.value = trainTasks.value[0]?.task_id || ''
-    innerStep.value = 'monitor'
+    activeMonitorTab.value = 'overview'
+    startGroupPolling()
   } catch (err: any) {
     toast?.error(`${t('training.train.startFailed')}: ${err.message}`)
   } finally {
     isTrainingStarting.value = false
+  }
+}
+
+const stopTask = async () => {
+  if (!monitorTaskId.value || isStoppingTask.value) return
+  isStoppingTask.value = true
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const url = `${apiBase.replace(/\/$/, '')}/train/stop/${monitorTaskId.value}`
+    const res = await fetch(url, { method: 'POST' })
+    if (res.ok) {
+      toast?.success(t('training.monitor.stopTaskSuccess'))
+      stopGroupPolling()
+      fetchTasks()
+    } else {
+      throw new Error(await res.text())
+    }
+  } catch (err: any) {
+    toast?.error(`${t('training.monitor.stopTaskFailed')}: ${err.message}`)
+  } finally {
+    isStoppingTask.value = false
+  }
+}
+
+const stopGroup = async () => {
+  if (isStoppingGroup.value) return
+
+  isStoppingGroup.value = true
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    // If we have a group_id from somewhere, use it. Otherwise, we might need to fetch it.
+    // Assuming for now that task_id can be used as a proxy or we stop the group of the current task.
+    const url = `${apiBase.replace(/\/$/, '')}/train/stop/group/${monitorTaskId.value}`
+    const res = await fetch(url, { method: 'POST' })
+    if (res.ok) {
+      toast?.success(t('training.monitor.stopGroupSuccess'))
+      stopGroupPolling() // Stop polling immediately when group is stopped
+      fetchTasks()
+    } else {
+      throw new Error(await res.text())
+    }
+  } catch (err: any) {
+    toast?.error(`${t('training.monitor.stopGroupFailed')}: ${err.message}`)
+  } finally {
+    isStoppingGroup.value = false
   }
 }
 
@@ -1054,6 +1417,12 @@ onMounted(async () => {
       applyPreset('basic')
     }
   }
+  fetchTasks()
+})
+
+onBeforeUnmount(() => {
+  closeMonitorStream()
+  stopGroupPolling()
 })
 </script>
 
@@ -1131,8 +1500,8 @@ onMounted(async () => {
           </button>
         </div>
 
-        <div v-if="innerStep === 'augment'" class="flex-1 min-h-0 grid grid-cols-[400px,1fr] gap-6">
-          <aside class="border rounded-xl bg-background p-4 flex flex-col gap-4 overflow-hidden h-full">
+        <div v-if="innerStep === 'augment'" class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[400px,1fr] gap-6">
+          <aside class="border rounded-xl bg-background p-4 flex flex-col gap-4 overflow-hidden h-full min-h-[500px] md:min-h-0">
             <div class="flex items-center justify-between shrink-0">
               <h3 class="font-bold text-sm">{{ t('training.augmentConfig') }}</h3>
               <div class="flex items-center gap-2">
@@ -1569,173 +1938,348 @@ onMounted(async () => {
           </section>
         </div>
 
-        <div v-else-if="innerStep === 'train'" class="grid grid-cols-[360px,1fr] gap-6">
-          <aside class="border rounded-xl bg-background p-4 space-y-4">
-            <div class="space-y-1">
-              <Label>{{ t('training.train.dataVersion') }}</Label>
-              <UiSelect v-model="trainDatasetVersionId">
-                <UiSelectTrigger class="h-9 text-xs bg-background w-full px-2 gap-2">
-                  <UiSelectValue :placeholder="t('training.train.dataVersionPlaceholder')" />
-                </UiSelectTrigger>
-                <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
-                  <UiSelectItem v-for="v in datasetVersions" :key="v.id" :value="String(v.id)" class="pr-2">
-                    <div class="flex items-center w-full gap-2">
-                      <span class="flex-1 min-w-0 truncate">{{ v.displayName ? `${v.displayName} (${v.versionName})` : v.versionName }}</span>
-                    </div>
-                  </UiSelectItem>
-                </UiSelectContent>
-              </UiSelect>
-            </div>
-
-            <div class="grid grid-cols-2 gap-3">
+        <div v-else-if="innerStep === 'train'" class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[360px,1fr] gap-6">
+          <aside class="border rounded-xl bg-background p-4 flex flex-col gap-4 overflow-hidden h-full min-h-[500px] md:min-h-0">
+            <div class="flex-1 overflow-y-auto pr-2 space-y-4">
               <div class="space-y-1">
-                <Label class="text-xs">{{ t('training.train.modelName') }}</Label>
-                <Input v-model="trainModelName" class="h-9 text-xs px-2" />
+                <Label>{{ t('training.train.dataVersion') }}</Label>
+                <UiSelect v-model="trainDatasetVersionId">
+                  <UiSelectTrigger class="h-9 text-xs bg-background w-full px-2 gap-2">
+                    <UiSelectValue :placeholder="t('training.train.dataVersionPlaceholder')" />
+                  </UiSelectTrigger>
+                  <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
+                    <UiSelectItem v-for="v in datasetVersions" :key="v.id" :value="String(v.id)" class="pr-2">
+                      <div class="flex items-center w-full gap-2">
+                        <span class="flex-1 min-w-0 truncate">{{ v.displayName ? `${v.displayName} (${v.versionName})` : v.versionName }}</span>
+                      </div>
+                    </UiSelectItem>
+                  </UiSelectContent>
+                </UiSelect>
               </div>
-              <div class="space-y-1">
-                <Label class="text-xs">{{ t('training.train.runCount') }}</Label>
-                <Input type="number" v-model="trainRunCount" min="1" step="1" class="h-9 text-xs px-2" />
-              </div>
-            </div>
 
-            <div class="grid grid-cols-2 gap-3">
-              <div class="space-y-1">
-                <Label class="text-xs">{{ t('training.train.projectId') }}</Label>
-                <Input :model-value="String(productId ?? '')" disabled class="h-9 text-xs px-2" />
-              </div>
-              <div class="space-y-1">
-                <Label class="text-xs">{{ t('training.train.projectVersion') }}</Label>
-                <Input v-model="trainProjectVersion" class="h-9 text-xs px-2" />
-              </div>
-            </div>
-
-            <div class="space-y-1">
-              <div class="flex justify-between">
-                <Label>{{ t('training.train.epochs') }}</Label>
-                <span class="text-xs font-medium">{{ trainConfig.epochs[0] }}</span>
-              </div>
-              <Slider v-model="trainConfig.epochs" :min="1" :max="100" />
-            </div>
-            <div class="space-y-1">
-              <div class="flex justify-between">
-                <Label>{{ t('training.train.batchSize') }}</Label>
-                <span class="text-xs font-medium">{{ trainConfig.batchSize[0] }}</span>
-              </div>
-              <Slider v-model="trainConfig.batchSize" :min="1" :max="64" />
-            </div>
-
-            <div class="space-y-1">
-              <Label class="text-xs">{{ t('training.train.learningRate') }}</Label>
-              <Input type="number" v-model="trainConfig.learningRate" step="0.0001" class="h-9 text-xs px-2" />
-            </div>
-
-            <div class="space-y-2">
-              <Label class="text-xs">{{ t('training.train.labelSelection') }}</Label>
-              <div class="border rounded-md p-2 max-h-[120px] overflow-y-auto bg-muted/5 space-y-1.5">
-                <div v-for="label in labelConfigs" :key="label.name" class="flex items-center gap-2">
-                  <input 
-                    type="checkbox" 
-                    :id="'label-' + label.name"
-                    :value="label.name"
-                    v-model="selectedTrainLabelNames"
-                    class="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
-                  />
-                  <label :for="'label-' + label.name" class="text-xs cursor-pointer select-none truncate flex-1">
-                    {{ label.name }}
-                  </label>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="space-y-1">
+                  <Label class="text-xs">{{ t('training.train.modelName') }}</Label>
+                  <Input v-model="trainModelName" class="h-9 text-xs px-2" />
                 </div>
-                <div v-if="labelConfigs.length === 0" class="text-[10px] text-muted-foreground italic py-1">
-                  {{ t('training.train.noLabels') }}
+                <div class="space-y-1">
+                  <Label class="text-xs">{{ t('training.train.runCount') }}</Label>
+                  <Input type="number" v-model="trainRunCount" min="1" step="1" class="h-9 text-xs px-2" />
                 </div>
               </div>
-              <div class="text-[10px] text-muted-foreground">
-                {{ selectedTrainLabelNames.length > 0 ? t('training.train.selectedLabelsCount', { count: selectedTrainLabelNames.length }) : t('training.train.allLabelsSelected') }}
+
+              <div class="grid grid-cols-2 gap-3">
+                <div class="space-y-1">
+                  <Label class="text-xs">{{ t('training.train.projectId') }}</Label>
+                  <Input :model-value="String(productId ?? '')" disabled class="h-9 text-xs px-2" />
+                </div>
+                <div class="space-y-1">
+                  <Label class="text-xs">{{ t('training.train.projectVersion') }}</Label>
+                  <Input v-model="trainProjectVersion" class="h-9 text-xs px-2" />
+                </div>
+              </div>
+
+              <div class="space-y-1">
+                <div class="flex justify-between">
+                  <Label>{{ t('training.train.epochs') }}</Label>
+                  <span class="text-xs font-medium">{{ trainConfig.epochs[0] }}</span>
+                </div>
+                <Slider v-model="trainConfig.epochs" :min="1" :max="100" />
+              </div>
+              <div class="space-y-1">
+                <div class="flex justify-between">
+                  <Label>{{ t('training.train.batchSize') }}</Label>
+                  <span class="text-xs font-medium">{{ trainConfig.batchSize[0] }}</span>
+                </div>
+                <Slider v-model="trainConfig.batchSize" :min="1" :max="64" />
+              </div>
+
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.learningRate') }}</Label>
+                <Input type="number" v-model="trainConfig.learningRate" step="0.0001" class="h-9 text-xs px-2" />
+              </div>
+
+              <div class="space-y-2">
+                <Label class="text-xs">{{ t('training.train.labelSelection') }}</Label>
+                <div class="border rounded-md p-2 max-h-[120px] overflow-y-auto bg-muted/5 space-y-1.5">
+                  <div v-for="label in labelConfigs" :key="label.name" class="flex items-center gap-2">
+                    <input 
+                      type="checkbox" 
+                      :id="'label-' + label.name"
+                      :value="label.name"
+                      v-model="selectedTrainLabelNames"
+                      class="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    <label :for="'label-' + label.name" class="text-xs cursor-pointer select-none truncate flex-1">
+                      {{ label.name }}
+                    </label>
+                  </div>
+                  <div v-if="labelConfigs.length === 0" class="text-[10px] text-muted-foreground italic py-1">
+                    {{ t('training.train.noLabels') }}
+                  </div>
+                </div>
+                <div class="text-[10px] text-muted-foreground">
+                  {{ selectedTrainLabelNames.length > 0 ? t('training.train.selectedLabelsCount', { count: selectedTrainLabelNames.length }) : t('training.train.allLabelsSelected') }}
+                </div>
               </div>
             </div>
 
-            <Separator />
-            <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || trainDatasetResults.length === 0">
-              {{ isTrainingStarting ? t('training.train.starting') : t('training.train.start') }}
-            </UiButton>
+            <div class="mt-auto pt-4 shrink-0">
+              <Separator class="mb-4" />
+              <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || trainDatasetResults.length === 0">
+                {{ isTrainingStarting ? t('training.train.starting') : t('training.train.start') }}
+              </UiButton>
+            </div>
           </aside>
-          <section class="border rounded-xl bg-background p-4">
-            <div class="text-sm font-bold mb-4">{{ t('training.train.summary') }}</div>
-            <div class="grid grid-cols-2 gap-4">
-              <div class="rounded-lg border p-4 bg-muted/10">
-                <div class="text-xs text-muted-foreground mb-1">{{ t('training.geometric.title') }}</div>
-                <div class="text-sm font-medium">{{ enabledAugmentations }}</div>
+          <section class="flex flex-col gap-4 min-h-0 h-full overflow-hidden">
+            <!-- 1. Tabs Header -->
+            <div class="flex items-center justify-between border-b shrink-0 bg-background px-4">
+              <div class="flex gap-6">
+                <button 
+                  v-for="tab in ['overview', 'metrics', 'logs']" 
+                  :key="tab"
+                  class="h-12 text-sm font-medium transition-all relative px-1 capitalize"
+                  :class="activeMonitorTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
+                  @click="activeMonitorTab = tab"
+                >
+                  {{ t('training.monitor.tabs.' + tab) }}
+                  <div v-if="activeMonitorTab === tab" class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full"></div>
+                </button>
               </div>
-              <div class="rounded-lg border p-4 bg-muted/10">
-                <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.params') }}</div>
-                <div class="text-sm font-medium">
-                  {{ t('training.train.epochsValue') }}: {{ trainConfig.epochs[0] }} | 
-                  {{ t('training.train.batchValue') }}: {{ trainConfig.batchSize[0] }} | 
-                  {{ t('training.train.lrValue') }}: {{ trainConfig.learningRate }}
-                </div>
-              </div>
-              <div class="rounded-lg border p-4 bg-muted/10">
-                <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.currentProduct') }}</div>
-                <div class="text-sm font-medium">{{ productName || t('training.train.notSelected') }}</div>
-              </div>
-              <div class="rounded-lg border p-4 bg-muted/10">
-                <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.augmentedImages') }}</div>
-                <div class="text-sm font-medium">{{ t('training.train.imagesCount', { count: trainImagesCount }) }}</div>
-              </div>
-              <div class="rounded-lg border p-4 bg-muted/10">
-                <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.annotationsCount') }}</div>
-                <div class="text-sm font-medium">{{ t('training.train.annotationsValue', { count: trainAnnotationsCount }) }}</div>
-              </div>
-              <div class="rounded-lg border p-4 bg-muted/10">
-                <div class="text-xs text-muted-foreground mb-1">{{ t('training.train.dataVersion') }}</div>
-                <div class="text-sm font-medium">{{ trainDataVersionName || '-' }}</div>
-              </div>
-            </div>
-          </section>
-        </div>
 
-        <div v-else class="grid grid-cols-[360px,1fr] gap-6">
-          <aside class="border rounded-xl bg-background p-4 space-y-4">
-            <div class="space-y-1">
-              <Label>{{ t('training.monitor.currentTask') }}</Label>
-              <div class="text-sm">{{ t('training.monitor.product') }} {{ productName || t('training.train.notSelected') }}</div>
-            </div>
-            <div class="space-y-1">
-              <Label class="text-xs">{{ t('training.monitor.task') }}</Label>
-              <UiSelect v-model="monitorTaskId">
-                <UiSelectTrigger class="h-9 text-xs bg-background w-full px-2 gap-2">
-                  <UiSelectValue :placeholder="t('training.monitor.taskPlaceholder')" />
-                </UiSelectTrigger>
-                <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
-                  <UiSelectItem v-for="tItem in trainTasks" :key="tItem.task_id" :value="tItem.task_id" class="pr-2">
-                    <div class="flex items-center w-full gap-2">
-                      <span class="flex-1 min-w-0 truncate">{{ tItem.label }}</span>
-                    </div>
-                  </UiSelectItem>
-                </UiSelectContent>
-              </UiSelect>
-              <div class="text-xs text-muted-foreground">{{ t('training.monitor.status') }}: {{ monitorStatus || '-' }}</div>
-            </div>
-            <Separator />
-            <UiButton @click="innerStep = 'train'">{{ t('training.monitor.backToParams') }}</UiButton>
-          </aside>
-          <section class="border rounded-xl bg-background p-4 space-y-4">
-            <div class="rounded-lg border p-6">
-              <div class="text-sm font-bold mb-2">{{ t('training.monitor.progress') }}</div>
-              <div class="w-full h-2 bg-muted rounded-full overflow-hidden">
-                <div class="h-2 bg-primary" :style="{ width: `${Math.max(0, Math.min(100, monitorProgress))}%` }"></div>
+              <!-- Top Controls (Compact) -->
+              <div class="flex items-center gap-3 py-2">
+                <UiSelect v-model="monitorTaskId" v-model:open="isTaskSelectOpen">
+                  <UiSelectTrigger class="h-8 text-xs bg-muted/50 border-none w-[180px] px-2">
+                    <UiSelectValue :placeholder="t('training.monitor.taskPlaceholder')" />
+                  </UiSelectTrigger>
+                  <UiSelectContent class="z-[9999] w-[240px]">
+                    <UiSelectItem v-for="tItem in trainTasks" :key="tItem.task_id" :value="tItem.task_id">
+                      <div class="flex items-center justify-between w-full gap-2">
+                        <span class="truncate">{{ tItem.label }}</span>
+                        <span v-if="tItem.progress" class="text-[10px] text-muted-foreground">{{ normalizeProgressPercent(tItem.progress) }}%</span>
+                      </div>
+                    </UiSelectItem>
+                  </UiSelectContent>
+                </UiSelect>
+                <div class="h-4 w-px bg-border mx-1"></div>
+                <UiButton 
+                  variant="ghost" 
+                  size="icon" 
+                  class="h-8 w-8 text-destructive hover:bg-destructive/10"
+                  @click="stopTask"
+                  :title="t('training.monitor.stopTask')"
+                  :disabled="!monitorTaskId || isStoppingTask || isStoppingGroup"
+                >
+                  <Square class="w-3.5 h-3.5" />
+                </UiButton>
+                <UiButton 
+                  variant="ghost" 
+                  size="icon" 
+                  class="h-8 w-8 text-destructive hover:bg-destructive/10"
+                  @click="stopGroup"
+                  :title="t('training.monitor.stopGroup')"
+                  :disabled="!monitorTaskId || isStoppingTask || isStoppingGroup"
+                >
+                  <Layers class="w-3.5 h-3.5" />
+                </UiButton>
               </div>
             </div>
-            <div class="grid grid-cols-2 gap-4">
-              <div class="rounded-lg border p-4 h-80 overflow-auto">
-                <div class="text-sm font-bold mb-2">{{ t('training.monitor.logs') }}</div>
-                <div class="text-xs font-mono whitespace-pre-wrap break-words">
-                  {{ monitorLogs.join('\n') }}
+
+            <!-- 2. Tab Content Area -->
+            <div class="flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar">
+              <!-- Overview Tab -->
+              <div v-if="activeMonitorTab === 'overview'" class="space-y-6 animate-in fade-in duration-300">
+                <!-- KPI Cards -->
+                <div class="grid grid-cols-4 gap-4 shrink-0">
+                  <!-- Group Progress -->
+                  <div class="border rounded-xl bg-background p-4 shadow-sm flex flex-col justify-between h-[110px]">
+                    <div class="flex justify-between items-start">
+                      <span class="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{{ t('training.monitor.groupProgress') }}</span>
+                      <Activity class="w-4 h-4 text-primary/50" />
+                    </div>
+                    <div class="space-y-2">
+                      <div class="flex items-baseline gap-1">
+                        <span class="text-2xl font-bold tabular-nums">{{ normalizeProgressPercent(monitorGroupProgress) }}</span>
+                        <span class="text-xs text-muted-foreground font-medium">%</span>
+                      </div>
+                      <Progress :model-value="normalizeProgressPercent(monitorGroupProgress)" class="h-1.5" />
+                    </div>
+                  </div>
+
+                  <!-- Task Status -->
+                  <div class="border rounded-xl bg-background p-4 shadow-sm flex flex-col justify-between h-[110px]">
+                    <div class="flex justify-between items-start">
+                      <span class="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{{ t('training.monitor.status') }}</span>
+                      <div class="w-2 h-2 rounded-full" :class="monitorStatus === 'running' ? 'bg-green-500 animate-pulse' : 'bg-gray-400'"></div>
+                    </div>
+                    <div class="text-xl font-bold capitalize truncate">
+                      {{ t('training.monitor.statusList.' + (monitorStatus?.toLowerCase() || 'pending')) }}
+                    </div>
+                    <div class="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <span class="w-1.5 h-1.5 rounded-full bg-blue-500/50"></span>
+                      {{ t('training.monitor.groupLabel') }}: {{ t('training.monitor.statusList.' + (monitorGroupStatus?.toLowerCase() || 'pending')) }}
+                    </div>
+                  </div>
+
+                  <!-- Loss KPI -->
+                  <div class="border rounded-xl bg-background p-4 shadow-sm flex flex-col justify-between h-[110px]">
+                    <div class="flex justify-between items-start">
+                      <span class="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{{ t('training.monitor.loss') }}</span>
+                      <TrendingDown class="w-4 h-4 text-red-500/50" />
+                    </div>
+                    <div class="text-2xl font-bold tabular-nums font-mono text-primary">
+                      {{ latestMonitorMetric ? formatMetricNumber(latestMonitorMetric.loss) : '-' }}
+                    </div>
+                    <div class="text-[10px] text-muted-foreground">
+                      {{ t('training.monitor.latestLoss') }}
+                    </div>
+                  </div>
+
+                  <!-- Iteration Info -->
+                  <div class="border rounded-xl bg-background p-4 shadow-sm flex flex-col justify-between h-[110px]">
+                    <div class="flex justify-between items-start">
+                      <span class="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{{ t('training.monitor.epoch') }}</span>
+                      <GitCommit class="w-4 h-4 text-blue-500/50" />
+                    </div>
+                    <div class="flex items-baseline gap-1">
+                      <span class="text-2xl font-bold tabular-nums">{{ latestMonitorMetric?.epoch || 0 }}</span>
+                      <span class="text-xs text-muted-foreground">/ {{ trainConfig.epochs[0] }}</span>
+                    </div>
+                    <div class="text-[10px] text-muted-foreground truncate">
+                       {{ t('training.monitor.iterPrefix') }}: {{ latestMonitorMetric?.iter || 0 }} / {{ latestMonitorMetric?.total_iters || '-' }}
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Main Overview Charts -->
+                <div class="border rounded-xl bg-background p-5 shadow-sm space-y-4">
+                  <h4 class="text-sm font-bold flex items-center gap-2">
+                    <Activity class="w-4 h-4 text-primary" />
+                    {{ t('training.monitor.metrics') }}
+                  </h4>
+                  <div class="h-[350px] w-full relative">
+                    <Line :data="combinedChartData" :options="chartOptions" />
+                  </div>
+                </div>
+
+                <!-- Sub-tasks Progress List -->
+                <div class="border rounded-xl bg-background overflow-hidden shadow-sm">
+                  <div class="bg-muted/30 px-4 py-3 border-b flex items-center justify-between">
+                    <h4 class="text-sm font-bold">{{ t('training.monitor.subTasksProgress') }}</h4>
+                    <span class="text-xs text-muted-foreground">{{ t('training.monitor.labelsTotal', { count: trainTasks.length }) }}</span>
+                  </div>
+                  <div class="divide-y">
+                    <div v-for="tItem in trainTasks" :key="tItem.task_id" class="p-4 flex items-center gap-6 hover:bg-muted/5 transition-colors">
+                      <div class="w-32 truncate text-sm font-medium">{{ tItem.label }}</div>
+                      <div class="flex-1 space-y-1.5">
+                        <div class="flex justify-between text-[10px]">
+                          <span class="text-muted-foreground uppercase font-semibold">{{ t('training.monitor.statusList.' + (tItem.status?.toLowerCase() || 'pending')) }}</span>
+                          <span class="font-bold">{{ normalizeProgressPercent(tItem.progress) }}%</span>
+                        </div>
+                        <Progress :model-value="normalizeProgressPercent(tItem.progress)" class="h-1.5" />
+                      </div>
+                      <div class="w-24 flex justify-end">
+                        <UiButton 
+                          variant="ghost" 
+                          size="sm" 
+                          class="h-7 text-[10px] px-2"
+                          @click="monitorTaskId = tItem.task_id; activeMonitorTab = 'metrics'"
+                        >
+                          {{ t('training.monitor.details') }}
+                        </UiButton>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div class="rounded-lg border p-4 h-80 overflow-auto">
-                <div class="text-sm font-bold mb-2">{{ t('training.monitor.metrics') }}</div>
-                <div class="text-xs font-mono whitespace-pre-wrap break-words">
-                  {{ JSON.stringify(monitorMetrics, null, 2) }}
+
+              <!-- Metrics Tab -->
+              <div v-else-if="activeMonitorTab === 'metrics'" class="space-y-6 animate-in slide-in-from-right-4 duration-300">
+                <div class="flex items-center gap-2 mb-2">
+                   <h3 class="text-lg font-bold">{{ trainTasks.find(t => t.task_id === monitorTaskId)?.label }}</h3>
+                   <span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-bold uppercase">{{ t('training.monitor.statusList.' + (monitorStatus?.toLowerCase() || 'pending')) }}</span>
+                </div>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <div class="lg:col-span-2 space-y-6">
+                    <div class="border rounded-xl bg-background p-6 shadow-sm">
+                      <h4 class="text-sm font-bold mb-4">{{ t('training.monitor.metrics') }}</h4>
+                      <div class="h-[400px] w-full">
+                        <Line :data="combinedChartData" :options="chartOptions" />
+                      </div>
+                    </div>
+                  </div>
+                  <div class="space-y-6">
+                    <!-- Statistics Card -->
+                    <div class="border rounded-xl bg-background p-6 shadow-sm space-y-4">
+                      <h4 class="text-sm font-bold border-b pb-2">{{ t('training.monitor.taskStats') }}</h4>
+                      <div class="space-y-3">
+                        <div class="flex justify-between">
+                          <span class="text-xs text-muted-foreground">{{ t('training.monitor.currentLoss') }}</span>
+                          <span class="text-xs font-mono font-bold text-primary">{{ latestMonitorMetric ? formatMetricNumber(latestMonitorMetric.loss) : '-' }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span class="text-xs text-muted-foreground">{{ t('training.monitor.currentLR') }}</span>
+                          <span class="text-xs font-mono">{{ latestMonitorMetric ? formatMetricNumber(latestMonitorMetric.lr) : '-' }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span class="text-xs text-muted-foreground">{{ t('training.monitor.epochProgress') }}</span>
+                          <span class="text-xs">{{ latestMonitorMetric?.epoch || 0 }} / {{ trainConfig.epochs[0] }}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- History Table -->
+                    <div class="border rounded-xl bg-background shadow-sm flex flex-col overflow-hidden max-h-[400px]">
+                      <div class="bg-muted/30 px-4 py-3 border-b">
+                        <h4 class="text-xs font-bold">{{ t('training.monitor.metricHistory') }}</h4>
+                      </div>
+                      <div class="flex-1 overflow-auto custom-scrollbar">
+                        <table class="w-full text-[10px]">
+                          <thead class="bg-muted/10 sticky top-0 backdrop-blur-sm">
+                            <tr>
+                              <th class="text-left font-semibold px-4 py-2 text-muted-foreground">{{ t('training.monitor.epoch') }}</th>
+                              <th class="text-right font-semibold px-4 py-2 text-muted-foreground">{{ t('training.monitor.loss') }}</th>
+                              <th class="text-right font-semibold px-4 py-2 text-muted-foreground">{{ t('training.monitor.lr') }}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="m in cleanedMonitorMetrics.slice(-20).reverse()" :key="`${m.epoch}-${m.iter}`" class="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                              <td class="px-4 py-2">{{ t('training.monitor.epoch') }}{{ m.epoch }} · {{ t('training.monitor.iter') }}{{ m.iter }}</td>
+                              <td class="px-4 py-2 text-right font-mono text-primary font-medium">{{ formatMetricNumber(m.loss) }}</td>
+                              <td class="px-4 py-2 text-right font-mono text-muted-foreground">{{ formatMetricNumber(m.lr) }}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Logs Tab -->
+              <div v-else-if="activeMonitorTab === 'logs'" class="h-full flex flex-col animate-in slide-in-from-right-4 duration-300">
+                <div class="flex-1 border rounded-xl bg-background p-6 shadow-sm flex flex-col min-h-0">
+                  <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-2">
+                      <Terminal class="w-4 h-4 text-primary" />
+                      <span class="text-sm font-bold">{{ t('training.monitor.tabs.logs') }}</span>
+                    </div>
+                    <UiButton variant="ghost" size="sm" class="h-8 text-[10px]" @click="monitorLogs = []">{{ t('training.monitor.clearLogs') }}</UiButton>
+                  </div>
+                  <div class="flex-1 overflow-auto rounded-xl bg-slate-950 p-4 font-mono text-[11px] leading-relaxed text-slate-300 custom-scrollbar border-slate-800">
+                    <div v-for="(log, idx) in monitorLogs" :key="idx" class="mb-1.5 last:mb-0 break-all border-l-2 border-slate-800 pl-3 hover:border-primary/40 transition-colors">
+                      <span class="text-slate-500 mr-2 tabular-nums">[{{ new Date().toLocaleTimeString() }}]</span>
+                      <span>{{ log }}</span>
+                    </div>
+                    <div v-if="monitorLogs.length === 0" class="flex flex-col items-center justify-center h-full text-slate-600">
+                      <div class="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center mb-3">
+                        <Terminal class="w-5 h-5 opacity-40" />
+                      </div>
+                      <span class="text-xs">{{ t('training.monitor.waitingLogs') }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
