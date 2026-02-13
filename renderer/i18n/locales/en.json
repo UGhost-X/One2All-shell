@@ -249,7 +249,8 @@
       "labelSelection": "Label Selection",
       "noLabels": "No labels available",
       "selectedLabelsCount": "{count} labels selected",
-      "allLabelsSelected": "Train all labels if none selected"
+      "allLabelsSelected": "Train on all labels if none selected",
+      "allCategories": "All Categories"
     },
     "monitor": {
       "currentTask": "Current Task",
@@ -275,9 +276,10 @@
       "iterPrefix": "Iter",
       "lossConvergence": "Loss Convergence",
       "lrSchedule": "Learning Rate Schedule",
-      "subTasksProgress": "Sub-tasks Progress",
+      "subTasksProgress": "Tasks Progress",
       "labelsTotal": "{count} labels total",
       "details": "Details",
+      "collapse": "Collapse",
       "detailedLoss": "Detailed Loss Curve",
       "taskStats": "Task Statistics",
       "currentLoss": "Current Loss",
@@ -288,7 +290,8 @@
       "axis": {
         "epochIter": "Epoch / Iter",
         "iter": "Iterations",
-        "epochTick": "Epoch {epoch}"
+        "epochTick": "Epoch {epoch}",
+        "epochIterLabel": "Epoch {epoch} / Iter {iter}"
       },
       "statusList": {
         "pending": "Pending",
@@ -311,6 +314,9 @@
       },
       "stopTask": "Stop Task",
       "stopGroup": "Stop Group",
+      "batchCancel": "Batch Stop",
+      "batchCancelSuccess": "Selected tasks stopped successfully",
+      "batchCancelFailed": "Batch stop failed",
       "resumeTask": "Resume",
       "resumeTaskSuccess": "Task resumed successfully",
       "resumeTaskFailed": "Failed to resume task",

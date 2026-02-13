@@ -15,7 +15,7 @@ provide('toast', {
 
 <template>
   <div>
-    <NuxtPage :keepalive="{ include: ['annotation'] }" />
+    <NuxtPage />
     <Toast ref="toastRef" />
   </div>
 </template>

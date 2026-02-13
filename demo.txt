@@ -116,6 +116,7 @@ class TrainRequest(BaseModel):
     learning_rate: float = 0.01
     label_names: Optional[List[str]] = None
     resume_path: Optional[str] = None # 可选的恢复训练路径
+    resume_mode: Optional[str] = None # 'interrupted' 或 'extended'
 
 @app.post("/train/anomaly")
 async def train_anomaly(request: TrainRequest):
@@ -244,7 +245,8 @@ async def train_anomaly(request: TrainRequest):
                 "version": request.version,
                 "data_version": request.data_version,
                 "run_count": request.run_count,
-                "resume_path": request.resume_path
+                "resume_path": request.resume_path,
+                "resume_mode": request.resume_mode
             }
             
             task_id = trainer.run_training_async(str(label_dataset_path), train_config, group_id=group_id)
@@ -1054,6 +1056,19 @@ class AnomalyTrainer:
                     if task_id in self.training_status:
                         self.training_status[task_id]["resume_path"] = resume_path
                         self._persist_state_if_due(force=True)
+                    
+                    resume_mode = config.get("resume_mode", "interrupted")
+                    if resume_mode == "extended":
+                        # 完结续训：在原有基础上追加轮数
+                        # 这里需要知道之前的总轮数，但在当前逻辑中，pdx_cfg["Train"]["epochs"] 已经是新的目标轮数了
+                        # 实际上 PaddleX 的续训通常是：设置一个新的更大的 epochs 值
+                        # 如果用户输入的是“追加 10 轮”，前端应该已经处理成“已完成轮数 + 10”
+                        # 但如果前端只传了“10”，我们需要在这里处理
+                        self._add_log(task_id, f"Stage 2/4: Extended resume mode. Target epochs set to {total_epochs}")
+                    else:
+                        # 中断续训：恢复到原本设定的总轮数
+                        self._add_log(task_id, f"Stage 2/4: Interrupted resume mode. Resuming to original target: {total_epochs}")
+                    
                     self._add_log(task_id, f"Stage 2/4: Resuming from checkpoint: {resume_path}")
                 else:
                     self._add_log(task_id, "Stage 2/4: No valid checkpoint found; training from scratch.")

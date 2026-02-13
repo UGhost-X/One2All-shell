@@ -8,6 +8,8 @@ import UiButton from '@/components/ui/button/Button.vue'
 const { t } = useI18n()
 const route = useRoute()
 
+definePageMeta({ keepalive: true })
+
 const isPinned = ref(false)
 const togglePin = async () => {
   if (window.electronAPI) {

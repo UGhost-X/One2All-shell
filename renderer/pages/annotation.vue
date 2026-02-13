@@ -24,6 +24,9 @@ import {
 } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { computed } from 'vue'
+
+definePageMeta({ keepalive: true })
+
 import Separator from '@/components/ui/separator/Separator.vue'
 import UiSelect from '@/components/ui/select/Select.vue'
 import UiSelectContent from '@/components/ui/select/SelectContent.vue'

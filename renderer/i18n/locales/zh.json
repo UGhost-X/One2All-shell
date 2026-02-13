@@ -234,6 +234,12 @@
       "startModePlaceholder": "选择启动方式",
       "startModeFresh": "重新训练（新任务）",
       "startModeResume": "续训（沿用任务）",
+      "resumeMode": "续训类型",
+      "resumeModeInterrupted": "中断续训（恢复到原目标轮数）",
+      "resumeModeExtended": "完结续训（在原基础上追加轮数）",
+      "resumeModeHint": "中断续训会尝试恢复到原本设定的总轮数；完结续训会在已完成的轮数基础上增加新的轮数。",
+      "epochsTarget": "目标总轮数",
+      "epochsAdditional": "追加训练轮数",
       "startModeHint": "重新训练会自动增加运行次数以避免续训；续训会沿用运行次数并自动从检查点恢复。",
       "epochs": "训练轮数",
       "batchSize": "批大小",
@@ -259,7 +265,8 @@
       "labelSelection": "训练标签选择",
       "noLabels": "暂无标签可供选择",
       "selectedLabelsCount": "已选择 {count} 个标签",
-      "allLabelsSelected": "未选择标签将训练全部"
+      "allLabelsSelected": "未选择标签将训练全部",
+      "allCategories": "所有分类"
     },
     "monitor": {
       "currentTask": "当前任务",
@@ -285,7 +292,7 @@
       "iterPrefix": "迭代",
       "lossConvergence": "损失收敛曲线",
       "lrSchedule": "学习率调度曲线",
-      "subTasksProgress": "子任务进度",
+      "subTasksProgress": "任务进度",
       "labelsTotal": "共 {count} 个标签",
       "details": "详情",
       "detailedLoss": "详细损失曲线",
@@ -298,7 +305,8 @@
       "axis": {
         "epochIter": "轮次 / 迭代",
         "iter": "迭代次数",
-        "epochTick": "第 {epoch} 轮"
+        "epochTick": "第 {epoch} 轮",
+        "epochIterLabel": "第 {epoch} 轮/迭代 {iter} 次"
       },
       "statusList": {
         "pending": "等待中",
@@ -321,6 +329,9 @@
       },
       "stopTask": "停止任务",
       "stopGroup": "停止组",
+      "batchCancel": "批量停止",
+      "batchCancelSuccess": "已成功停止选中的任务",
+      "batchCancelFailed": "批量停止失败",
       "resumeTask": "续训",
       "resumeTaskSuccess": "任务已开始续训",
       "resumeTaskFailed": "续训失败",
