@@ -219,6 +219,7 @@
       "projectId": "Project ID",
       "projectVersion": "Project Version",
       "runCount": "Run Count",
+      "taskId": "Task ID",
       "modelName": "Model Name",
       "startMode": "Start Mode",
       "startModePlaceholder": "Select start mode",
@@ -305,8 +306,11 @@
         "stopped": "Stopped",
         "error": "Error",
         "success": "Success",
+        "retry": "Retry",
         "not_found": "Not Found"
       },
+      "process": "Training Process Data",
+      "output": "Model Output",
       "tabs": {
         "overview": "Overview",
         "metrics": "Metrics",
@@ -317,6 +321,7 @@
       "batchCancel": "Batch Stop",
       "batchCancelSuccess": "Selected tasks stopped successfully",
       "batchCancelFailed": "Batch stop failed",
+      "noCheckpointFound": "No valid checkpoint found to resume from. Please try starting a fresh training.",
       "resumeTask": "Resume",
       "resumeTaskSuccess": "Task resumed successfully",
       "resumeTaskFailed": "Failed to resume task",

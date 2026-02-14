@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, Settings2, Pin, PinOff, Settings, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play } from 'lucide-vue-next'
+import { X, Settings2, Pin, PinOff, Settings, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -374,8 +374,10 @@ const resetMonitorState = (opts?: { clearActive?: boolean }) => {
   monitorTaskId.value = 'all'
   if (opts?.clearActive) {
     groupMetrics.value = {}
+    groupLogs.value = {}
     trainTasks.value = []
     trainGroupId.value = ''
+    trainTaskUuid.value = ''
     currentBaseEpoch.value = 0
   }
 }
@@ -396,20 +398,37 @@ const loadTaskSnapshot = async (taskId: string) => {
 const restoreActiveTrainingState = async () => {
   if (typeof window === 'undefined') return false
   const gidKey = trainGroupIdStorageKey.value
+  const uuidKey = trainTaskUuidStorageKey.value
   const tasksKey = trainTasksStorageKey.value
   const savedGid = window.localStorage.getItem(gidKey)
+  const savedUuid = window.localStorage.getItem(uuidKey)
   const savedTasksRaw = window.localStorage.getItem(tasksKey)
   if (!savedGid || !savedTasksRaw) return false
   try {
     const savedTasks = JSON.parse(savedTasksRaw)
     if (!Array.isArray(savedTasks) || savedTasks.length === 0) return false
     trainGroupId.value = savedGid
+    trainTaskUuid.value = savedUuid || ''
     trainTasks.value = savedTasks
     innerStep.value = 'train'
     activeMonitorTab.value = 'overview'
     monitorTaskId.value = 'all'
     startGroupPolling()
     await Promise.all(savedTasks.map((t: any) => loadTaskSnapshot(String(t?.task_id || ''))))
+    
+    // 如果是续训模式，尝试自动设置目标轮数为之前任务的目标轮数
+    if (trainStartMode.value === 'resume') {
+      let maxRemoteTarget = 0
+      for (const tid in taskTargetEpochs.value) {
+        if (taskTargetEpochs.value[tid] > maxRemoteTarget) {
+          maxRemoteTarget = taskTargetEpochs.value[tid]
+        }
+      }
+      if (maxRemoteTarget > 0) {
+        trainConfig.value.epochs = [maxRemoteTarget]
+      }
+    }
+
     return true
   } catch {
     return false
@@ -493,11 +512,17 @@ const batchCancel = async () => {
 const isResumingTask = ref(false)
 const trainTasks = ref<{ label: string; task_id: string; status?: string; progress?: number }[]>([])
 const trainGroupId = ref('')
+const trainTaskUuid = ref('')
 
 // Storage keys for persisting active training state
 const trainGroupIdStorageKey = computed(() => {
   const pid = productId.value == null ? '' : String(productId.value)
   return `one2all.training.activeGroupId.${pid}`
+})
+
+const trainTaskUuidStorageKey = computed(() => {
+  const pid = productId.value == null ? '' : String(productId.value)
+  return `one2all.training.activeTaskUuid.${pid}`
 })
 
 const trainTasksStorageKey = computed(() => {
@@ -516,6 +541,16 @@ watch(trainGroupId, (id) => {
   }
 })
 
+watch(trainTaskUuid, (uuid) => {
+  const key = trainTaskUuidStorageKey.value
+  if (!key || typeof window === 'undefined') return
+  if (uuid) {
+    window.localStorage.setItem(key, uuid)
+  } else {
+    window.localStorage.removeItem(key)
+  }
+})
+
 watch(trainTasks, (tasks) => {
   const key = trainTasksStorageKey.value
   if (!key || typeof window === 'undefined') return
@@ -528,6 +563,7 @@ watch(trainTasks, (tasks) => {
 const monitorGroupProgress = ref(0)
 const monitorGroupStatus = ref('')
 const activeMonitorTab = ref('overview')
+const monitorTab = ref<'process' | 'output'>('process')
 
 const monitorTaskId = ref('all')
 const isTaskSelectOpen = ref(false)
@@ -535,7 +571,9 @@ const monitorStatus = ref('')
 const monitorProgress = ref(0)
 const monitorLogs = ref<string[]>([])
 const groupMetrics = ref<Record<string, any[]>>({})
+const groupLogs = ref<Record<string, string[]>>({})
 const selectedEpoch = ref<number | null>(null)
+const taskTargetEpochs = ref<Record<string, number>>({})
 let monitorEventSources: Record<string, EventSource> = {}
 let groupPollingTimer: any = null
 
@@ -579,6 +617,13 @@ const startGroupPolling = () => {
             const remote = data.tasks.find((rt: any) => rt.task_id === t.task_id)
             if (remote) {
               const isTaskCompleted = String(remote.status || '').toLowerCase() === 'completed' || String(remote.status || '').toLowerCase() === 'success'
+              
+              // 同步任务的目标轮数
+              const targetE = Number(remote.total_epochs || (remote.config?.train_epochs) || (remote.config?.epochs))
+              if (Number.isFinite(targetE) && targetE > 0) {
+                taskTargetEpochs.value[t.task_id] = targetE
+              }
+
               return { 
                 ...t, 
                 status: remote.status, 
@@ -588,12 +633,21 @@ const startGroupPolling = () => {
             return t
           })
         }
-        if (data.status === 'completed' || data.status === 'failed') {
+        const s = String(data.status || '').toLowerCase()
+        // Check if all tasks are finished
+        const allTasksFinished = trainTasks.value.length > 0 && trainTasks.value.every(t => {
+          const ts = String(t.status || '').toLowerCase()
+          return ['completed', 'success', 'failed', 'stopped', 'canceled', 'interrupted', 'error', 'aborted'].includes(ts)
+        })
+
+        if (s === 'completed' || s === 'failed' || s === 'success' || s === 'stopped' || s === 'canceled' || s === 'interrupted' || allTasksFinished) {
           stopGroupPolling()
+          closeMonitorStream() // Close all SSE connections
           // Clear persistence when group is finished
           if (typeof window !== 'undefined') {
             window.localStorage.removeItem(trainGroupIdStorageKey.value)
             window.localStorage.removeItem(trainTasksStorageKey.value)
+            window.localStorage.removeItem(trainTaskUuidStorageKey.value)
           }
         }
       }
@@ -748,48 +802,234 @@ const CHART_COLORS = [
 
 const currentBaseEpoch = ref(0)
 
+const hasInterruptedTasks = computed(() => {
+  if (!trainTasks.value || trainTasks.value.length === 0) return false
+  return trainTasks.value.some(t => {
+    const s = String(t.status || '').toLowerCase()
+    return ['stopped', 'canceled', 'cancelled', 'interrupted', 'failed', 'error', 'aborted'].includes(s)
+  })
+})
+
+watch([trainStartMode, hasInterruptedTasks], () => {
+  if (trainStartMode.value === 'resume') {
+    if (!hasInterruptedTasks.value && resumeMode.value === 'interrupted') {
+      resumeMode.value = 'extended'
+    }
+  }
+})
+
 const targetTotalEpochs = computed(() => {
   const additional = Math.round(Number(trainConfig.value.epochs[0] || 10))
-  if (trainStartMode.value === 'resume' && resumeMode.value === 'extended') {
-    // 1. 如果正在进行续训（已记录基数），优先使用
-    if (currentBaseEpoch.value > 0) {
-      return currentBaseEpoch.value + additional
-    }
-
-    // 2. 如果没有记录基数（例如页面刷新后），尝试从当前 metrics 中推断
-    let firstEpoch = 0
-    let lastEpoch = 0
+  
+  // 1. 获取当前监控任务或所有任务中的最大轮数和后端记录的目标轮数
+  let maxMetricEpoch = 0
+  let remoteTarget = 0
+  
+  if (monitorTaskId.value === 'all') {
+    // 总览模式：取所有任务中最大的已完成轮数和最大的远程目标
     for (const tid in groupMetrics.value) {
       const metrics = groupMetrics.value[tid]
       if (metrics && metrics.length > 0) {
-        const e = Number(metrics[0].epoch)
-        const l = Number(metrics[metrics.length - 1].epoch)
-        if (Number.isFinite(e)) {
-          if (firstEpoch === 0 || e < firstEpoch) firstEpoch = e
-        }
-        if (Number.isFinite(l)) {
-          if (lastEpoch === 0 || l > lastEpoch) lastEpoch = l
+        const last = Number(metrics[metrics.length - 1].epoch)
+        if (last > maxMetricEpoch) maxMetricEpoch = last
+      }
+      const rt = taskTargetEpochs.value[tid]
+      if (rt > remoteTarget) remoteTarget = rt
+    }
+  } else {
+    // 单任务模式：取该任务的已完成轮数和远程目标
+    const metrics = groupMetrics.value[monitorTaskId.value]
+    if (metrics && metrics.length > 0) {
+      maxMetricEpoch = Number(metrics[metrics.length - 1].epoch)
+    }
+    remoteTarget = taskTargetEpochs.value[monitorTaskId.value] || 0
+  }
+
+  // 2. 如果后端有明确的目标轮数，优先使用后端数据（特别是监控已有任务时）
+  if (remoteTarget > 0) {
+    return Math.max(remoteTarget, maxMetricEpoch)
+  }
+
+  // 3. 续训逻辑处理
+  if (trainStartMode.value === 'resume' && resumeMode.value === 'extended') {
+    // 完结续训：需要获取已完成的轮数作为基数并叠加
+    let base = currentBaseEpoch.value
+    if (base === 0) {
+      // 尝试推断基数
+      let first = 0
+      let last = 0
+      for (const tid in groupMetrics.value) {
+        const m = groupMetrics.value[tid]
+        if (m && m.length > 0) {
+          const e = Number(m[0].epoch)
+          const l = Number(m[m.length - 1].epoch)
+          if (Number.isFinite(e) && (first === 0 || e < first)) first = e
+          if (Number.isFinite(l) && (last === 0 || l > last)) last = l
         }
       }
+      if (first === 1) base = last
+      else if (first > 1) base = first - 1
+      else if (latestMonitorMetric.value?.epoch) base = latestMonitorMetric.value.epoch
+    }
+    return Math.max(base + additional, maxMetricEpoch)
+  }
+  
+  // 4. 普通模式或中断续训：使用用户设置的轮数，但不能小于已跑完的轮数
+  return Math.max(additional, maxMetricEpoch)
+})
+
+const projectDatasets = ref<any[]>([])
+const projectModels = ref<any[]>([])
+
+const groupedResults = computed(() => {
+  const groups: Record<string, {
+    id: string;
+    task_uuid: string;
+    datasets: any[];
+    models: any[];
+  }> = {}
+
+  const getGroup = (task_uuid: string) => {
+    if (!groups[task_uuid]) {
+      groups[task_uuid] = {
+        id: task_uuid,
+        task_uuid,
+        datasets: [],
+        models: []
+      }
+    }
+    return groups[task_uuid]
+  }
+
+  for (const ds of projectDatasets.value) {
+    const uuid = ds.task_uuid || 'unknown'
+    getGroup(uuid).datasets.push(ds)
+  }
+
+  for (const md of projectModels.value) {
+    const uuid = md.task_uuid || 'unknown'
+    getGroup(uuid).models.push(md)
+  }
+
+  return Object.values(groups)
+})
+
+const datasetCardRefs = ref<Record<string, HTMLElement | null>>({})
+const previewArrowStyle = ref({ left: '50%' })
+const datasetContainerRefs = ref<Record<string, HTMLElement | null>>({})
+const modelCardRefs = ref<Record<string, HTMLElement | null>>({})
+const modelPreviewArrowStyle = ref({ left: '50%' })
+const modelContainerRefs = ref<Record<string, HTMLElement | null>>({})
+
+const setDatasetContainerRef = (el: any, groupId: string) => {
+  if (el) datasetContainerRefs.value[groupId] = el
+}
+
+const setModelContainerRef = (el: any, groupId: string) => {
+  if (el) modelContainerRefs.value[groupId] = el
+}
+
+const handleDatasetClick = (ds: any, event: MouseEvent, groupId: string) => {
+  const id = `ds-${ds.task_uuid}-${ds.label}`
+  if (expandedResultId.value === id) {
+    expandedResultId.value = null
+    return
+  }
+  
+  expandedResultId.value = id
+  
+  const cardEl = event.currentTarget as HTMLElement
+  const containerEl = datasetContainerRefs.value[groupId]
+  if (cardEl && containerEl) {
+    const cardRect = cardEl.getBoundingClientRect()
+    const containerRect = containerEl.getBoundingClientRect()
+    const relativeLeft = cardRect.left - containerRect.left + cardRect.width / 2
+    previewArrowStyle.value = { left: `${relativeLeft}px` }
+  }
+}
+
+const handleModelClick = (model: any, event: MouseEvent, groupId: string) => {
+  const id = `md-${model.task_uuid || model.task_id}-${model.label}`
+  if (expandedResultId.value === id) {
+    expandedResultId.value = null
+    return
+  }
+  
+  expandedResultId.value = id
+  
+  const cardEl = event.currentTarget as HTMLElement
+  const containerEl = modelContainerRefs.value[groupId]
+  if (cardEl && containerEl) {
+    const cardRect = cardEl.getBoundingClientRect()
+    const containerRect = containerEl.getBoundingClientRect()
+    const relativeLeft = cardRect.left - containerRect.left + cardRect.width / 2
+    modelPreviewArrowStyle.value = { left: `${relativeLeft}px` }
+  }
+}
+
+const fetchProjectResults = async () => {
+  if (!productId.value) return
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    
+    // Fetch Datasets
+    const resDatasets = await fetch(`${apiBase.replace(/\/$/, '')}/project/${productId.value}/datasets`)
+    if (resDatasets.ok) {
+      const data = await resDatasets.json()
+      projectDatasets.value = data.datasets || []
     }
 
-    if (firstEpoch > 0) {
-      // 如果 metrics 从 1 开始，说明这是之前的完整训练数据（配置阶段）
-      // 此时总目标 = 已完成(lastEpoch) + 追加(additional)
-      if (firstEpoch === 1) {
-        return lastEpoch + additional
-      }
-      // 如果 metrics 从 >1 开始，说明这是续训产生的增量数据
-      // 此时总目标 = (起始轮次 - 1) + 追加
-      return (firstEpoch - 1) + additional
+    // Fetch Models
+    const resModels = await fetch(`${apiBase.replace(/\/$/, '')}/project/${productId.value}/models`)
+    if (resModels.ok) {
+      const data = await resModels.json()
+      projectModels.value = data.models || []
     }
-    
-    // 3. 如果没有任何 metrics，回退到 latestMonitorMetric (如果存在)
-    if (latestMonitorMetric.value?.epoch) {
-      return latestMonitorMetric.value.epoch + additional
-    }
+  } catch (err) {
+    console.error('Failed to fetch project results:', err)
   }
-  return additional
+}
+
+const expandedResultId = ref<string | null>(null)
+
+  const unifiedResults = computed(() => {
+    const list = []
+    projectDatasets.value.forEach(d => {
+      list.push({
+        type: 'dataset',
+        id: `ds-${d.task_uuid}-${d.label}`,
+        name: d.task_uuid,
+        label: d.label,
+        info: `${d.image_count} 张图片`,
+        images: d.images || [],
+        raw: d
+      })
+    })
+    projectModels.value.forEach(m => {
+      list.push({
+        type: 'model',
+        id: `md-${m.task_uuid}`,
+        name: m.task_uuid,
+        label: m.label,
+        info: `迭代 ${m.latest_iter}`,
+        tags: m.has_best_model ? ['best'] : [],
+        files: m.files || [],
+        raw: m
+      })
+    })
+    return list
+  })
+
+  watch(activeMonitorTab, (val) => {
+  if (val === 'metrics') {
+    fetchProjectResults()
+  }
+})
+
+watch(monitorTab, (val) => {
+  if (val === 'process' || val === 'output') {
+    fetchProjectResults()
+  }
 })
 
 // Auto-expand first running task when tasks update
@@ -1213,6 +1453,12 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
     if (isCurrentTask && typeof data.status === 'string') monitorStatus.value = data.status
     const isCompleted = String(data.status || '').toLowerCase() === 'completed' || String(data.status || '').toLowerCase() === 'success'
     
+    // 同步任务的目标轮数
+    const targetE = Number(data.total_epochs || (data.config?.train_epochs) || (data.config?.epochs))
+    if (Number.isFinite(targetE) && targetE > 0) {
+      taskTargetEpochs.value[taskId] = targetE
+    }
+
     if (isCurrentTask) {
       if (isCompleted) {
         monitorProgress.value = 100
@@ -1223,21 +1469,28 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
     }
   }
 
-  if (isCurrentTask) {
-    const logsCandidate =
-      data?.new_logs ??
-      data?.logs ??
-      data?.log ??
-      data?.new_log ??
-      data?.message
+  const logsCandidate =
+    data?.new_logs ??
+    data?.logs ??
+    data?.log ??
+    data?.new_log ??
+    data?.message
 
-    const logsArr = normalizeToArray(logsCandidate)
-    if (logsArr && logsArr.length > 0) {
-      console.log(`[applyMonitorPayload] Appending logs for ${taskId}:`, logsArr)
-      monitorLogs.value = monitorLogs.value.concat(logsArr.map((x: any) => String(x)))
-    } else if (typeof logsCandidate === 'string' && logsCandidate.trim()) {
-      console.log(`[applyMonitorPayload] Appending log for ${taskId}:`, logsCandidate)
-      monitorLogs.value = monitorLogs.value.concat([logsCandidate])
+  const logsArr = normalizeToArray(logsCandidate)
+  if (logsArr && logsArr.length > 0) {
+    console.log(`[applyMonitorPayload] Appending logs for ${taskId}:`, logsArr)
+    const newLogs = logsArr.map((x: any) => String(x))
+    if (!groupLogs.value[taskId]) groupLogs.value[taskId] = []
+    groupLogs.value[taskId] = groupLogs.value[taskId].concat(newLogs)
+    if (isCurrentTask) {
+      monitorLogs.value = groupLogs.value[taskId]
+    }
+  } else if (typeof logsCandidate === 'string' && logsCandidate.trim()) {
+    console.log(`[applyMonitorPayload] Appending log for ${taskId}:`, logsCandidate)
+    if (!groupLogs.value[taskId]) groupLogs.value[taskId] = []
+    groupLogs.value[taskId].push(logsCandidate)
+    if (isCurrentTask) {
+      monitorLogs.value = groupLogs.value[taskId]
     }
   }
 
@@ -1259,8 +1512,16 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
 watch(monitorTaskId, (taskId) => {
   monitorStatus.value = ''
   monitorProgress.value = 0
-  monitorLogs.value = []
-  if (!taskId || taskId === 'all') return
+  if (!taskId || taskId === 'all') {
+    monitorLogs.value = []
+    return
+  }
+  
+  if (groupLogs.value[taskId] && groupLogs.value[taskId].length > 0) {
+    monitorLogs.value = groupLogs.value[taskId]
+  } else {
+    monitorLogs.value = []
+  }
 
   openMonitorStream(taskId)
 })
@@ -1269,7 +1530,18 @@ watch(trainTasks, (tasks) => {
   // Proactively open streams for all tasks in the group to collect metrics for "Overall" view
   // Note: Browser SSE limits might apply, but we try
   for (const t of tasks) {
-    if (t.task_id) openMonitorStream(t.task_id)
+    if (t.task_id) {
+      const s = String(t.status || '').toLowerCase()
+      if (['completed', 'success', 'failed', 'stopped', 'canceled', 'interrupted', 'error', 'aborted'].includes(s)) {
+        // If task is finished, ensure stream is closed
+        if (monitorEventSources[t.task_id]) {
+          closeMonitorStream(t.task_id)
+        }
+      } else {
+        // Only open stream if not finished
+        openMonitorStream(t.task_id)
+      }
+    }
   }
 }, { deep: true })
 
@@ -1277,6 +1549,7 @@ watch(innerStep, (step) => {
   if (step === 'monitor') {
     monitorTaskId.value = 'all'
     selectedEpoch.value = null
+    fetchProjectResults()
   }
   if (step !== 'train') closeMonitorStream()
 })
@@ -1433,8 +1706,17 @@ const startTraining = async () => {
     selectedEpoch.value = null
     trainTasks.value = []
     trainGroupId.value = ''
+    trainTaskUuid.value = ''
     monitorGroupProgress.value = 0
     monitorGroupStatus.value = ''
+    taskTargetEpochs.value = {} // Reset synced target epochs
+    
+    // Clear any local storage persistence
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(trainGroupIdStorageKey.value)
+      window.localStorage.removeItem(trainTasksStorageKey.value)
+      window.localStorage.removeItem(trainTaskUuidStorageKey.value)
+    }
     
     await nextTick()
     monitorTaskId.value = 'all' // Reset to 'all' after clearing
@@ -1464,7 +1746,18 @@ const startTraining = async () => {
       body: JSON.stringify(payload)
     })
 
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) {
+      const errorText = await res.text()
+      try {
+        const errorData = JSON.parse(errorText)
+        if (errorData.detail === 'No valid checkpoint found to resume from') {
+          throw new Error(t('training.monitor.noCheckpointFound') || 'No checkpoints found. Please start a fresh training.')
+        }
+        throw new Error(errorData.detail || errorText)
+      } catch (e: any) {
+        throw new Error(e.message || errorText)
+      }
+    }
     const data = await res.json()
     
     if (trainStartMode.value === 'fresh') {
@@ -1472,6 +1765,7 @@ const startTraining = async () => {
     }
 
     trainGroupId.value = data.group_id || ''
+    trainTaskUuid.value = data.task_uuid || ''
     trainTasks.value = Array.isArray(data.tasks) ? data.tasks : []
     await Promise.all(trainTasks.value.map(t => loadTaskSnapshot(String((t as any)?.task_id || ''))))
     monitorTaskId.value = 'all'
@@ -1494,9 +1788,12 @@ const stopTask = async (taskId?: string) => {
     const res = await fetch(url, { method: 'POST' })
     if (res.ok) {
       toast?.success(t('training.monitor.stopTaskSuccess'))
-      // Only stop group polling if we're in overall view or stopping the last task
-      // For now, simple approach: always check if group polling should continue
-      // (The polling itself handles checking task statuses)
+      // Update status locally for immediate feedback
+      if (tid && tid !== 'all') {
+        trainTasks.value = trainTasks.value.map(t => 
+          t.task_id === tid ? { ...t, status: 'stopped' } : t
+        )
+      }
     } else {
       throw new Error(await res.text())
     }
@@ -1517,6 +1814,14 @@ const stopGroup = async () => {
     const res = await fetch(url, { method: 'POST' })
     if (res.ok) {
       toast?.success(t('training.monitor.stopGroupSuccess'))
+      // Update all running tasks to stopped locally
+      trainTasks.value = trainTasks.value.map(t => {
+        const s = String(t.status || '').toLowerCase()
+        if (['pending', 'running', 'training', 'starting'].includes(s)) {
+          return { ...t, status: 'stopped' }
+        }
+        return t
+      })
       stopGroupPolling()
     } else {
       throw new Error(await res.text())
@@ -1530,13 +1835,25 @@ const stopGroup = async () => {
 
 const resumeTask = async (taskId?: string) => {
   const tid = taskId || monitorTaskId.value
-  if (!tid || isResumingTask.value) return
+  console.log('[resumeTask] Target taskId:', tid, 'Type:', typeof tid)
+  if (!tid || tid === 'all' || isResumingTask.value) return
   isResumingTask.value = true
   try {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const url = `${apiBase.replace(/\/$/, '')}/train/resume/${tid}`
     const res = await fetch(url, { method: 'POST' })
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) {
+      const errorText = await res.text()
+      try {
+        const errorData = JSON.parse(errorText)
+        if (errorData.detail === 'No valid checkpoint found to resume from') {
+          throw new Error(t('training.monitor.noCheckpointFound') || '未找到有效的检查点，无法续训。请尝试重新开始训练。')
+        }
+        throw new Error(errorData.detail || errorText)
+      } catch (e: any) {
+        throw new Error(e.message || errorText)
+      }
+    }
     toast?.success(t('training.monitor.resumeTaskSuccess'))
     if (trainGroupId.value && !groupPollingTimer) startGroupPolling()
     openMonitorStream(tid)
@@ -2197,6 +2514,218 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
+        <div v-if="innerStep === 'monitor'" class="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden h-full p-4">
+          <div class="flex items-center justify-between border-b shrink-0 bg-background px-4 rounded-t-xl">
+            <div class="flex gap-6">
+              <button 
+                v-for="tab in ['process', 'output']" 
+                :key="tab"
+                class="h-12 text-sm font-medium transition-all relative px-1"
+                :class="monitorTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
+                @click="monitorTab = tab"
+              >
+                {{ t('training.monitor.' + tab) }}
+                <div v-if="monitorTab === tab" class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full"></div>
+              </button>
+            </div>
+          </div>
+
+          <div class="flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar border rounded-xl bg-background">
+            <div v-if="monitorTab === 'process'" class="space-y-4">
+              <div v-if="groupedResults.length > 0" class="space-y-8">
+                <div v-for="group in groupedResults" :key="group.id" class="space-y-4">
+                  <div class="flex items-center gap-3">
+                     <div class="flex items-center gap-2 bg-muted/50 px-3 py-1 rounded-md border text-xs font-mono text-muted-foreground">
+                        <span class="font-bold text-foreground">{{ group.task_uuid }}</span>
+                     </div>
+                     <div class="h-px bg-border/50 flex-1"></div>
+                  </div>
+                  
+                  <div class="space-y-4 pl-4 border-l-2 border-muted/30 ml-2">
+                    <div v-if="group.datasets.length > 0" class="space-y-2">
+                       <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                         <Database class="w-3 h-3" /> 数据集快照
+                       </div>
+                       
+                       <div class="relative" :ref="(el) => setDatasetContainerRef(el, group.id)">
+                         <div class="flex flex-wrap gap-4">
+                            <div 
+                              v-for="ds in group.datasets" 
+                              :key="`${ds.task_uuid}-${ds.label}`" 
+                              class="group relative w-[160px] border rounded-xl hover:shadow-md transition-all cursor-pointer"
+                              :class="{ 'ring-2 ring-primary rounded-xl shadow-md': expandedResultId === `ds-${ds.task_uuid}-${ds.label}` }"
+                              @click="(e) => handleDatasetClick(ds, e, group.id)"
+                            >
+                              <div class="aspect-square bg-muted/30 relative border-b">
+                                 <img 
+                                   v-if="ds.images && ds.images.length > 0" 
+                                   :src="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + ds.images[0].url" 
+                                   class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 rounded-t-xl"
+                                   loading="lazy"
+                                 />
+                                 <div v-else class="absolute inset-0 flex items-center justify-center text-muted-foreground/30">
+                                   <ImageIcon class="w-8 h-8" />
+                                 </div>
+                                 
+                                 <div class="absolute top-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-1">
+                                    <ImageIcon class="w-3 h-3" />
+                                    {{ ds.image_count }}
+                                 </div>
+                              </div>
+                              
+                              <div class="p-2.5 bg-card rounded-b-xl">
+                                 <div class="font-bold text-xs truncate text-center" :title="ds.label">{{ ds.label }}</div>
+                              </div>
+                            </div>
+                         </div>
+
+                         <template v-if="group.datasets.some(ds => expandedResultId === `ds-${ds.task_uuid}-${ds.label}`)">
+                            <div class="border rounded-xl bg-popover p-4 animate-in fade-in slide-in-from-top-2 duration-300 absolute left-0 right-0 z-50 shadow-2xl" style="top: calc(100% + 12px);">
+                               <div 
+                                 class="absolute -top-2 w-4 h-4 bg-popover border-t border-l border-border rotate-45 z-20 transition-all duration-300"
+                                 :style="previewArrowStyle"
+                               ></div>
+                               
+                               <button class="absolute top-2 right-2 p-1.5 hover:bg-muted rounded-full transition-colors" @click.stop="expandedResultId = null">
+                                  <X class="w-4 h-4 text-muted-foreground" />
+                               </button>
+
+                               <div v-for="ds in group.datasets" :key="ds.label">
+                                  <div v-if="expandedResultId === `ds-${ds.task_uuid}-${ds.label}`">
+                                     <div class="mb-4 flex items-center gap-2">
+                                        <div class="font-bold text-sm bg-background px-2 py-1 rounded border">{{ ds.label }}</div>
+                                        <span class="text-xs text-muted-foreground">包含 {{ ds.images.length }} 张图片</span>
+                                     </div>
+                                     <div class="grid grid-cols-6 gap-3 max-h-[400px] overflow-y-auto custom-scrollbar p-1">
+                                       <div 
+                                         v-for="(img, i) in ds.images" 
+                                         :key="i" 
+                                         class="aspect-square rounded-xl border relative cursor-zoom-in hover:ring-2 ring-primary/50 shadow-sm group/img"
+                                         @click.stop="previewImage = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url"
+                                       >
+                                         <img :src="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url" class="w-full h-full object-cover transition-transform group-hover/img:scale-110 rounded-xl" loading="lazy" />
+                                       </div>
+                                     </div>
+                                  </div>
+                               </div>
+                            </div>
+                         </template>
+                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else class="py-12 text-center border rounded-xl bg-muted/5 border-dashed">
+                <Database class="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
+                <p class="text-sm text-muted-foreground">暂无数据集快照</p>
+              </div>
+            </div>
+            <div v-else-if="monitorTab === 'output'" class="space-y-4">
+              <div v-if="groupedResults.length > 0" class="space-y-8">
+                <div v-for="group in groupedResults" :key="group.id" class="space-y-4">
+                  <div class="flex items-center gap-3">
+                     <div class="flex items-center gap-2 bg-muted/50 px-3 py-1 rounded-md border text-xs font-mono text-muted-foreground">
+                        <span class="font-bold text-foreground">{{ group.task_uuid }}</span>
+                     </div>
+                     <div class="h-px bg-border/50 flex-1"></div>
+                  </div>
+                  
+                  <div class="space-y-4 pl-4 border-l-2 border-muted/30 ml-2">
+                    <div v-if="group.models.length > 0" class="space-y-2">
+                       <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                         <Box class="w-3 h-3" /> 模型产物
+                       </div>
+                       
+                       <div>
+                         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                            <div 
+                              v-for="model in group.models" 
+                              :key="`${model.task_uuid || model.task_id}-${model.label}`" 
+                              class="group relative border rounded-xl bg-background hover:shadow-md transition-all cursor-pointer"
+                              :class="{ 'ring-2 ring-primary rounded-xl shadow-md': expandedResultId === `md-${model.task_uuid || model.task_id}-${model.label}` }"
+                              @click="(e) => handleModelClick(model, e, group.id)"
+                            >
+                              <div class="flex items-center p-3 min-h-[60px]">
+                                 <div class="flex items-center gap-3 flex-1 min-w-0">
+                                    <div class="w-8 h-8 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shrink-0 text-purple-600">
+                                       <Award v-if="model.has_best_model" class="w-4 h-4" />
+                                       <Box v-else class="w-4 h-4" />
+                                    </div>
+                                    <div class="min-w-0">
+                                       <div class="flex items-center gap-2 mb-0.5">
+                                         <span class="font-mono text-xs font-bold truncate">{{ model.task_uuid || model.task_id }}</span>
+                                         <span v-if="model.has_best_model" class="bg-amber-100 text-amber-700 text-[9px] px-1 py-0 rounded border border-amber-200 font-bold">BEST</span>
+                                       </div>
+                                       <div class="flex items-center gap-2 text-[10px] text-muted-foreground">
+                                         <span class="bg-muted px-1 py-0 rounded truncate max-w-[100px]">{{ model.label }}</span>
+                                         <span>Iter: {{ model.latest_iter }}</span>
+                                         <span :class="{
+                                            'text-green-600': model.status === 'completed' || model.status === 'success',
+                                            'text-blue-600': model.status === 'running',
+                                            'text-red-600': model.status === 'failed' || model.status === 'error'
+                                          }" class="uppercase font-medium">{{ model.status }}</span>
+                                       </div>
+                                    </div>
+                                 </div>
+
+                                 <div class="flex items-center gap-2 pl-3 border-l ml-3">
+                                    <ChevronDown class="w-3 h-3 text-muted-foreground/50 transition-transform duration-300" :class="{ 'rotate-180': expandedResultId === `md-${model.task_uuid || model.task_id}-${model.label}` }" />
+                                 </div>
+                              </div>
+
+                              <template v-if="expandedResultId === `md-${model.task_uuid || model.task_id}-${model.label}`">
+                                <div class="border border-border bg-popover p-4 animate-in fade-in slide-in-from-top-2 duration-300 absolute left-0 right-0 z-50 shadow-xl rounded-xl" style="top: calc(100% + 8px);">
+                                  <div 
+                                    class="absolute -top-1 left-1/2 -translate-x-1/2 w-4 h-4 bg-popover border-t border-l border-border rotate-45 z-20 transition-all duration-300"
+                                  ></div>
+                                  <button class="absolute top-2 right-2 p-1.5 hover:bg-muted rounded-full transition-colors" @click.stop="expandedResultId = null">
+                                    <X class="w-4 h-4 text-muted-foreground" />
+                                  </button>
+
+                                  <div class="mb-4 flex items-center gap-2">
+                                    <div class="font-bold text-sm bg-background px-2 py-1 rounded border">{{ model.label }}</div>
+                                    <span class="text-xs text-muted-foreground">Task: {{ model.task_uuid || model.task_id }}</span>
+                                  </div>
+                                  <div v-if="model.files && model.files.length > 0" class="grid grid-cols-1 gap-2 max-h-[300px] overflow-y-auto custom-scrollbar p-1">
+                                    <a 
+                                      v-for="(f, i) in model.files" 
+                                      :key="i"
+                                      :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + f.url"
+                                      target="_blank"
+                                      class="flex items-center gap-2 p-2 rounded border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-decoration-none group/file"
+                                    >
+                                      <div class="w-6 h-6 rounded bg-muted flex items-center justify-center shrink-0 group-hover/file:bg-background border transition-colors">
+                                        <component 
+                                          :is="f.type === 'best_model' ? 'Award' : f.type === 'log' ? 'FileText' : f.type === 'vdl_log' ? 'Activity' : 'Save'" 
+                                          class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" 
+                                        />
+                                      </div>
+                                      <div class="flex-1 min-w-0">
+                                        <div class="text-[10px] font-medium truncate" :title="f.name">{{ f.name }}</div>
+                                      </div>
+                                      <Download class="w-3 h-3 text-muted-foreground opacity-0 group-hover/file:opacity-100 transition-opacity" />
+                                    </a>
+                                  </div>
+                                  <div v-else class="text-[10px] text-muted-foreground italic py-1 text-center">无输出文件</div>
+                                </div>
+                              </template>
+                            </div>
+                         </div>
+                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else class="py-12 text-center border rounded-xl bg-muted/5 border-dashed">
+                <Box class="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
+                <p class="text-sm text-muted-foreground">暂无模型产物</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div v-if="innerStep === 'augment'" class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[400px,1fr] gap-6">
           <aside class="border rounded-xl bg-background p-4 flex flex-col gap-4 overflow-hidden h-full min-h-[500px] md:min-h-0">
             <div class="flex items-center justify-between shrink-0">
@@ -2660,8 +3189,8 @@ onBeforeUnmount(() => {
                   <Input v-model="trainModelName" class="h-9 text-xs px-2" />
                 </div>
                 <div class="space-y-1">
-                  <Label class="text-xs">{{ t('training.train.runCount') }}</Label>
-                  <Input type="number" v-model="trainRunCount" min="1" step="1" class="h-9 text-xs px-2" />
+                  <Label class="text-xs">{{ t('training.train.taskId') }}</Label>
+                  <Input :model-value="trainTaskUuid || '-'" disabled class="h-9 text-xs px-2 font-mono" />
                 </div>
               </div>
 
@@ -2688,7 +3217,7 @@ onBeforeUnmount(() => {
                       <UiSelectValue :placeholder="t('training.train.resumeMode')" />
                     </UiSelectTrigger>
                     <UiSelectContent class="z-[9999]">
-                      <UiSelectItem value="interrupted" class="text-[11px]">{{ t('training.train.resumeModeInterrupted') }}</UiSelectItem>
+                      <UiSelectItem v-if="hasInterruptedTasks" value="interrupted" class="text-[11px]">{{ t('training.train.resumeModeInterrupted') }}</UiSelectItem>
                       <UiSelectItem value="extended" class="text-[11px]">{{ t('training.train.resumeModeExtended') }}</UiSelectItem>
                     </UiSelectContent>
                   </UiSelect>
@@ -2712,7 +3241,7 @@ onBeforeUnmount(() => {
                   <Label>{{ trainStartMode === 'resume' && resumeMode === 'extended' ? t('training.train.epochsAdditional') : t('training.train.epochs') }}</Label>
                   <span class="text-xs font-medium">{{ trainConfig.epochs[0] }}</span>
                 </div>
-                <Slider v-model="trainConfig.epochs" :min="1" :max="100" />
+                <Slider v-model="trainConfig.epochs" :min="1" :max="1000" />
                 <div v-if="trainStartMode === 'resume' && resumeMode === 'interrupted'" class="text-[9px] text-amber-600 dark:text-amber-400">
                   {{ t('training.train.resumeModeHint') }}
                 </div>
@@ -2760,7 +3289,7 @@ onBeforeUnmount(() => {
             <div class="flex items-center justify-between border-b shrink-0 bg-background px-4">
               <div class="flex gap-6">
                 <button 
-                  v-for="tab in ['overview', 'metrics', 'logs']" 
+                  v-for="tab in ['overview', 'logs']" 
                   :key="tab"
                   class="h-12 text-sm font-medium transition-all relative px-1 capitalize"
                   :class="activeMonitorTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
@@ -2926,7 +3455,7 @@ onBeforeUnmount(() => {
 
                             <!-- 续训按钮：仅在已停止/已取消/已中断/失败状态显示 -->
                             <UiButton 
-                              v-if="['stopped', 'cancelled', 'interrupted', 'failed'].includes(tItem.status?.toLowerCase() || '')"
+                              v-if="['stopped', 'canceled', 'cancelled', 'interrupted', 'failed', 'error', 'aborted'].includes(tItem.status?.toLowerCase() || '')"
                               variant="ghost" 
                               size="icon" 
                               class="h-9 w-9 text-primary hover:bg-primary/10 rounded-full transition-colors"
@@ -2957,78 +3486,6 @@ onBeforeUnmount(() => {
                         <div class="h-[350px] w-full relative bg-background/50 rounded-2xl border border-border/50 shadow-inner p-4">
                           <Line :key="tItem.task_id" :data="combinedChartData" :options="chartOptions" :plugins="[epochLinesPlugin]" />
                         </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Metrics Tab -->
-              <div v-else-if="activeMonitorTab === 'metrics'" class="space-y-6 animate-in slide-in-from-right-4 duration-300">
-                <div class="flex items-center justify-between mb-2">
-                   <div class="flex items-center gap-2">
-                      <h3 class="text-lg font-bold">{{ trainTasks.find(t => t.task_id === monitorTaskId)?.label || t('training.monitor.metrics') }}</h3>
-                      <span v-if="monitorTaskId && monitorTaskId !== 'all'" class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-bold uppercase">{{ t('training.monitor.statusList.' + (monitorStatus?.toLowerCase() || 'pending')) }}</span>
-                   </div>
-                   <div v-if="selectedEpoch !== null" class="flex items-center gap-2">
-                      <span class="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary font-medium">{{ t('training.monitor.epoch') }} {{ selectedEpoch }}</span>
-                      <UiButton variant="ghost" size="sm" class="h-6 text-[10px] px-2" @click="selectedEpoch = null">
-                        {{ t('training.monitor.showAllEpochs') }}
-                      </UiButton>
-                   </div>
-                </div>
-                
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div class="lg:col-span-2 space-y-6">
-                    <div class="border rounded-xl bg-background p-6 shadow-sm">
-                      <h4 class="text-sm font-bold mb-4">{{ t('training.monitor.metrics') }}</h4>
-                      <div class="h-[400px] w-full">
-                        <Line :key="trainGroupId" :data="combinedChartData" :options="chartOptions" :plugins="[epochLinesPlugin]" />
-                      </div>
-                    </div>
-                  </div>
-                  <div class="space-y-6">
-                    <!-- Statistics Card -->
-                    <div class="border rounded-xl bg-background p-6 shadow-sm space-y-4">
-                      <h4 class="text-sm font-bold border-b pb-2">{{ t('training.monitor.taskStats') }}</h4>
-                      <div class="space-y-3">
-                        <div class="flex justify-between">
-                          <span class="text-xs text-muted-foreground">{{ t('training.monitor.currentLoss') }}</span>
-                          <span class="text-xs font-mono font-bold text-primary">{{ latestMonitorMetric ? formatMetricNumber(latestMonitorMetric.loss) : '-' }}</span>
-                        </div>
-                        <div class="flex justify-between">
-                          <span class="text-xs text-muted-foreground">{{ t('training.monitor.currentLR') }}</span>
-                          <span class="text-xs font-mono">{{ latestMonitorMetric ? formatMetricNumber(latestMonitorMetric.lr) : '-' }}</span>
-                        </div>
-                        <div class="flex justify-between">
-                          <span class="text-xs text-muted-foreground">{{ t('training.monitor.epochProgress') }}</span>
-                          <span class="text-xs">{{ latestMonitorMetric?.epoch || 0 }} / {{ targetTotalEpochs }}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <!-- History Table -->
-                    <div class="border rounded-xl bg-background shadow-sm flex flex-col overflow-hidden max-h-[400px]">
-                      <div class="bg-muted/30 px-4 py-3 border-b">
-                        <h4 class="text-xs font-bold">{{ t('training.monitor.metricHistory') }}</h4>
-                      </div>
-                      <div class="flex-1 overflow-auto custom-scrollbar">
-                        <table class="w-full text-[10px]">
-                          <thead class="bg-muted/10 sticky top-0 backdrop-blur-sm">
-                            <tr>
-                              <th class="text-left font-semibold px-4 py-2 text-muted-foreground">{{ t('training.monitor.epoch') }}</th>
-                              <th class="text-right font-semibold px-4 py-2 text-muted-foreground">{{ t('training.monitor.loss') }}</th>
-                              <th class="text-right font-semibold px-4 py-2 text-muted-foreground">{{ t('training.monitor.lr') }}</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr v-for="m in cleanedMonitorMetrics.slice(-20).reverse()" :key="`${m.epoch}-${m.iter}`" class="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                              <td class="px-4 py-2">{{ t('training.monitor.epoch') }}{{ m.epoch }} · {{ t('training.monitor.iter') }}{{ m.iter }}</td>
-                              <td class="px-4 py-2 text-right font-mono text-primary font-medium">{{ formatMetricNumber(m.loss) }}</td>
-                              <td class="px-4 py-2 text-right font-mono text-muted-foreground">{{ formatMetricNumber(m.lr) }}</td>
-                            </tr>
-                          </tbody>
-                        </table>
                       </div>
                     </div>
                   </div>

@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import asyncio
@@ -18,24 +19,14 @@ import random
 import platform
 import warnings
 import logging
+import uuid as uuid_lib
 from pathlib import Path
 
-# 屏蔽无用警告
+# 屏蔽框架无关紧要的日志和警告
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+os.environ["FLAGS_allocator_strategy"] = "auto_growth"
+warnings.filterwarnings("ignore", category=UserWarning, message=".*ccache.*")
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
-# 特别屏蔽 paddle 的编译警告
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['PADDLE_TF_LOG_LEVEL'] = '3'
-os.environ['GLOG_minloglevel'] = '2' # 屏蔽 GLOG INFO
-os.environ['FLAGS_eager_delete_tensor_gb'] = '0.0' # 减少一些内存管理的日志
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-# 调高三方库日志级别，减少终端噪音
-logging.getLogger("paddleseg").setLevel(logging.WARNING)
 logging.getLogger("paddle").setLevel(logging.WARNING)
 logging.getLogger("paddlex").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -55,6 +46,10 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有方法 (GET, POST, OPTIONS 等)
     allow_headers=["*"],  # 允许所有请求头
 )
+
+# 挂载静态文件目录，允许通过 HTTP 访问训练数据图片
+# 假设所有训练数据都保存在当前目录下的项目文件夹中
+app.mount("/static", StaticFiles(directory=os.getcwd()), name="static")
 
 # 定义 COCO 数据模型
 class COCOAnnotation(BaseModel):
@@ -106,9 +101,6 @@ class TrainRequest(BaseModel):
     coco_data: COCOData # 对应的 COCO 标注数据
     base_path: str # 基础路径，例如 "/data/projects"
     project_id: str # 项目 ID
-    version: str # 版本号
-    data_version: str # 数据版本
-    run_count: int = 1 # 运行次数
     model_name: str = "STFPM"
     train_epochs: Optional[int] = None # 建议使用 train_iters，若提供则自动换算
     train_iters: Optional[int] = None  # 推荐：显式指定训练迭代次数
@@ -116,16 +108,18 @@ class TrainRequest(BaseModel):
     learning_rate: float = 0.01
     label_names: Optional[List[str]] = None
     resume_path: Optional[str] = None # 可选的恢复训练路径
-    resume_mode: Optional[str] = None # 'interrupted' 或 'extended'
+    resume_mode: Optional[str] = "interrupted" # 续训模式: "interrupted" (中断续训) 或 "extended" (完结续训)
+    parallel_train: bool = False # 是否开启多线程并行训练（默认为串行排队）
 
 @app.post("/train/anomaly")
 async def train_anomaly(request: TrainRequest):
     """
     接收 COCO 数据，按照特定层级结构保存裁剪信息并启动训练
-    层级结构: {base_path}/{project_id}/train/{data_version}/{run_count}/{label}/
+    层级结构: {base_path}/{project_id}/train/{uuid}/{label}/
+    输出路径: output/{project_id}/{uuid}/{label_name}/
     """
-    # 1. 构建目录层级
-    # 映射 category_id 到 label 名称
+    task_uuid = uuid_lib.uuid4().hex[:8]
+    
     cat_map = {cat.id: cat.name for cat in request.coco_data.categories} if request.coco_data.categories else {}
     
     if platform.system().lower() == "linux":
@@ -133,7 +127,7 @@ async def train_anomaly(request: TrainRequest):
     else:
         normalized_base = request.base_path.replace("\\", "/")
     
-    storage_base = Path(normalized_base) / request.project_id / "train" / request.data_version / str(request.run_count)
+    storage_base = Path(normalized_base) / request.project_id / "train" / task_uuid
     
     try:
         # 2. 解码所有图片
@@ -209,15 +203,26 @@ async def train_anomaly(request: TrainRequest):
                         cv2.imwrite(str(mask_path), mask)
                         
                         # 记录到列表
-                        if label_name not in label_val_count or random.random() < 0.1:
+                        # 策略：前 2 个样本必入训练集，确保训练集不为空；后续样本 10% 概率入验证集
+                        train_list_path = label_dir / "train.txt"
+                        val_list_path = label_dir / "val.txt"
+                        
+                        # 统计当前 label 已有的训练样本数
+                        train_count = 0
+                        if train_list_path.exists():
+                            with open(train_list_path, "r") as f:
+                                train_count = sum(1 for line in f if line.strip())
+                        
+                        if train_count < 2:
+                            # 强制放入训练集
+                            with open(train_list_path, "a") as f:
+                                f.write(f"images/{img_filename} masks/{mask_filename}\n")
+                        elif random.random() < 0.1:
                             # 放入验证集
-                            val_list_path = label_dir / "val.txt"
                             with open(val_list_path, "a") as f:
                                 f.write(f"images/{img_filename} masks/{mask_filename}\n")
-                            label_val_count[label_name] = label_val_count.get(label_name, 0) + 1
                         else:
                             # 放入训练集
-                            train_list_path = label_dir / "train.txt"
                             with open(train_list_path, "a") as f:
                                 f.write(f"images/{img_filename} masks/{mask_filename}\n")
                             
@@ -227,9 +232,31 @@ async def train_anomaly(request: TrainRequest):
         if crop_count == 0:
             raise HTTPException(status_code=400, detail="No valid objects to crop")
 
-        # 4. 启动多个后台训练任务（每个 Label 一个模型）
+        # 4. 后处理：确保每个 label 的验证集都不为空，避免 PaddleSeg 报错
+        for label_name in labels_processed:
+            label_dir = storage_base / label_name
+            train_list_path = label_dir / "train.txt"
+            val_list_path = label_dir / "val.txt"
+            
+            # 如果验证集为空，从训练集中复制一个样本过去
+            if not val_list_path.exists() or os.path.getsize(val_list_path) == 0:
+                if train_list_path.exists() and os.path.getsize(train_list_path) > 0:
+                    with open(train_list_path, "r") as f_train:
+                        first_line = f_train.readline()
+                    if first_line:
+                        with open(val_list_path, "w") as f_val:
+                            f_val.write(first_line)
+                        logger.info(f"Label '{label_name}' has empty validation set. Copied one sample from train set.")
+
+        # 5. 启动多个后台训练任务（每个 Label 一个模型）
         task_results = []
         group_id = f"group_{int(time.time())}_{request.project_id}"
+        
+        # 检查是否有请求的类别未被处理（没有数据）
+        if request.label_names:
+            missing_labels = set(request.label_names) - labels_processed
+            if missing_labels:
+                logger.warning(f"The following requested labels have no valid annotations and will be skipped: {missing_labels}")
         
         for label_name in labels_processed:
             label_dataset_path = storage_base / label_name
@@ -242,11 +269,10 @@ async def train_anomaly(request: TrainRequest):
                 "batch_size": request.batch_size,
                 "learning_rate": request.learning_rate,
                 "project_id": request.project_id,
-                "version": request.version,
-                "data_version": request.data_version,
-                "run_count": request.run_count,
+                "task_uuid": task_uuid,
                 "resume_path": request.resume_path,
-                "resume_mode": request.resume_mode
+                "resume_mode": request.resume_mode,
+                "parallel_train": request.parallel_train
             }
             
             task_id = trainer.run_training_async(str(label_dataset_path), train_config, group_id=group_id)
@@ -258,8 +284,8 @@ async def train_anomaly(request: TrainRequest):
         return {
             "status": "success",
             "project_id": request.project_id,
+            "task_uuid": task_uuid,
             "group_id": group_id,
-            "data_version": request.data_version,
             "storage_path": str(storage_base),
             "total_crops": crop_count,
             "tasks": task_results
@@ -274,7 +300,202 @@ async def get_train_status(task_id: str):
     查询单个训练任务状态 (单个 label)
     """
     status = trainer.get_status(task_id)
+    if status.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Task not found")
     return status
+
+@app.get("/project/{project_id}/datasets")
+async def get_project_datasets(project_id: str):
+    """
+    获取项目级历史训练数据列表。
+    返回该项目下所有已存在的训练数据快照（基于目录结构）。
+    路径结构: {project_id}/train/{uuid}/{label}
+    """
+    base_dir = os.path.join(os.getcwd(), project_id, "train")
+    
+    if not os.path.exists(base_dir):
+        return {"project_id": project_id, "datasets": []}
+    
+    datasets = []
+    
+    for task_uuid in os.listdir(base_dir):
+        uuid_path = os.path.join(base_dir, task_uuid)
+        if not os.path.isdir(uuid_path):
+            continue
+            
+        for label in os.listdir(uuid_path):
+            label_path = os.path.join(uuid_path, label)
+            if not os.path.isdir(label_path):
+                continue
+            
+            images_dir = os.path.join(label_path, "images")
+            if not os.path.exists(images_dir):
+                continue
+                
+            image_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            image_count = len(image_files)
+            
+            images_preview = []
+            try:
+                rel_images_path = os.path.relpath(images_dir, os.getcwd())
+                for f in sorted(image_files):
+                    images_preview.append({
+                        "filename": f,
+                        "url": f"/static/{rel_images_path}/{f}"
+                    })
+            except ValueError:
+                pass
+
+            datasets.append({
+                "task_uuid": task_uuid,
+                "label": label,
+                "image_count": image_count,
+                "dataset_path": label_path,
+                "relative_path": os.path.relpath(label_path, os.getcwd()),
+                "images": images_preview
+            })
+    
+    return {"project_id": project_id, "datasets": datasets}
+
+@app.get("/project/{project_id}/models")
+async def get_project_models(project_id: str):
+    """
+    获取项目级历史模型列表。
+    遍历 output/project_id 下的所有任务，收集已完成的模型。
+    路径结构: output/{project_id}/{uuid}/{label_name}
+    """
+    output_base = os.path.join(os.getcwd(), "output", project_id)
+    
+    if not os.path.exists(output_base):
+        return {"project_id": project_id, "models": []}
+        
+    models = []
+    
+    for task_uuid in os.listdir(output_base):
+        uuid_path = os.path.join(output_base, task_uuid)
+        if not os.path.isdir(uuid_path):
+            continue
+            
+        for label in os.listdir(uuid_path):
+            label_path = os.path.join(uuid_path, label)
+            if not os.path.isdir(label_path):
+                continue
+                
+            best_model_path = os.path.join(label_path, "best_model")
+            has_best_model = os.path.exists(best_model_path) and os.path.exists(os.path.join(best_model_path, "model.pdparams"))
+            
+            latest_checkpoint = None
+            max_iter = -1
+            for item in os.listdir(label_path):
+                if item.startswith("iter_") and os.path.isdir(os.path.join(label_path, item)):
+                    try:
+                        it = int(item.split("_")[1])
+                        if it > max_iter:
+                            max_iter = it
+                            latest_checkpoint = item
+                    except ValueError:
+                        continue
+            
+            if has_best_model or latest_checkpoint:
+                model_files = []
+                try:
+                    rel_label_path = os.path.relpath(label_path, os.getcwd())
+                    
+                    if has_best_model:
+                        rel_best_path = os.path.join(rel_label_path, "best_model")
+                        for f in os.listdir(best_model_path):
+                             if os.path.isfile(os.path.join(best_model_path, f)):
+                                model_files.append({
+                                    "name": f"best_model/{f}",
+                                    "url": f"/static/{rel_best_path}/{f}",
+                                    "type": "best_model"
+                                })
+                    
+                    if latest_checkpoint:
+                         checkpoint_dir = os.path.join(label_path, latest_checkpoint)
+                         rel_ckpt_path = os.path.join(rel_label_path, latest_checkpoint)
+                         for f in os.listdir(checkpoint_dir):
+                             if os.path.isfile(os.path.join(checkpoint_dir, f)):
+                                 model_files.append({
+                                     "name": f"{latest_checkpoint}/{f}",
+                                     "url": f"/static/{rel_ckpt_path}/{f}",
+                                     "type": "checkpoint"
+                                 })
+                    
+                    train_log = os.path.join(label_path, "train.log")
+                    if os.path.exists(train_log):
+                        model_files.append({
+                            "name": "train.log",
+                            "url": f"/static/{rel_label_path}/train.log",
+                            "type": "log"
+                        })
+                        
+                    vdl_dir = os.path.join(label_path, "vdl_log")
+                    if os.path.exists(vdl_dir):
+                         rel_vdl_path = os.path.join(rel_label_path, "vdl_log")
+                         for f in os.listdir(vdl_dir):
+                             model_files.append({
+                                 "name": f"vdl_log/{f}",
+                                 "url": f"/static/{rel_vdl_path}/{f}",
+                                 "type": "vdl_log"
+                             })
+
+                except ValueError:
+                    pass
+
+                models.append({
+                    "task_uuid": task_uuid,
+                    "label": label,
+                    "has_best_model": has_best_model,
+                    "latest_checkpoint": latest_checkpoint,
+                    "latest_iter": max_iter,
+                    "model_path": label_path,
+                    "relative_path": os.path.relpath(label_path, os.getcwd()),
+                    "files": model_files
+                })
+
+    return {"project_id": project_id, "models": models}
+
+@app.get("/train/data/{task_id}")
+async def get_train_data(task_id: str):
+    """
+    获取某个训练任务所使用的图片列表及访问 URL
+    """
+    status = trainer.get_status(task_id)
+    if status.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    dataset_dir = status.get("dataset_dir")
+    if not dataset_dir or not os.path.exists(dataset_dir):
+        raise HTTPException(status_code=404, detail="Dataset directory not found")
+    
+    images_dir = os.path.join(dataset_dir, "images")
+    if not os.path.exists(images_dir):
+        return {"task_id": task_id, "images": []}
+    
+    image_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    
+    # 构建相对于静态目录的路径
+    cwd = os.getcwd()
+    try:
+        rel_dataset_path = os.path.relpath(images_dir, cwd)
+    except ValueError:
+        # 如果不在同一个驱动器或无法计算相对路径
+        raise HTTPException(status_code=500, detail="Cannot calculate relative path for images")
+
+    result = []
+    for f in image_files:
+        result.append({
+            "name": f,
+            "url": f"/static/{rel_dataset_path}/{f}".replace("\\", "/")
+        })
+    
+    return {
+        "task_id": task_id,
+        "label": status.get("label"),
+        "total": len(result),
+        "images": result
+    }
 
 @app.get("/train/status/group/{group_id}")
 async def get_group_train_status(group_id: str):
@@ -301,16 +522,21 @@ async def stop_group_train(group_id: str):
     return result
 
 @app.get("/train/events/{task_id}")
-async def train_events(task_id: str):
+async def train_events(task_id: str, auto_delete: bool = True):
     """
     SSE 实时推送训练进度和日志
+    :param auto_delete: 是否在读取历史消息后自动删除数据库中的记录
     """
     async def event_generator():
         last_log_idx = 0
         while True:
+            # 1. 从 trainer 获取当前状态
             status = trainer.get_status(task_id)
             
-            # 准备要发送的数据
+            # 2. 从消息队列获取历史消息（如果需要自动删除，可以通过 messenger.get_history）
+            # 注意：这里的 status.logs 已经包含了内存中的日志
+            # 如果前端是通过 SSE 持续订阅，我们通常不需要在这里删除
+            
             data = {
                 "status": status.get("status"),
                 "progress": status.get("progress", 0),
@@ -319,20 +545,21 @@ async def train_events(task_id: str):
                 "metrics": status.get("metrics", [])
             }
             
-            # 获取新日志
             logs = status.get("logs", [])
             if len(logs) > last_log_idx:
                 data["new_logs"] = logs[last_log_idx:]
                 last_log_idx = len(logs)
             
-            # 发送 SSE 格式数据
             yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             
-            # 如果训练完成或失败，发送最后一条消息后退出
             if status.get("status") in ["completed", "failed", "not_found"]:
+                # 如果开启了自动删除，可以在任务结束时清理该 topic 的所有消息
+                if auto_delete:
+                    from utils.messaging import messenger
+                    messenger.get_history(f"task_status_{task_id}", limit=9999, delete_after=True)
                 break
                 
-            await asyncio.sleep(1) # 每隔一秒检查一次更新
+            await asyncio.sleep(1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -367,13 +594,14 @@ async def get_task_checkpoints(task_id: str):
     return {"task_id": task_id, "checkpoints": checkpoints}
 
 @app.post("/train/resume/{task_id}")
-async def resume_train_task(task_id: str, resume_path: Optional[str] = None):
+async def resume_train_task(task_id: str, resume_path: Optional[str] = None, resume_mode: Optional[str] = None):
     """
     显式恢复某个训练任务
     :param task_id: 任务 ID
     :param resume_path: 可选，指定具体的检查点路径。如果不传，则自动寻找最新的。
+    :param resume_mode: 可选，指定续训模式 ("interrupted" 或 "extended")。
     """
-    result = trainer.resume_task(task_id, resume_path=resume_path)
+    result = trainer.resume_task(task_id, resume_path=resume_path, resume_mode=resume_mode)
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("message"))
     return result
@@ -475,884 +703,3 @@ if __name__ == "__main__":
     import uvicorn
     # 使用字符串导入方式 ("main:app") 才能开启 reload=True
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
-
-
-
-
-##################训练脚本###################
-import os
-import threading
-import time
-import shutil
-import json
-import re
-import random
-import ctypes
-import logging
-import traceback
-import warnings
-from utils.messaging import messenger
-from pathlib import Path
-
-# 屏蔽无用警告
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
-
-import paddlex as pdx
-from paddlex.utils.config import AttrDict
-
-logger = logging.getLogger(__name__)
-
-class TrainingMonitor:
-    """
-    负责监控日志文件并更新训练状态
-    """
-    def __init__(self, task_id: str, log_file: str, trainer_instance):
-        self.task_id = task_id
-        self.log_file = log_file
-        self.trainer = trainer_instance
-        self.stop_event = threading.Event()
-
-    def start(self):
-        self.trainer._add_log(self.task_id, f"Log monitor started for {os.path.basename(self.log_file)}")
-        self.thread = threading.Thread(target=self._monitor_loop)
-        self.thread.daemon = True
-        self.thread.start()
-
-    def stop(self):
-        self.stop_event.set()
-
-    def _monitor_loop(self):
-        """
-        轮询日志文件并解析指标
-        """
-        # 等待日志文件创建
-        start_wait = time.time()
-        while not os.path.exists(self.log_file) and time.time() - start_wait < 30:
-            if self.stop_event.is_set():
-                return
-            time.sleep(1)
-
-        if not os.path.exists(self.log_file):
-            self.trainer._add_log(self.task_id, f"Warning: Log file {self.log_file} not found after timeout.")
-            return
-
-        with open(self.log_file, "r") as f:
-            while True:
-                line = f.readline()
-                if not line:
-                    if self.stop_event.is_set():
-                        # 在退出前再尝试读一次，确保不漏掉最后几行
-                        remaining_line = f.readline()
-                        if remaining_line:
-                            self._parse_line(remaining_line)
-                        break
-                    time.sleep(0.5)
-                    continue
-                self._parse_line(line)
-
-        self.trainer._add_log(self.task_id, "Log monitor thread finished.")
-
-    def _read_log_lines(self, last_pos: int) -> int:
-        """读取并处理新日志行"""
-        try:
-            if not os.path.exists(self.log_file):
-                return last_pos
-                
-            with open(self.log_file, "r") as f:
-                f.seek(last_pos)
-                lines = f.readlines()
-                new_pos = f.tell()
-                
-                for line in lines:
-                    self._parse_line(line)
-                return new_pos
-        except Exception as e:
-            logger.error(f"Error reading log {self.log_file}: {e}")
-            return last_pos
-
-    def _parse_line(self, line: str):
-        """
-        解析日志行
-        示例: [2026/02/10 16:59:57] INFO: [TRAIN] epoch: 1, iter: 1/2, loss: 3.4739, lr: 0.001000, ...
-        """
-        # 解析训练指标
-        # 允许更多的空格灵活性，并处理可能的逗号/空格组合
-        train_match = re.search(r"\[TRAIN\]\s+epoch:\s*(\d+),\s*iter:\s*(\d+)/(\d+),\s*loss:\s*([\d.]+),\s*lr:\s*([\d.]+)", line)
-        if train_match:
-            epoch = int(train_match.group(1))
-            curr_iter = int(train_match.group(2))
-            total_iters = int(train_match.group(3))
-            loss = float(train_match.group(4))
-            lr = float(train_match.group(5))
-            
-            metrics = {
-                "epoch": epoch,
-                "iter": curr_iter,
-                "total_iters": total_iters,
-                "loss": loss,
-                "lr": lr,
-                "timestamp": time.time()
-            }
-            
-            # 更新进度
-            status = self.trainer.training_status[self.task_id]
-            total_epochs = status.get("total_epochs", 1)
-            total_iters_overall = status.get("total_iters", 1)
-            use_iters_mode = status.get("use_iters_mode", False)
-            
-            # 改进进度计算：
-            # 0-5%: 初始化, 5-10%: 模型准备, 10-95%: 核心训练阶段, 95-100%: 完成
-            
-            if use_iters_mode:
-                # 基于迭代次数的模式：直接用当前总 iteration 计算
-                # PaddleSeg 日志中的 epoch 可能会变，但我们关心的是总进度
-                # 计算当前总 iter = (epoch-1)*total_iters_in_this_epoch + curr_iter
-                # 但更简单的是：直接信任 PaddleSeg 最终会跑到我们设定的 total_iters_overall
-                # 我们假设每个 epoch 的 total_iters (即 total_iters 参数) 是一致的
-                current_overall_iter = (epoch - 1) * total_iters + curr_iter
-                training_ratio = min(1.0, current_overall_iter / total_iters_overall)
-                progress_desc = f"Iter: {current_overall_iter}/{total_iters_overall}"
-            else:
-                # 基于 Epoch 的模式
-                training_ratio = (epoch - 1) / total_epochs + (curr_iter / total_iters) / total_epochs
-                progress_desc = f"Epoch: {epoch}/{total_epochs} | Iter: {curr_iter}/{total_iters}"
-            
-            progress = 10 + (training_ratio * 85)
-            new_progress = min(int(progress), 98)
-            old_progress = status.get("progress", 0)
-            
-            # 记录详细日志
-            if new_progress > old_progress or curr_iter == total_iters:
-                log_msg = f"Training Progress: {new_progress}% | {progress_desc} | Loss: {loss:.4f} | LR: {lr:.6f}"
-                self.trainer._add_log(self.task_id, log_msg)
-            
-            self.trainer.training_status[self.task_id]["progress"] = new_progress
-            if "metrics" not in self.trainer.training_status[self.task_id]:
-                self.trainer.training_status[self.task_id]["metrics"] = []
-            self.trainer.training_status[self.task_id]["metrics"].append(metrics)
-            
-            # 通过消息队列发布指标和进度
-            messenger.publish(f"task_status_{self.task_id}", {
-                "task_id": self.task_id,
-                "type": "status_update",
-                "progress": new_progress,
-                "metrics": metrics
-            })
-            
-            # 限制 metrics 数量
-            if len(self.trainer.training_status[self.task_id]["metrics"]) > 1000:
-                self.trainer.training_status[self.task_id]["metrics"] = self.trainer.training_status[self.task_id]["metrics"][-1000:]
-
-        # 解析评估指标
-        # 匹配示例: [2026/02/11 15:10:37] INFO: [EVAL] #Images: 7 mIoU: 0.0000 Acc: nan Kappa: 0.0000 Dice: 0.0000
-        # 增加对更多指标的捕获，如 AUROC (如果存在)
-        eval_match = re.search(r"\[EVAL\]\s+#Images:\s*(\d+)\s+mIoU:\s*([\d.]+)(?:\s+Acc:\s*([\w.]+))?(?:\s+AUROC:\s*([\d.]+))?", line)
-        if eval_match:
-            miou = float(eval_match.group(2))
-            acc = eval_match.group(3)
-            auroc = eval_match.group(4)
-            
-            eval_info = f"Evaluation: mIoU = {miou:.4f}"
-            if auroc:
-                eval_info += f", AUROC = {float(auroc):.4f}"
-            if acc and acc != "nan":
-                eval_info += f", Acc = {acc}"
-            
-            # 解释 mIoU = 0 的情况
-            if miou == 0.0:
-                 eval_info += " (Note: mIoU=0 usually means no defects in validation set)"
-                
-            self.trainer._add_log(self.task_id, eval_info)
-            
-            if "eval_metrics" not in self.trainer.training_status[self.task_id]:
-                self.trainer.training_status[self.task_id]["eval_metrics"] = []
-            
-            metrics_entry = {"miou": miou, "timestamp": time.time()}
-            if auroc: metrics_entry["auroc"] = float(auroc)
-            if acc and acc != "nan": metrics_entry["acc"] = float(acc)
-            
-            self.trainer.training_status[self.task_id]["eval_metrics"].append(metrics_entry)
-
-class AnomalyTrainer:
-    """
-    负责管理 PaddleX 异常检测训练流程
-    """
-    def __init__(self, output_dir: str = "output"):
-        self.output_dir = output_dir
-        self.training_status = {} # 用于跟踪训练状态 task_id -> status
-        self.groups = {} # 用于跟踪任务组 group_id -> [task_id1, task_id2, ...]
-        self.threads = {} # 用于存储训练线程 task_id -> thread
-        self.task_key_index = {}
-        self.state_file = str(Path(self.output_dir) / "_one2all_trainer_state.json")
-        self._state_lock = threading.Lock()
-        self._last_persist_ts = 0.0
-        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
-        self._load_state()
-
-    def _load_state(self):
-        if not os.path.exists(self.state_file):
-            return
-        try:
-            with open(self.state_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.training_status = data.get("training_status", {}) or {}
-            self.groups = data.get("groups", {}) or {}
-            self.task_key_index = data.get("task_key_index", {}) or {}
-
-            now = time.time()
-            for task_id, s in self.training_status.items():
-                if s.get("status") in {"starting", "training"}:
-                    s["status"] = "interrupted"
-                    s["interrupted_at"] = now
-                    logs = s.setdefault("logs", [])
-                    logs.append(f"[{time.strftime('%H:%M:%S', time.localtime())}] Service restarted; task marked as interrupted.")
-                    if len(logs) > 500:
-                        s["logs"] = logs[-500:]
-        except Exception as e:
-            logger.error(f"Failed to load trainer state: {e}")
-
-    def _persist_state(self):
-        data = {
-            "version": 1,
-            "updated_at": time.time(),
-            "training_status": self.training_status,
-            "groups": self.groups,
-            "task_key_index": self.task_key_index,
-        }
-        tmp_path = f"{self.state_file}.tmp"
-        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        os.replace(tmp_path, self.state_file)
-
-    def _persist_state_if_due(self, force: bool = False):
-        now = time.time()
-        if not force and now - self._last_persist_ts < 1.0:
-            return
-        with self._state_lock:
-            now = time.time()
-            if not force and now - self._last_persist_ts < 1.0:
-                return
-            try:
-                self._persist_state()
-                self._last_persist_ts = now
-            except Exception as e:
-                logger.error(f"Failed to persist trainer state: {e}")
-
-    def _make_task_key(self, dataset_dir: str, config: dict) -> str:
-        return "|".join(
-            [
-                str(config.get("project_id", "")),
-                str(config.get("version", "")),
-                str(config.get("data_version", "")),
-                str(config.get("run_count", "")),
-                str(config.get("model_name", "")),
-                str(config.get("label_name", "")),
-                str(dataset_dir),
-            ]
-        )
-
-    def _find_latest_resume_path(self, save_dir: str):
-        latest = None
-        latest_mtime = -1.0
-        for root, _, files in os.walk(save_dir):
-            if "model.pdparams" not in files:
-                continue
-            if "model.pdopt" not in files:
-                continue
-            pdparams = os.path.join(root, "model.pdparams")
-            try:
-                mtime = os.path.getmtime(pdparams)
-            except Exception:
-                continue
-            if mtime > latest_mtime:
-                latest_mtime = mtime
-                latest = pdparams
-        return latest
-
-    def run_training_async(self, dataset_dir: str, config: dict, group_id: str = None):
-        """
-        启动后台线程执行训练
-        """
-        task_key = self._make_task_key(dataset_dir, config)
-        existing_task_id = self.task_key_index.get(task_key)
-        if existing_task_id and existing_task_id in self.training_status:
-            existing = self.training_status[existing_task_id]
-            if group_id:
-                existing["group_id"] = group_id
-                if group_id not in self.groups:
-                    self.groups[group_id] = []
-                if existing_task_id not in self.groups[group_id]:
-                    self.groups[group_id].append(existing_task_id)
-
-            status = existing.get("status")
-            thread = self.threads.get(existing_task_id)
-            if status in {"starting", "training"} and thread and thread.is_alive():
-                self._persist_state_if_due()
-                return existing_task_id
-
-            save_dir = existing.get("save_dir")
-            resume_path = self._find_latest_resume_path(save_dir) if save_dir else None
-            if resume_path:
-                existing["status"] = "starting"
-                existing["progress"] = min(existing.get("progress", 0), 90)
-                existing["resume_path"] = resume_path
-                existing.setdefault("logs", []).append(
-                    f"[{time.strftime('%H:%M:%S', time.localtime())}] Resuming from checkpoint: {resume_path}"
-                )
-                if len(existing.get("logs", [])) > 500:
-                    existing["logs"] = existing["logs"][-500:]
-                thread = threading.Thread(
-                    target=self._train_process,
-                    args=(existing_task_id, existing.get("dataset_dir", dataset_dir), existing.get("config", config), True),
-                )
-                self.threads[existing_task_id] = thread
-                thread.start()
-                self._persist_state_if_due(force=True)
-                return existing_task_id
-
-        task_id = f"task_{int(time.time())}_{config.get('label_name', 'unknown')}_{random.randint(1000, 9999)}"
-        label_name = config.get("label_name", "unknown")
-        save_dir = os.path.join(self.output_dir, config.get("project_id", "default"), label_name, task_id)
-        self.training_status[task_id] = {
-            "status": "starting", 
-            "progress": 0,
-            "label": label_name,
-            "group_id": group_id,
-            "logs": [f"Task {task_id} initialized."],
-            "metrics": [], # 存储 Epoch 级别的指标
-            "total_epochs": config.get("epochs", 50),
-            "start_time": time.time(),
-            "dataset_dir": dataset_dir,
-            "save_dir": save_dir,
-            "config": config,
-            "task_key": task_key,
-        }
-        self.task_key_index[task_key] = task_id
-        
-        # 记录到组
-        if group_id:
-            if group_id not in self.groups:
-                self.groups[group_id] = []
-            self.groups[group_id].append(task_id)
-        self._persist_state_if_due(force=True)
-        
-        thread = threading.Thread(
-            target=self._train_process,
-            args=(task_id, dataset_dir, config, False)
-        )
-        self.threads[task_id] = thread
-        thread.start()
-        return task_id
-
-    def stop_task(self, task_id: str):
-        """
-        停止单个训练任务
-        """
-        if task_id not in self.training_status:
-            return {"status": "error", "message": "Task not found"}
-        
-        status = self.training_status[task_id].get("status")
-        if status in ["completed", "failed", "cancelled"]:
-            return {"status": "success", "message": f"Task already in {status} state"}
-
-        # 尝试停止线程
-        thread = self.threads.get(task_id)
-        if thread and thread.is_alive():
-            # 使用 ctypes 强制停止线程
-            res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
-                ctypes.c_long(thread.ident), 
-                ctypes.py_object(SystemExit)
-            )
-            if res > 1:
-                ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread.ident), None)
-            
-            self._add_log(task_id, "Task cancellation requested by user.")
-            self.training_status[task_id]["status"] = "cancelled"
-            self._persist_state_if_due(force=True)
-            return {"status": "success", "message": "Cancellation requested"}
-        else:
-            self.training_status[task_id]["status"] = "cancelled"
-            self._persist_state_if_due(force=True)
-            return {"status": "success", "message": "Task marked as cancelled"}
-
-    def stop_group(self, group_id: str):
-        """
-        停止整个任务组
-        """
-        if group_id not in self.groups:
-            return {"status": "error", "message": "Group not found"}
-        
-        task_ids = self.groups[group_id]
-        results = []
-        for tid in task_ids:
-            res = self.stop_task(tid)
-            results.append({"task_id": tid, "result": res})
-            
-        return {"status": "success", "group_id": group_id, "tasks": results}
-
-    def get_group_status(self, group_id: str):
-        """
-        获取一组任务的聚合状态
-        """
-        if group_id not in self.groups:
-            return {"status": "not_found"}
-        
-        task_ids = self.groups[group_id]
-        task_statuses = [self.training_status.get(tid) for tid in task_ids if tid in self.training_status]
-        
-        if not task_statuses:
-            return {"status": "starting", "progress": 0}
-            
-        total_progress = sum(s.get("progress", 0) for s in task_statuses)
-        avg_progress = total_progress / len(task_statuses)
-        
-        # 确定整体状态
-        all_completed = all(s.get("status") == "completed" for s in task_statuses)
-        any_failed = any(s.get("status") == "failed" for s in task_statuses)
-        
-        status = "training"
-        if all_completed:
-            status = "completed"
-        elif any_failed:
-            status = "failed"
-            
-        return {
-            "group_id": group_id,
-            "status": status,
-            "progress": int(avg_progress),
-            "tasks": [
-                {
-                    "task_id": tid,
-                    "label": s.get("label"),
-                    "status": s.get("status"),
-                    "progress": s.get("progress")
-                }
-                for tid, s in zip(task_ids, task_statuses)
-            ]
-        }
-
-    def _add_log(self, task_id: str, message: str):
-        """添加日志到任务状态"""
-        if task_id in self.training_status:
-            timestamp_str = time.strftime("%H:%M:%S", time.localtime())
-            log_entry = f"[{timestamp_str}] {message}"
-            logs = self.training_status[task_id].setdefault("logs", [])
-            logs.append(log_entry)
-            if len(logs) > 500:
-                self.training_status[task_id]["logs"] = logs[-500:]
-            
-            # 通过消息队列发布日志
-            messenger.publish(f"task_log_{task_id}", {
-                "task_id": task_id,
-                "type": "log",
-                "message": log_entry,
-                "raw_message": message
-            })
-            
-            logger.info(f"[{task_id}] {message}")
-            self._persist_state_if_due()
-
-    def _train_process(self, task_id: str, dataset_dir: str, config: dict, resume: bool = False):
-        """
-        实际的训练进程 (运行在后台)
-        """
-        try:
-            # 在训练线程中再次确保仓库初始化，防止多线程环境下的模型注册失效
-            try:
-                from paddlex import repo_manager
-                pdx_repos_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "paddlex_repos")
-                repo_manager.set_parent_dirs(pdx_repos_dir, None)
-                repo_manager.setup(["PaddleSeg"])
-                repo_manager.initialize(["PaddleSeg"])
-            except:
-                pass
-
-            label_name = config.get("label_name", "unknown")
-            self._add_log(task_id, f"Training thread started for label: {label_name}")
-            self.training_status[task_id]["status"] = "training"
-            self.training_status[task_id]["progress"] = 5
-            self._add_log(task_id, "Stage 1/4: Preparing training environment...")
-
-            # 1. 构造 PaddleX 训练配置
-            model_name = config.get("model_name", "STFPM")
-            save_dir = self.training_status.get(task_id, {}).get("save_dir") or os.path.join(
-                self.output_dir, config.get("project_id", "default"), label_name, task_id
-            )
-            os.makedirs(save_dir, exist_ok=True)
-            if task_id in self.training_status:
-                self.training_status[task_id]["dataset_dir"] = dataset_dir
-                self.training_status[task_id]["save_dir"] = save_dir
-                self.training_status[task_id]["config"] = config
-                self._persist_state_if_due(force=True)
-
-            if not os.path.isdir(dataset_dir):
-                raise FileNotFoundError(f"dataset_dir not found: {dataset_dir}")
-            
-            train_list = os.path.join(dataset_dir, "train.txt")
-            if not os.path.exists(train_list):
-                raise FileNotFoundError(f"train.txt not found in dataset_dir: {dataset_dir}")
-            
-            # 计算训练参数：优先使用 train_iters，否则使用 train_epochs 换算
-            train_iters_input = config.get("train_iters")
-            train_epochs_input = config.get("train_epochs") or config.get("epochs", 50)
-            
-            try:
-                with open(train_list, "r") as f:
-                    num_samples = sum(1 for line in f if line.strip())
-                batch_size = config.get("batch_size", 8)
-                iters_per_epoch = max(1, num_samples // batch_size)
-                
-                if train_iters_input:
-                    total_iters = train_iters_input
-                    # 如果提供了 iters，我们也换算一个名义上的 epochs 用于日志显示
-                    total_epochs = max(1, total_iters // iters_per_epoch)
-                    self._add_log(task_id, f"Using explicit train_iters: {total_iters} (approx {total_epochs} epochs)")
-                else:
-                    total_epochs = train_epochs_input
-                    total_iters = total_epochs * iters_per_epoch
-                    self._add_log(task_id, f"Converting epochs to iters: {total_epochs} epochs -> {total_iters} total iters (Dataset size: {num_samples})")
-            except Exception as e:
-                logger.warning(f"Failed to calculate iters: {e}")
-                total_iters = train_iters_input or train_epochs_input or 50
-                total_epochs = train_epochs_input or 1
-            
-            # 更新状态中的总轮数/总迭代数，供监控器使用
-            if task_id in self.training_status:
-                self.training_status[task_id]["total_epochs"] = total_epochs
-                self.training_status[task_id]["total_iters"] = total_iters
-                self.training_status[task_id]["use_iters_mode"] = bool(train_iters_input)
-            
-            pdx_cfg = AttrDict({
-                "Global": AttrDict({
-                    "model": model_name,
-                    "dataset_dir": dataset_dir,
-                    "output": save_dir,
-                    "device": "gpu:0"
-                }),
-                "Train": AttrDict({
-                    "epochs": total_epochs,
-                    "epochs_iters": total_iters, # PaddleSeg 实际上使用的是这个总 iteration 数
-                    "batch_size": config.get("batch_size", 8),
-                    "learning_rate": config.get("learning_rate", 0.01),
-                    "num_classes": 1,
-                    "pretrain_weight_path": None,
-                    "resume_path": None,
-                    "log_interval": 1,
-                    "eval_interval": 1,
-                    "save_interval": 1
-                }),
-                "Evaluate": AttrDict({
-                    "weight_path": None
-                })
-            })
-
-            if resume:
-                resume_path = self._find_latest_resume_path(save_dir)
-                if resume_path:
-                    pdx_cfg["Train"]["resume_path"] = resume_path
-                    if task_id in self.training_status:
-                        self.training_status[task_id]["resume_path"] = resume_path
-                        self._persist_state_if_due(force=True)
-                    
-                    resume_mode = config.get("resume_mode", "interrupted")
-                    if resume_mode == "extended":
-                        # 完结续训：在原有基础上追加轮数
-                        # 这里需要知道之前的总轮数，但在当前逻辑中，pdx_cfg["Train"]["epochs"] 已经是新的目标轮数了
-                        # 实际上 PaddleX 的续训通常是：设置一个新的更大的 epochs 值
-                        # 如果用户输入的是“追加 10 轮”，前端应该已经处理成“已完成轮数 + 10”
-                        # 但如果前端只传了“10”，我们需要在这里处理
-                        self._add_log(task_id, f"Stage 2/4: Extended resume mode. Target epochs set to {total_epochs}")
-                    else:
-                        # 中断续训：恢复到原本设定的总轮数
-                        self._add_log(task_id, f"Stage 2/4: Interrupted resume mode. Resuming to original target: {total_epochs}")
-                    
-                    self._add_log(task_id, f"Stage 2/4: Resuming from checkpoint: {resume_path}")
-                else:
-                    self._add_log(task_id, "Stage 2/4: No valid checkpoint found; training from scratch.")
-            
-            self._add_log(task_id, f"Stage 2/4: Initializing {model_name} trainer...")
-            from paddlex.modules.anomaly_detection import UadTrainer
-            
-            # 尝试静默掉 PaddleSeg 的控制台输出，只保留文件日志
-            try:
-                import logging
-                for name in ["paddleseg", "paddle", "paddlex"]:
-                    l = logging.getLogger(name)
-                    for h in l.handlers[:]:
-                        if isinstance(h, logging.StreamHandler):
-                            l.removeHandler(h)
-                    l.propagate = False
-            except:
-                pass
-
-            trainer_obj = UadTrainer(pdx_cfg)
-            
-            self.training_status[task_id]["progress"] = 10
-            self._add_log(task_id, "Stage 3/4: Starting core training process...")
-            
-            # 2. 启动日志监控
-            log_file = os.path.join(save_dir, "train.log")
-            monitor = TrainingMonitor(task_id, log_file, self)
-            monitor.start()
-            
-            # 3. 执行训练
-            try:
-                trainer_obj.train()
-                self._add_log(task_id, "Stage 4/4: Finalizing and saving model...")
-                time.sleep(1) # 给日志监控一点时间同步最后几行
-                
-                # 显式输出 100% 进度日志
-                self.training_status[task_id]["progress"] = 100
-                self._add_log(task_id, "Training Progress: 100% | Status: Completed")
-                self._add_log(task_id, "PaddleX training completed successfully.")
-                self.training_status[task_id]["status"] = "completed"
-                
-                # 发布完成状态
-                messenger.publish(f"task_status_{task_id}", {
-                    "task_id": task_id,
-                    "type": "completed",
-                    "progress": 100
-                })
-                
-                # 训练成功后清理中间检查点
-                self._cleanup_checkpoints(task_id, save_dir)
-                
-                self._persist_state_if_due(force=True)
-            finally:
-                monitor.stop()
-            
-        except Exception as e:
-            tb = traceback.format_exc()
-            error_msg = f"Training failed: {str(e)}"
-            self._add_log(task_id, error_msg)
-            self.training_status[task_id]["status"] = "failed"
-            self.training_status[task_id]["error"] = str(e)
-            self.training_status[task_id]["traceback"] = tb
-            
-            # 发布失败状态
-            messenger.publish(f"task_status_{task_id}", {
-                "task_id": task_id,
-                "type": "failed",
-                "error": str(e)
-            })
-            
-            self._persist_state_if_due(force=True)
-
-    def resume_task(self, task_id: str, resume_path: str = None):
-        """
-        恢复一个已停止或中断的任务
-        """
-        if task_id not in self.training_status:
-            return {"status": "error", "message": "Task not found"}
-        
-        task_info = self.training_status[task_id]
-        status = task_info.get("status")
-        
-        # 只有不在运行中的任务可以恢复
-        thread = self.threads.get(task_id)
-        if status in {"starting", "training"} and thread and thread.is_alive():
-            return {"status": "error", "message": "Task is already running"}
-        
-        # 确定恢复路径
-        save_dir = task_info.get("save_dir")
-        actual_resume_path = resume_path or self._find_latest_resume_path(save_dir)
-        
-        if not actual_resume_path or not os.path.exists(actual_resume_path):
-             return {"status": "error", "message": "No valid checkpoint found to resume from"}
-
-        # 更新状态并启动
-        task_info["status"] = "starting"
-        task_info["progress"] = min(task_info.get("progress", 0), 90)
-        task_info["resume_path"] = actual_resume_path
-        self._add_log(task_id, f"Manual resume requested. Using checkpoint: {actual_resume_path}")
-        
-        thread = threading.Thread(
-            target=self._train_process,
-            args=(task_id, task_info.get("dataset_dir"), task_info.get("config"), True),
-        )
-        self.threads[task_id] = thread
-        thread.start()
-        
-        self._persist_state_if_due(force=True)
-        return {"status": "success", "task_id": task_id, "resume_path": actual_resume_path}
-
-    def _cleanup_checkpoints(self, task_id: str, save_dir: str):
-        """
-        训练完成后清理中间检查点，只保留 best_model
-        """
-        if not save_dir or not os.path.exists(save_dir):
-            return
-            
-        self._add_log(task_id, "Cleaning up intermediate checkpoints, keeping best_model...")
-        try:
-            cleaned_count = 0
-            # 遍历 save_dir 下的一级子目录
-            for item in os.listdir(save_dir):
-                item_path = os.path.join(save_dir, item)
-                if not os.path.isdir(item_path):
-                    continue
-                
-                # 策略：删除所有以 epoch_ 开头的目录，保留 best_model 和其他可能的重要目录
-                if item.startswith("epoch_"):
-                    shutil.rmtree(item_path)
-                    cleaned_count += 1
-            
-            self._add_log(task_id, f"Cleanup finished. Removed {cleaned_count} intermediate checkpoint directories.")
-        except Exception as e:
-            self._add_log(task_id, f"Warning: Failed to cleanup checkpoints: {e}")
-
-    def get_status(self, task_id: str):
-        """
-        查询训练状态
-        """
-        return self.training_status.get(task_id, {"status": "not_found"})
-
-# 全局单例
-trainer = AnomalyTrainer()
-
-
-
-
-###################消息脚本#######################
-import zmq
-import json
-import logging
-import threading
-import time
-import sqlite3
-import os
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
-
-class ZmqPublisher:
-    """
-    基于 ZeroMQ + SQLite 的持久化发布者
-    无需 Redis，支持远程连接，支持消息回溯
-    """
-    def __init__(self, host=None, port=None, db_path=None):
-        self.host = host or os.environ.get("ZMQ_HOST", "0.0.0.0")
-        self.port = int(port or os.environ.get("ZMQ_PORT", 5555))
-        self.db_path = db_path or os.environ.get("ZMQ_DB_PATH", "output/messages.db")
-        
-        # 确保数据库目录存在
-        Path(os.path.dirname(self.db_path)).mkdir(parents=True, exist_ok=True)
-        self._init_db()
-        
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.PUB)
-        # 设置 LINGER 为 0，确保进程退出时立即释放端口
-        self.socket.setsockopt(zmq.LINGER, 0)
-        try:
-            self.socket.bind(f"tcp://{self.host}:{self.port}")
-            logger.info(f"ZMQ Publisher bound to tcp://{self.host}:{self.port}")
-        except zmq.ZMQError as e:
-            if e.errno == zmq.EADDRINUSE:
-                logger.warning(f"ZMQ Port {self.port} already in use. This is normal during Uvicorn hot-reload.")
-            else:
-                logger.error(f"Failed to bind ZMQ Publisher: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error binding ZMQ: {e}")
-
-    def _init_db(self):
-        """初始化 SQLite 数据库并优化性能"""
-        with sqlite3.connect(self.db_path, timeout=30) as conn:
-            # 开启 WAL 模式提高并发性能
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    topic TEXT,
-                    content TEXT,
-                    timestamp REAL
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_topic ON messages(topic)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON messages(timestamp)")
-
-    def publish(self, topic: str, data: dict, persist: bool = True):
-        """
-        发布消息并持久化
-        """
-        message_dict = {
-            "topic": topic,
-            "data": data,
-            "timestamp": time.time()
-        }
-        content_json = json.dumps(message_dict, ensure_ascii=False)
-        
-        # 1. 持久化到 SQLite
-        if persist:
-            try:
-                # 增加 timeout 处理高频写入冲突
-                with sqlite3.connect(self.db_path, timeout=30) as conn:
-                    conn.execute(
-                        "INSERT INTO messages (topic, content, timestamp) VALUES (?, ?, ?)",
-                        (topic, content_json, message_dict["timestamp"])
-                    )
-            except Exception as e:
-                logger.error(f"Failed to persist message to SQLite: {e}")
-
-        # 2. 通过 ZMQ 发布实时消息
-        try:
-            self.socket.send_string(f"{topic} {content_json}")
-        except Exception as e:
-            logger.error(f"Error publishing via ZMQ: {e}")
-
-    def get_history(self, topic: str, since_ts: float = 0, limit: int = 100):
-        """
-        获取历史消息（供 API 调用）
-        """
-        try:
-            with sqlite3.connect(self.db_path, timeout=30) as conn:
-                cursor = conn.execute(
-                    "SELECT content FROM messages WHERE topic = ? AND timestamp > ? ORDER BY timestamp ASC LIMIT ?",
-                    (topic, since_ts, limit)
-                )
-                return [json.loads(row[0]) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error(f"Failed to query message history: {e}")
-            return []
-
-class ZmqSubscriber:
-    """
-    基于 ZeroMQ 的状态订阅者（供前端或 EXE 使用）
-    """
-    def __init__(self, host=None, port=None, topics=None):
-        self.host = host or os.environ.get("ZMQ_HOST", "127.0.0.1")
-        self.port = int(port or os.environ.get("ZMQ_PORT", 5555))
-        self.topics = topics or [""] # 默认订阅所有
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.SUB)
-        self.socket.connect(f"tcp://{self.host}:{self.port}")
-        
-        for topic in self.topics:
-            self.socket.setsockopt_string(zmq.SUBSCRIBE, topic)
-        
-        logger.info(f"ZMQ Subscriber connected to tcp://{self.host}:{self.port}")
-
-    def receive(self, timeout=None):
-        """
-        接收消息
-        """
-        try:
-            if timeout is not None:
-                if not self.socket.poll(timeout):
-                    return None
-            
-            message_str = self.socket.recv_string()
-            # 拆分主题和内容
-            topic, content = message_str.split(" ", 1)
-            return json.loads(content)
-        except Exception as e:
-            logger.error(f"Error receiving message: {e}")
-            return None
-
-# 全局发布者单例
-# 注意：在生产环境中，端口应可配置
-messenger = ZmqPublisher()
