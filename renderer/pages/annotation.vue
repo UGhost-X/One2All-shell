@@ -14,13 +14,9 @@ import {
   Plus,
   Check,
   X,
-  Settings2,
   Palette,
   BookOpen,
-  Maximize,
-  Pin,
-  PinOff,
-  Settings
+  Maximize
 } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { computed } from 'vue'
@@ -66,19 +62,6 @@ const fCanvas = ref<Canvas | null>(null)
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-
-const isPinned = ref(false)
-const togglePin = async () => {
-  if (window.electronAPI) {
-    isPinned.value = await window.electronAPI.toggleAlwaysOnTop()
-  }
-}
-
-const steps = computed(() => [
-  { key: 'annotation', label: t('common.dataAnnotation'), to: '/annotation' },
-  { key: 'training', label: t('common.dataTraining'), to: '/training' },
-  { key: 'deploy', label: t('common.serviceDeployment'), to: '/deploy' }
-])
 
 const productId = ref<number | null>(null)
 const imagePath = ref<string | null>(null)
@@ -1231,50 +1214,7 @@ watch(showLabelPanel, async () => {
 
 <template>
   <div class="flex h-screen bg-background text-foreground overflow-hidden font-sans flex-col">
-    <!-- Top Header -->
-    <header class="h-14 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center px-4 z-20">
-      <div class="flex items-center gap-2">
-        <div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-primary-foreground">
-          <Settings2 class="h-5 w-5" />
-        </div>
-        <h1 class="text-lg font-bold tracking-tight">{{ t('common.appName') }}</h1>
-      </div>
-
-      <div class="flex-1 flex items-center justify-center">
-        <nav class="step-nav">
-          <NuxtLink
-            v-for="(step, index) in steps"
-            :key="step.key"
-            :to="step.to"
-            :class="[
-              'step-item',
-              index === 0 ? 'step-first' : index === steps.length - 1 ? 'step-last' : 'step-middle',
-              route.path === step.to ? 'step-active' : 'step-inactive'
-            ]"
-          >
-            <span class="step-label">{{ step.label }}</span>
-          </NuxtLink>
-        </nav>
-      </div>
-
-      <div class="flex items-center gap-3">
-        <UiButton 
-          variant="ghost" 
-          size="icon" 
-          @click="togglePin"
-          :title="isPinned ? t('common.unpin') : t('common.pin')"
-          :class="{ 'text-primary bg-primary/10': isPinned }"
-        >
-          <component :is="isPinned ? PinOff : Pin" class="h-4 w-4" />
-        </UiButton>
-        
-        <NuxtLink :to="{ path: '/settings', query: { from: route.fullPath } }">
-          <UiButton variant="ghost" size="icon" :title="t('common.settings')">
-            <Settings class="h-4 w-4" />
-          </UiButton>
-        </NuxtLink>
-      </div>
-    </header>
+    <AppHeader />
 
     <div class="flex-1 flex overflow-hidden">
       <!-- Narrow Left Toolbar -->

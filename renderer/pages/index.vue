@@ -334,7 +334,6 @@ onMounted(async () => {
     isPinned.value = await window.electronAPI.isAlwaysOnTop()
     await fetchInitialData()
     
-    // 如果有产品且未选择任何产品，默认选择第一个
     if (products.value.length > 0 && !selectedProductId.value) {
       handleSelectProduct(products.value[0].id)
     }
@@ -348,7 +347,6 @@ const togglePin = async () => {
   }
 }
 
-// Product Actions
 const openProductModal = () => {
   newProductName.value = ''
   newProductModel.value = ''
@@ -716,7 +714,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex flex-col h-screen bg-background text-foreground overflow-hidden">
-    <!-- Header -->
     <header class="h-14 border-b flex items-center px-6 bg-card shrink-0 z-20 shadow-sm">
       <div class="flex items-center gap-2">
         <div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-primary-foreground">
@@ -744,7 +741,10 @@ onBeforeUnmount(() => {
         
         <Separator orientation="vertical" class="h-6 mx-1" />
         
-        <NuxtLink to="/annotation">
+        <NuxtLink 
+          v-if="selectedProductId"
+          :to="{ path: '/annotation', query: { productId: selectedProductId } }"
+        >
           <UiButton variant="default" size="sm" class="h-8">
             {{ t('common.dataAnnotation') }}
           </UiButton>
@@ -752,7 +752,6 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <!-- Body -->
     <div class="flex-1 grid grid-cols-3 overflow-hidden">
       <!-- Main Content Area (Left) -->
       <main class="col-span-2 min-w-0 min-h-0 bg-muted/20 relative overflow-hidden flex flex-col">

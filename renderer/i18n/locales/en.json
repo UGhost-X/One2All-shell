@@ -1,6 +1,7 @@
 {
   "common": {
     "appName": "One2All Console",
+    "home": "Home",
     "dashboard": "Dashboard",
     "dataAnnotation": "Data Annotation",
     "dataTraining": "Data Training",
@@ -247,10 +248,10 @@
       "imagesCount": "{count} images",
       "annotationsCount": "Annotations",
       "annotationsValue": "{count} annotations",
-      "labelSelection": "Label Selection",
-      "noLabels": "No labels available",
-      "selectedLabelsCount": "{count} labels selected",
-      "allLabelsSelected": "Train on all labels if none selected",
+      "labelSelection": "Category Selection",
+      "noLabels": "No categories available",
+      "selectedLabelsCount": "{count} categories selected",
+      "allLabelsSelected": "Train on all categories if none selected",
       "allCategories": "All Categories"
     },
     "monitor": {
@@ -296,6 +297,7 @@
       },
       "statusList": {
         "pending": "Pending",
+        "preparing": "Preparing",
         "starting": "Starting",
         "running": "Running",
         "training": "Training",

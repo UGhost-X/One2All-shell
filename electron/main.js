@@ -519,6 +519,122 @@ app.whenReady().then(() => {
     }
   });
 
+  // Training Record API
+  ipcMain.handle('db:save-training-record', async (event, data) => {
+    try {
+      const existing = await prisma.trainingRecord.findUnique({
+        where: { 
+          taskUuid_labelName: { 
+            taskUuid: data.taskId, 
+            labelName: data.labelName 
+          } 
+        }
+      });
+      
+      if (existing) {
+        const updateData = {
+          status: data.status,
+          progress: data.progress,
+          totalEpochs: data.totalEpochs,
+          currentEpoch: data.currentEpoch,
+          endTime: data.completedAt
+        };
+        if (data.metrics) updateData.metrics = JSON.stringify(data.metrics);
+        if (data.logs) updateData.logs = JSON.stringify(data.logs);
+        return await prisma.trainingRecord.update({
+          where: { 
+            taskUuid_labelName: { 
+              taskUuid: data.taskId, 
+              labelName: data.labelName 
+            } 
+          },
+          data: updateData
+        });
+      } else {
+        return await prisma.trainingRecord.create({
+          data: {
+            productId: data.productId,
+            taskUuid: data.taskId,
+            labelName: data.labelName,
+            modelName: data.modelName || 'STFPM',
+            config: '{}',
+            status: data.status || 'pending',
+            progress: data.progress || 0,
+            totalEpochs: data.totalEpochs,
+            currentEpoch: data.currentEpoch,
+            metrics: JSON.stringify(data.metrics || []),
+            logs: JSON.stringify(data.logs || []),
+            outputPath: data.outputPath,
+            startTime: data.startedAt,
+            endTime: data.completedAt
+          }
+        });
+      }
+    } catch (err) {
+      console.error('Failed to save training record:', err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('db:get-training-records', async (event, productId) => {
+    try {
+      const records = await prisma.trainingRecord.findMany({
+        where: { productId },
+        orderBy: { createdAt: 'desc' }
+      });
+      
+      return records.map(r => ({
+        ...r,
+        metrics: JSON.parse(r.metrics || '[]'),
+        logs: JSON.parse(r.logs || '[]')
+      }));
+    } catch (err) {
+      console.error('Failed to get training records:', err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('db:get-training-record', async (event, { taskId, labelName }) => {
+    try {
+      const record = await prisma.trainingRecord.findUnique({
+        where: { 
+          taskUuid_labelName: { 
+            taskUuid: taskId, 
+            labelName: labelName 
+          } 
+        }
+      });
+      
+      if (record) {
+        return {
+          ...record,
+          metrics: JSON.parse(record.metrics || '[]'),
+          logs: JSON.parse(record.logs || '[]')
+        };
+      }
+      return record;
+    } catch (err) {
+      console.error('Failed to get training record:', err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('db:delete-training-record', async (event, { taskId, labelName }) => {
+    try {
+      return await prisma.trainingRecord.delete({
+        where: { 
+          taskUuid_labelName: { 
+            taskUuid: taskId, 
+            labelName: labelName 
+          } 
+        }
+      });
+    } catch (err) {
+      console.error('Failed to delete training record:', err);
+      throw err;
+    }
+  });
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

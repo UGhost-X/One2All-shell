@@ -68,3 +68,30 @@ model Camera {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model TrainingRecord {
+  id              Int       @id @default(autoincrement())
+  productId       Int
+  taskUuid        String
+  labelName       String
+  modelName       String
+  config          String
+  status          String    @default("pending")
+  progress        Float     @default(0)
+  totalEpochs     Int?
+  currentEpoch    Int?
+  latestIter      Int?
+  metrics         String    @default("[]")
+  logs            String    @default("[]")
+  startTime       DateTime?
+  endTime         DateTime?
+  hasBestModel    Boolean   @default(false)
+  outputPath      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@unique([taskUuid, labelName])
+  @@index([productId])
+  @@index([taskUuid])
+  @@index([status])
+}

@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveDatasetVersion: (data) => ipcRenderer.invoke('db:save-dataset-version', data),
   getDatasetVersions: (productId) => ipcRenderer.invoke('db:get-dataset-versions', productId),
   deleteDatasetVersion: (id) => ipcRenderer.invoke('db:delete-dataset-version', id),
+  // Training Records
+  saveTrainingRecord: (data) => ipcRenderer.invoke('db:save-training-record', data),
+  getTrainingRecords: (productId) => ipcRenderer.invoke('db:get-training-records', productId),
+  getTrainingRecord: (taskId, labelName) => ipcRenderer.invoke('db:get-training-record', { taskId, labelName }),
+  deleteTrainingRecord: (taskId, labelName) => ipcRenderer.invoke('db:delete-training-record', { taskId, labelName }),
 });
 
 window.addEventListener('DOMContentLoaded', () => {

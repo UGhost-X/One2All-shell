@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, Settings2, Pin, PinOff, Settings, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -42,21 +42,8 @@ definePageMeta({ keepalive: true })
 const { t } = useI18n()
 const route = useRoute()
 
-const isPinned = ref(false)
-const togglePin = async () => {
-  if (window.electronAPI) {
-    isPinned.value = await window.electronAPI.toggleAlwaysOnTop()
-  }
-}
-
 const config = useRuntimeConfig()
 const toast = inject<any>('toast')
-
-const steps = computed(() => [
-  { key: 'annotation', label: t('common.dataAnnotation'), to: '/annotation' },
-  { key: 'training', label: t('common.dataTraining'), to: '/training' },
-  { key: 'deploy', label: t('common.serviceDeployment'), to: '/deploy' }
-])
 
 const innerStep = ref<'augment' | 'train' | 'monitor'>('augment')
 
@@ -265,7 +252,6 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
       throw new Error(saveResult.error)
     }
   } catch (err: any) {
-    console.error('Save dataset error:', err)
     toast?.error(`${t('training.view.saveFailed')}: ${err.message}`)
   } finally {
     isSavingDataset.value = false
@@ -386,10 +372,26 @@ const loadTaskSnapshot = async (taskId: string) => {
   if (!taskId) return
   try {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
-    const url = `${apiBase.replace(/\/$/, '')}/train/status/${encodeURIComponent(taskId)}`
-    const res = await fetch(url)
+    const historyUrl = `${apiBase.replace(/\/$/, '')}/train/history/${encodeURIComponent(taskId)}`
+    const res = await fetch(historyUrl)
     if (!res.ok) return
     const data = await res.json()
+    
+    if (data.logs && Array.isArray(data.logs)) {
+      groupLogs.value[taskId] = data.logs.map((x: any) => String(x))
+      if (monitorTaskId.value === taskId) {
+        monitorLogs.value = groupLogs.value[taskId]
+      }
+    }
+    
+    if (data.metrics && Array.isArray(data.metrics)) {
+      mergeMetricPoints(taskId, data.metrics, 'replace')
+    }
+    
+    if (data.eval_metrics && Array.isArray(data.eval_metrics)) {
+      groupEvalMetrics.value[taskId] = data.eval_metrics
+    }
+    
     applyMonitorPayload(taskId, data)
   } catch {
   }
@@ -497,9 +499,6 @@ const batchCancel = async () => {
       const apiBase = config.public.apiBase || 'http://localhost:8000'
       const url = `${apiBase.replace(/\/$/, '')}/train/stop/${id}`
       const res = await fetch(url, { method: 'POST' })
-      if (!res.ok) {
-        console.error(`Failed to stop task ${id}:`, await res.text())
-      }
     }))
     selectedTaskIds.value.clear()
     toast?.success(t('training.monitor.batchCancelSuccess'))
@@ -572,20 +571,43 @@ const monitorProgress = ref(0)
 const monitorLogs = ref<string[]>([])
 const groupMetrics = ref<Record<string, any[]>>({})
 const groupLogs = ref<Record<string, string[]>>({})
+const groupEvalMetrics = ref<Record<string, any[]>>({})
 const selectedEpoch = ref<number | null>(null)
 const taskTargetEpochs = ref<Record<string, number>>({})
 let monitorEventSources: Record<string, EventSource> = {}
 let groupPollingTimer: any = null
 
+const currentTaskStatus = computed(() => {
+  if (monitorTaskId.value && monitorTaskId.value !== 'all') {
+    const task = trainTasks.value.find(t => t.task_id === monitorTaskId.value)
+    return task?.status || monitorStatus.value
+  }
+  return monitorStatus.value
+})
+
+const currentStatusDisplay = computed(() => normalizeStatus(currentTaskStatus.value))
+const groupStatusDisplay = computed(() => normalizeStatus(monitorGroupStatus.value))
+
+const hasRunningTasks = computed(() => {
+  return trainTasks.value.some(t => isMonitorRunning(t.status))
+})
+
 const isMonitorRunning = (status?: string) => {
   const s = String(status || '').toLowerCase()
-  return s === 'running' || s === 'training' || s === 'starting' || s === 'pending'
+  return s === 'running' || s === 'training' || s === 'starting' || s === 'preparing' || s === 'pending' || s === 'waiting'
+}
+
+const normalizeStatus = (status?: string): string => {
+  const s = String(status || '').toLowerCase()
+  if (s === 'waiting') return 'pending'
+  if (s === 'running') return 'training'
+  return s
 }
 
 const getStatusColor = (status?: string) => {
-  const s = String(status || '').toLowerCase()
+  const s = normalizeStatus(status)
   if (s === 'completed' || s === 'success') return 'bg-green-500'
-  if (s === 'running' || s === 'training' || s === 'starting') return 'bg-blue-500'
+  if (s === 'running' || s === 'training' || s === 'starting' || s === 'preparing') return 'bg-blue-500'
   if (s === 'failed' || s === 'error') return 'bg-red-500'
   if (s === 'canceled' || s === 'stopped' || s === 'aborted') return 'bg-gray-400'
   return 'bg-gray-400'
@@ -593,8 +615,8 @@ const getStatusColor = (status?: string) => {
 
 const getStatusClass = (status?: string) => {
   const color = getStatusColor(status)
-  const s = String(status || '').toLowerCase()
-  const isRunning = s === 'running' || s === 'training' || s === 'starting'
+  const s = normalizeStatus(status)
+  const isRunning = s === 'running' || s === 'training' || s === 'starting' || s === 'preparing'
   return `${color} ${isRunning ? 'animate-pulse' : ''}`
 }
 
@@ -612,16 +634,36 @@ const startGroupPolling = () => {
         monitorGroupProgress.value = isGroupCompleted ? 100 : (data.progress || 0)
         monitorGroupStatus.value = data.status || ''
         if (Array.isArray(data.tasks)) {
-          // Update individual task status/progress in the list
           trainTasks.value = trainTasks.value.map(t => {
             const remote = data.tasks.find((rt: any) => rt.task_id === t.task_id)
             if (remote) {
               const isTaskCompleted = String(remote.status || '').toLowerCase() === 'completed' || String(remote.status || '').toLowerCase() === 'success'
               
-              // 同步任务的目标轮数
               const targetE = Number(remote.total_epochs || (remote.config?.train_epochs) || (remote.config?.epochs))
               if (Number.isFinite(targetE) && targetE > 0) {
                 taskTargetEpochs.value[t.task_id] = targetE
+              }
+
+              if (productId.value && window.electronAPI && trainTaskUuid.value) {
+                const taskMetrics = groupMetrics.value[t.task_id] || []
+                const taskLogs = groupLogs.value[t.task_id] || []
+                // 转换为可序列化的纯对象
+                const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
+                const serializableLogs = taskLogs.map((log: any) => String(log))
+                window.electronAPI.saveTrainingRecord({
+                  productId: productId.value,
+                  taskId: trainTaskUuid.value,
+                  labelName: t.label,
+                  modelName: remote.model_name,
+                  status: remote.status,
+                  progress: isTaskCompleted ? 100 : (remote.progress != null ? Number(remote.progress) : t.progress),
+                  totalEpochs: targetE,
+                  currentEpoch: remote.current_epoch,
+                  metrics: serializableMetrics,
+                  logs: serializableLogs,
+                  startedAt: remote.started_at ? new Date(remote.started_at) : undefined,
+                  completedAt: isTaskCompleted ? new Date() : undefined
+                }).catch(console.error)
               }
 
               return { 
@@ -634,7 +676,6 @@ const startGroupPolling = () => {
           })
         }
         const s = String(data.status || '').toLowerCase()
-        // Check if all tasks are finished
         const allTasksFinished = trainTasks.value.length > 0 && trainTasks.value.every(t => {
           const ts = String(t.status || '').toLowerCase()
           return ['completed', 'success', 'failed', 'stopped', 'canceled', 'interrupted', 'error', 'aborted'].includes(ts)
@@ -642,8 +683,7 @@ const startGroupPolling = () => {
 
         if (s === 'completed' || s === 'failed' || s === 'success' || s === 'stopped' || s === 'canceled' || s === 'interrupted' || allTasksFinished) {
           stopGroupPolling()
-          closeMonitorStream() // Close all SSE connections
-          // Clear persistence when group is finished
+          closeMonitorStream()
           if (typeof window !== 'undefined') {
             window.localStorage.removeItem(trainGroupIdStorageKey.value)
             window.localStorage.removeItem(trainTasksStorageKey.value)
@@ -880,20 +920,49 @@ const targetTotalEpochs = computed(() => {
 
 const projectDatasets = ref<any[]>([])
 const projectModels = ref<any[]>([])
+const trainingRecords = ref<any[]>([])
+
+const formatDate = (date: any) => {
+  const d = date ? new Date(date) : new Date()
+  if (isNaN(d.getTime())) {
+    return ''
+  }
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  const seconds = String(d.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+const getRecordForTask = (taskUuid: string, labelName?: string) => {
+  if (labelName) {
+    return trainingRecords.value.find(r => r.taskUuid === taskUuid && r.labelName === labelName)
+  }
+  return trainingRecords.value.find(r => r.taskUuid === taskUuid)
+}
 
 const groupedResults = computed(() => {
   const groups: Record<string, {
     id: string;
     task_uuid: string;
+    displayName: string;
+    createdAt: Date | null;
     datasets: any[];
     models: any[];
   }> = {}
 
   const getGroup = (task_uuid: string) => {
     if (!groups[task_uuid]) {
+      const record = getRecordForTask(task_uuid)
+      const dateStr = formatDate(record?.createdAt)
+      const displayName = `${dateStr}@${task_uuid}`
       groups[task_uuid] = {
         id: task_uuid,
         task_uuid,
+        displayName,
+        createdAt: record?.createdAt || null,
         datasets: [],
         models: []
       }
@@ -908,10 +977,25 @@ const groupedResults = computed(() => {
 
   for (const md of projectModels.value) {
     const uuid = md.task_uuid || 'unknown'
-    getGroup(uuid).models.push(md)
+    const record = getRecordForTask(uuid, md.label)
+    getGroup(uuid).models.push({
+      ...md,
+      record,
+      files: (md.files || []).filter((f: any) => {
+        const name = (f.name || '').toLowerCase()
+        const isLog = name.includes('log') || name.includes('vdl')
+        const isIter = name.includes('iter_')
+        return !isLog && !isIter
+      })
+    })
   }
 
-  return Object.values(groups)
+  return Object.values(groups).sort((a, b) => {
+    if (!a.createdAt && !b.createdAt) return 0
+    if (!a.createdAt) return 1
+    if (!b.createdAt) return -1
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
 })
 
 const datasetCardRefs = ref<Record<string, HTMLElement | null>>({})
@@ -971,6 +1055,11 @@ const fetchProjectResults = async () => {
   if (!productId.value) return
   try {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
+    
+    // Fetch Training Records from DB
+    if (window.electronAPI) {
+      trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
+    }
     
     // Fetch Datasets
     const resDatasets = await fetch(`${apiBase.replace(/\/$/, '')}/project/${productId.value}/datasets`)
@@ -1376,7 +1465,6 @@ const openMonitorStream = (taskId: string) => {
   if (!taskId || monitorEventSources[taskId]) return
   const apiBase = config.public.apiBase || 'http://localhost:8000'
   const url = `${apiBase.replace(/\/$/, '')}/train/events/${encodeURIComponent(taskId)}`
-  console.log(`[openMonitorStream] Opening stream for task: ${taskId}, URL: ${url}`)
   const es = new EventSource(url)
   monitorEventSources[taskId] = es
   
@@ -1390,6 +1478,8 @@ const openMonitorStream = (taskId: string) => {
   es.addEventListener('log', onAnyEvent as any)
   es.addEventListener('progress', onAnyEvent as any)
   es.addEventListener('status', onAnyEvent as any)
+  es.addEventListener('eval_metrics', onAnyEvent as any)
+  es.addEventListener('eval_metric', onAnyEvent as any)
   es.onerror = () => {
     closeMonitorStream(taskId)
   }
@@ -1416,7 +1506,6 @@ const normalizeToArray = (v: any): any[] | null => {
 
 const mergeMetricPoints = (taskId: string, incoming: any[], mode: 'replace' | 'append') => {
   if (!taskId) return
-  console.log(`[mergeMetricPoints] Merging for task: ${taskId}, mode: ${mode}, incoming count: ${incoming?.length}`)
   const current = groupMetrics.value[taskId] || []
   const base = mode === 'replace' ? [] : current
   const merged = base.concat(incoming || [])
@@ -1430,7 +1519,12 @@ const mergeMetricPoints = (taskId: string, incoming: any[], mode: 'replace' | 'a
       if (seen.has(key)) continue
       seen.add(key)
     }
-    out.push(m)
+    out.push({
+      ...m,
+      epoch: epoch,
+      iter: iter,
+      loss: Number((m as any)?.loss)
+    })
   }
   groupMetrics.value[taskId] = out
 }
@@ -1446,8 +1540,6 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
   }
 
   const isCurrentTask = taskId === monitorTaskId.value
-
-  // console.log(`[applyMonitorPayload] Received data for task: ${taskId}, isCurrent: ${isCurrentTask}`, data)
 
   if (data && typeof data === 'object') {
     if (isCurrentTask && typeof data.status === 'string') monitorStatus.value = data.status
@@ -1478,7 +1570,6 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
 
   const logsArr = normalizeToArray(logsCandidate)
   if (logsArr && logsArr.length > 0) {
-    console.log(`[applyMonitorPayload] Appending logs for ${taskId}:`, logsArr)
     const newLogs = logsArr.map((x: any) => String(x))
     if (!groupLogs.value[taskId]) groupLogs.value[taskId] = []
     groupLogs.value[taskId] = groupLogs.value[taskId].concat(newLogs)
@@ -1486,7 +1577,6 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
       monitorLogs.value = groupLogs.value[taskId]
     }
   } else if (typeof logsCandidate === 'string' && logsCandidate.trim()) {
-    console.log(`[applyMonitorPayload] Appending log for ${taskId}:`, logsCandidate)
     if (!groupLogs.value[taskId]) groupLogs.value[taskId] = []
     groupLogs.value[taskId].push(logsCandidate)
     if (isCurrentTask) {
@@ -1506,6 +1596,20 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
     mergeMetricPoints(taskId, metricsArr, mode)
   } else if (Array.isArray(data)) {
     mergeMetricPoints(taskId, data, 'replace')
+  }
+
+  const evalMetricsCandidate =
+    data?.new_eval_metrics ??
+    data?.eval_metrics ??
+    data?.eval_metric ??
+    data?.new_eval_metric
+
+  const evalMetricsArr = normalizeToArray(evalMetricsCandidate)
+  if (evalMetricsArr && evalMetricsArr.length > 0) {
+    const mode: 'replace' | 'append' = data?.new_eval_metrics != null || data?.new_eval_metric != null ? 'append' : 'replace'
+    const current = groupEvalMetrics.value[taskId] || []
+    const base = mode === 'replace' ? [] : current
+    groupEvalMetrics.value[taskId] = base.concat(evalMetricsArr)
   }
 }
 
@@ -1767,6 +1871,24 @@ const startTraining = async () => {
     trainGroupId.value = data.group_id || ''
     trainTaskUuid.value = data.task_uuid || ''
     trainTasks.value = Array.isArray(data.tasks) ? data.tasks : []
+    
+    // 为每个分类独立保存训练记录
+    if (productId.value && window.electronAPI && trainTaskUuid.value) {
+      for (const t of trainTasks.value) {
+        window.electronAPI.saveTrainingRecord({
+          productId: productId.value,
+          taskId: trainTaskUuid.value,
+          labelName: t.label,
+          modelName: trainModelName.value || 'STFPM',
+          status: 'pending',
+          progress: 0,
+          totalEpochs: finalEpochs,
+          currentEpoch: 0,
+          startedAt: new Date()
+        }).catch(console.error)
+      }
+    }
+    
     await Promise.all(trainTasks.value.map(t => loadTaskSnapshot(String((t as any)?.task_id || ''))))
     monitorTaskId.value = 'all'
     activeMonitorTab.value = 'overview'
@@ -2387,6 +2509,16 @@ onMounted(async () => {
   if (qProductId) productId.value = Number(qProductId)
   if (qProductName) productName.value = String(qProductName)
 
+  // 加载训练记录
+  if (productId.value && window.electronAPI) {
+    trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
+  }
+
+  // 如果是从标注页面跳转过来的，强制跳转到第1个节点（augment）
+  if (qImagePath) {
+    innerStep.value = 'augment'
+  }
+
   if (productId.value && window.electronAPI) {
     const files = await window.electronAPI.getProductImages(productId.value)
     if (files && files.length > 0) {
@@ -2442,49 +2574,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex flex-col h-screen bg-background text-foreground overflow-hidden">
-    <header class="h-14 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center px-4 z-20">
-      <div class="flex items-center gap-2">
-        <div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-primary-foreground">
-          <Settings2 class="h-5 w-5" />
-        </div>
-        <h1 class="text-lg font-bold tracking-tight">{{ t('common.appName') }}</h1>
-      </div>
-
-      <div class="flex-1 flex items-center justify-center">
-        <nav class="step-nav">
-          <NuxtLink
-            v-for="(step, index) in steps"
-            :key="step.key"
-            :to="step.to"
-            :class="[
-              'step-item',
-              index === 0 ? 'step-first' : index === steps.length - 1 ? 'step-last' : 'step-middle',
-              route.path === step.to ? 'step-active' : 'step-inactive'
-            ]"
-          >
-            <span class="step-label">{{ step.label }}</span>
-          </NuxtLink>
-        </nav>
-      </div>
-
-      <div class="flex items-center gap-3">
-        <UiButton 
-          variant="ghost" 
-          size="icon" 
-          @click="togglePin"
-          :title="isPinned ? t('common.unpin') : t('common.pin')"
-          :class="{ 'text-primary bg-primary/10': isPinned }"
-        >
-          <component :is="isPinned ? PinOff : Pin" class="h-4 w-4" />
-        </UiButton>
-        
-        <NuxtLink :to="{ path: '/settings', query: { from: route.fullPath } }">
-          <UiButton variant="ghost" size="icon" :title="t('common.settings')">
-            <Settings class="h-4 w-4" />
-          </UiButton>
-        </NuxtLink>
-      </div>
-    </header>
+    <AppHeader />
 
     <main class="flex-1 flex flex-col min-h-0 overflow-hidden bg-muted/20 p-8">
       <div class="max-w-[1400px] mx-auto w-full h-full flex flex-col space-y-6">
@@ -2498,7 +2588,7 @@ onBeforeUnmount(() => {
           </button>
           <div class="h-[2px] w-40 bg-border"></div>
           <button
-            class="w-12 h-12 rounded-full border flex items-center justify-center text-lg font-bold"
+            class="w-16 h-16 rounded-full border flex items-center justify-center text-lg font-bold"
             :class="innerStep === 'train' ? 'bg-primary text-primary-foreground border-primary' : ''"
             @click="innerStep = 'train'"
           >
@@ -2536,17 +2626,13 @@ onBeforeUnmount(() => {
                 <div v-for="group in groupedResults" :key="group.id" class="space-y-4">
                   <div class="flex items-center gap-3">
                      <div class="flex items-center gap-2 bg-muted/50 px-3 py-1 rounded-md border text-xs font-mono text-muted-foreground">
-                        <span class="font-bold text-foreground">{{ group.task_uuid }}</span>
+                        <span class="font-bold text-foreground">{{ group.displayName }}</span>
                      </div>
                      <div class="h-px bg-border/50 flex-1"></div>
                   </div>
                   
                   <div class="space-y-4 pl-4 border-l-2 border-muted/30 ml-2">
-                    <div v-if="group.datasets.length > 0" class="space-y-2">
-                       <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                         <Database class="w-3 h-3" /> 数据集快照
-                       </div>
-                       
+                    <div v-if="group.datasets.length > 0" class="space-y-2">                       
                        <div class="relative" :ref="(el) => setDatasetContainerRef(el, group.id)">
                          <div class="flex flex-wrap gap-4">
                             <div 
@@ -2626,7 +2712,7 @@ onBeforeUnmount(() => {
                 <div v-for="group in groupedResults" :key="group.id" class="space-y-4">
                   <div class="flex items-center gap-3">
                      <div class="flex items-center gap-2 bg-muted/50 px-3 py-1 rounded-md border text-xs font-mono text-muted-foreground">
-                        <span class="font-bold text-foreground">{{ group.task_uuid }}</span>
+                        <span class="font-bold text-foreground">{{ group.displayName }}</span>
                      </div>
                      <div class="h-px bg-border/50 flex-1"></div>
                   </div>
@@ -2696,10 +2782,9 @@ onBeforeUnmount(() => {
                                       class="flex items-center gap-2 p-2 rounded border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-decoration-none group/file"
                                     >
                                       <div class="w-6 h-6 rounded bg-muted flex items-center justify-center shrink-0 group-hover/file:bg-background border transition-colors">
-                                        <component 
-                                          :is="f.type === 'best_model' ? 'Award' : f.type === 'log' ? 'FileText' : f.type === 'vdl_log' ? 'Activity' : 'Save'" 
-                                          class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" 
-                                        />
+                                        <Award v-if="f.type === 'best_model'" class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" />
+                                        <FileText v-else-if="f.type === 'log' || f.type === 'vdl_log'" class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" />
+                                        <Save v-else class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" />
                                       </div>
                                       <div class="flex-1 min-w-0">
                                         <div class="text-[10px] font-medium truncate" :title="f.name">{{ f.name }}</div>
@@ -3225,23 +3310,12 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="grid grid-cols-2 gap-3">
-                <div class="space-y-1">
-                  <Label class="text-xs">{{ t('training.train.projectId') }}</Label>
-                  <Input :model-value="String(productId ?? '')" disabled class="h-9 text-xs px-2" />
-                </div>
-                <div class="space-y-1">
-                  <Label class="text-xs">{{ t('training.train.projectVersion') }}</Label>
-                  <Input v-model="trainProjectVersion" class="h-9 text-xs px-2" />
-                </div>
-              </div>
-
               <div class="space-y-1">
                 <div class="flex justify-between">
                   <Label>{{ trainStartMode === 'resume' && resumeMode === 'extended' ? t('training.train.epochsAdditional') : t('training.train.epochs') }}</Label>
                   <span class="text-xs font-medium">{{ trainConfig.epochs[0] }}</span>
                 </div>
-                <Slider v-model="trainConfig.epochs" :min="1" :max="1000" />
+                <Slider v-model="trainConfig.epochs" :min="1" :max="200" />
                 <div v-if="trainStartMode === 'resume' && resumeMode === 'interrupted'" class="text-[9px] text-amber-600 dark:text-amber-400">
                   {{ t('training.train.resumeModeHint') }}
                 </div>
@@ -3279,9 +3353,16 @@ onBeforeUnmount(() => {
 
             <div class="mt-auto pt-4 shrink-0">
               <Separator class="mb-4" />
-              <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || trainDatasetResults.length === 0">
-                {{ isTrainingStarting ? t('training.train.starting') : t('training.train.start') }}
-              </UiButton>
+              <template v-if="hasRunningTasks">
+                <UiButton class="w-full" variant="destructive" @click="stopGroup" :disabled="isStoppingGroup">
+                  {{ isStoppingGroup ? t('training.train.stoppingGroup') : t('training.monitor.stopGroup') }}
+                </UiButton>
+              </template>
+              <template v-else>
+                <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || trainDatasetResults.length === 0">
+                  {{ isTrainingStarting ? t('training.train.starting') : t('training.train.start') }}
+                </UiButton>
+              </template>
             </div>
           </aside>
           <section class="flex flex-col gap-4 min-h-0 h-full overflow-hidden">
@@ -3333,16 +3414,16 @@ onBeforeUnmount(() => {
                     <div class="flex justify-between items-start relative z-10">
                       <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.status') }}</span>
                       <div class="flex items-center gap-1.5">
-                        <div class="w-2 h-2 rounded-full animate-pulse-slow" :class="getStatusClass(monitorTaskId && monitorTaskId !== 'all' ? trainTasks.find(t => t.task_id === monitorTaskId)?.status : monitorStatus)"></div>
+                        <div class="w-2 h-2 rounded-full animate-pulse-slow" :class="getStatusClass(currentTaskStatus)"></div>
                       </div>
                     </div>
                     <div class="relative z-10">
                       <div class="text-2xl font-black tracking-tight text-foreground capitalize truncate">
-                        {{ t('training.monitor.statusList.' + ((monitorTaskId && monitorTaskId !== 'all' ? trainTasks.find(t => t.task_id === monitorTaskId)?.status : monitorStatus)?.toLowerCase() || 'pending')) }}
+                        {{ t('training.monitor.statusList.' + (currentStatusDisplay || 'pending')) }}
                       </div>
                       <div class="mt-2 text-[10px] text-muted-foreground flex items-center gap-1.5 font-medium">
                         <span class="w-1.5 h-1.5 rounded-full bg-primary/30"></span>
-                        {{ t('training.monitor.groupLabel') }}: {{ t('training.monitor.statusList.' + (monitorGroupStatus?.toLowerCase() || 'pending')) }}
+                        {{ t('training.monitor.groupLabel') }}: {{ t('training.monitor.statusList.' + (groupStatusDisplay || 'pending')) }}
                       </div>
                     </div>
                   </div>
@@ -3420,7 +3501,7 @@ onBeforeUnmount(() => {
                       <div class="p-5 flex items-center gap-8 cursor-pointer" @click="if(monitorTaskId !== tItem.task_id) { monitorTaskId = tItem.task_id; loadTaskSnapshot(tItem.task_id) }">
                         <div class="flex items-center gap-4 w-48 shrink-0">
                           <!-- 批量选择框 -->
-                          <div v-if="['pending', 'running', 'training', 'starting'].includes(tItem.status?.toLowerCase() || '')"
+                          <div v-if="['pending', 'waiting', 'preparing', 'running', 'training', 'starting'].includes(tItem.status?.toLowerCase() || '')"
                                class="w-4 h-4 rounded border bg-background flex items-center justify-center transition-colors shrink-0"
                                :class="[selectedTaskIds.has(tItem.task_id) ? 'bg-primary border-primary' : 'border-muted-foreground/30 hover:border-primary/50']"
                                @click.stop="toggleTaskSelection(tItem.task_id)">
@@ -3434,7 +3515,7 @@ onBeforeUnmount(() => {
                         <div class="flex-1 grid grid-cols-[1fr_100px] items-center gap-10">
                           <div class="space-y-2">
                             <div class="flex justify-between text-[10px]">
-                              <span class="text-muted-foreground uppercase font-bold tracking-wider">{{ t('training.monitor.statusList.' + (tItem.status?.toLowerCase() || 'pending')) }}</span>
+                              <span class="text-muted-foreground uppercase font-bold tracking-wider">{{ t('training.monitor.statusList.' + (normalizeStatus(tItem.status) || 'pending')) }}</span>
                               <span class="font-black text-primary">{{ normalizeProgressPercent(tItem.progress, tItem.status) }}%</span>
                             </div>
                             <Progress :model-value="normalizeProgressPercent(tItem.progress, tItem.status)" class="h-2 rounded-full bg-primary/10 overflow-hidden" />
@@ -3442,7 +3523,7 @@ onBeforeUnmount(() => {
                           <div class="flex items-center justify-end gap-2 shrink-0 w-[80px]">
                             <!-- 终止按钮：在等待中/训练中/启动中显示 -->
                             <UiButton 
-                              v-if="['pending', 'running', 'training', 'starting'].includes(tItem.status?.toLowerCase() || '')"
+                              v-if="['pending', 'waiting', 'preparing', 'running', 'training', 'starting'].includes(tItem.status?.toLowerCase() || '')"
                               variant="ghost" 
                               size="icon" 
                               class="h-9 w-9 text-destructive hover:bg-destructive/10 rounded-full transition-colors"
@@ -3484,7 +3565,7 @@ onBeforeUnmount(() => {
                           </div>
                         </div>
                         <div class="h-[350px] w-full relative bg-background/50 rounded-2xl border border-border/50 shadow-inner p-4">
-                          <Line :key="tItem.task_id" :data="combinedChartData" :options="chartOptions" :plugins="[epochLinesPlugin]" />
+                          <Line :data="combinedChartData" :options="chartOptions" :plugins="[epochLinesPlugin]" />
                         </div>
                       </div>
                     </div>

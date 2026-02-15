@@ -1,6 +1,7 @@
 {
   "common": {
     "appName": "One2All 控制台",
+    "home": "主页",
     "dashboard": "仪表盘",
     "dataAnnotation": "数据标注",
     "dataTraining": "数据训练",
@@ -263,10 +264,10 @@
       "imagesCount": "{count} 张",
       "annotationsCount": "标注数量",
       "annotationsValue": "{count} 个标注",
-      "labelSelection": "训练标签选择",
-      "noLabels": "暂无标签可供选择",
-      "selectedLabelsCount": "已选择 {count} 个标签",
-      "allLabelsSelected": "未选择标签将训练全部",
+      "labelSelection": "训练类别",
+      "noLabels": "暂无类别可供选择",
+      "selectedLabelsCount": "已选择 {count} 个类别",
+      "allLabelsSelected": "未选择类别将训练全部",
       "allCategories": "所有分类"
     },
     "monitor": {
@@ -311,6 +312,7 @@
       },
       "statusList": {
         "pending": "等待中",
+        "preparing": "准备中",
         "starting": "启动中",
         "running": "训练中",
         "training": "训练中",

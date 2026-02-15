@@ -32,6 +32,39 @@ declare global {
       saveDatasetVersion: (data: any) => Promise<any>
       getDatasetVersions: (productId: number) => Promise<any[]>
       deleteDatasetVersion: (id: number | string) => Promise<any>
+      saveTrainingRecord: (data: TrainingRecordData) => Promise<any>
+      getTrainingRecords: (productId: number) => Promise<TrainingRecord[]>
+      getTrainingRecord: (taskId: string) => Promise<TrainingRecord | null>
+      deleteTrainingRecord: (taskId: string) => Promise<any>
     }
   }
+}
+
+interface TrainingRecordData {
+  productId: number
+  taskId: string
+  labelName?: string
+  modelName?: string
+  status?: string
+  progress?: number
+  totalEpochs?: number
+  currentEpoch?: number
+  outputPath?: string
+  startedAt?: Date
+  completedAt?: Date
+}
+
+interface TrainingRecord extends TrainingRecordData {
+  id: number
+  taskUuid: string
+  datasetVersionId?: number
+  labelNames: string
+  config: string
+  latestIter?: number
+  startTime?: Date
+  endTime?: Date
+  hasBestModel: boolean
+  logPath?: string
+  createdAt: Date
+  updatedAt: Date
 }

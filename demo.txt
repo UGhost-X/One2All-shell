@@ -522,27 +522,24 @@ async def stop_group_train(group_id: str):
     return result
 
 @app.get("/train/events/{task_id}")
-async def train_events(task_id: str, auto_delete: bool = True):
+async def train_events(task_id: str):
     """
     SSE 实时推送训练进度和日志
-    :param auto_delete: 是否在读取历史消息后自动删除数据库中的记录
+    状态从 trainer 内存中直接获取，无需 ZeroMQ
     """
     async def event_generator():
         last_log_idx = 0
         while True:
-            # 1. 从 trainer 获取当前状态
+            # 从 trainer 获取当前状态（内存）
             status = trainer.get_status(task_id)
-            
-            # 2. 从消息队列获取历史消息（如果需要自动删除，可以通过 messenger.get_history）
-            # 注意：这里的 status.logs 已经包含了内存中的日志
-            # 如果前端是通过 SSE 持续订阅，我们通常不需要在这里删除
             
             data = {
                 "status": status.get("status"),
                 "progress": status.get("progress", 0),
                 "label": status.get("label"),
                 "new_logs": [],
-                "metrics": status.get("metrics", [])
+                "metrics": status.get("metrics", []),
+                "eval_metrics": status.get("eval_metrics", [])
             }
             
             logs = status.get("logs", [])
@@ -553,10 +550,6 @@ async def train_events(task_id: str, auto_delete: bool = True):
             yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             
             if status.get("status") in ["completed", "failed", "not_found"]:
-                # 如果开启了自动删除，可以在任务结束时清理该 topic 的所有消息
-                if auto_delete:
-                    from utils.messaging import messenger
-                    messenger.get_history(f"task_status_{task_id}", limit=9999, delete_after=True)
                 break
                 
             await asyncio.sleep(1)
@@ -607,16 +600,20 @@ async def resume_train_task(task_id: str, resume_path: Optional[str] = None, res
     return result
 
 @app.get("/train/history/{task_id}")
-async def get_task_history(task_id: str, type: str = "log", since_ts: float = 0):
+async def get_task_history(task_id: str):
     """
-    获取任务的历史消息（从持久化数据库中）
-    :param type: 'log' 或 'status'
-    :param since_ts: 获取该时间戳之后的消息
+    获取任务的历史日志（从 trainer 内存中）
     """
-    from utils.messaging import messenger
-    topic = f"task_{type}_{task_id}"
-    history = messenger.get_history(topic, since_ts=since_ts)
-    return {"task_id": task_id, "type": type, "history": history}
+    status = trainer.get_status(task_id)
+    if status.get("status") == "not_found":
+        return {"task_id": task_id, "logs": [], "error": "Task not found"}
+    
+    return {
+        "task_id": task_id,
+        "logs": status.get("logs", []),
+        "metrics": status.get("metrics", []),
+        "eval_metrics": status.get("eval_metrics", [])
+    }
 
 @app.get("/")
 async def root():
@@ -703,3 +700,88 @@ if __name__ == "__main__":
     import uvicorn
     # 使用字符串导入方式 ("main:app") 才能开启 reload=True
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+
+
+
+## 部署模块已重新设计 ✅
+### 新架构
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  一个部署服务 (task_uuid 级别)                                    │
+│                                                                 │
+│  POST /predict → 一张图片                                        │
+│       ↓                                                         │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  并行推理所有模型:                                         │   │
+│  │  - 螺丝模型 → {"status": "ok", "score": 0.95}            │   │
+│  │  - 孔洞模型 → {"status": "abnormal", "score": 0.23}      │   │
+│  │  - 轴模型   → {"status": "ok", "score": 0.88}            │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│       ↓                                                         │
+│  返回综合结果                                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+### API 接口
+方法 路径 功能 GET /deploy/models/{project_id} 列出项目下可部署的模型（按 task_uuid 分组） POST /deploy/start 启动推理服务（包含 task_uuid 下所有模型） POST /deploy/stop/{service_id} 停止服务 DELETE /deploy/{service_id} 删除服务 GET /deploy/status/{service_id} 查询服务状态 GET /deploy/uuid/{task_uuid} 通过 task_uuid 查询服务 GET /deploy/list 列出所有服务
+
+### 使用示例
+1. 查看可部署模型
+
+```
+GET /deploy/models/1
+# 返回:
+{
+  "models": [
+    {
+      "task_uuid": "4c450395",
+      "labels": ["螺丝", "孔洞", "轴"],
+      "model_paths": {...}
+    }
+  ]
+}
+```
+2. 启动服务
+
+```
+POST /deploy/start
+{
+  "project_id": "1",
+  "task_uuid": "4c450395"
+}
+
+# 返回:
+{
+  "status": "success",
+  "service_id": "svc_xxx_4c450395",
+  "port": 9023,
+  "inference_url": "http://localhost:9023",
+  "labels": ["螺丝", "孔洞", "轴"],
+  "model_count": 3
+}
+```
+3. 调用推理
+
+```
+POST http://localhost:9023/predict
+# 上传图片文件
+
+# 返回:
+{
+  "results": {
+    "螺丝": {"mask_shape": [...], "mask_mean": 0.95},
+    "孔洞": {"mask_shape": [...], "mask_mean": 0.23},
+    "轴": {"mask_shape": [...], "mask_mean": 0.88}
+  },
+  "processing_time": 0.15
+}
+```
+4. 指定模型推理
+
+```
+POST http://localhost:9023/predict_base64
+{
+  "image": "base64...",
+  "labels": ["螺丝", "孔洞"]  # 只用指定模型
+}
+```
