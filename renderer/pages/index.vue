@@ -23,7 +23,9 @@ import {
   Power,
   PowerOff,
   Settings,
-  Pencil
+  Pencil,
+  Wand2,
+  Loader2
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
@@ -36,6 +38,12 @@ import TabsContent from '@/components/ui/tabs/TabsContent.vue'
 import TabsList from '@/components/ui/tabs/TabsList.vue'
 import TabsTrigger from '@/components/ui/tabs/TabsTrigger.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
+import UiCard from '@/components/ui/card/Card.vue'
+import UiCardHeader from '@/components/ui/card/CardHeader.vue'
+import UiCardTitle from '@/components/ui/card/CardTitle.vue'
+import UiCardDescription from '@/components/ui/card/CardDescription.vue'
+import UiCardContent from '@/components/ui/card/CardContent.vue'
+import UiCardFooter from '@/components/ui/card/CardFooter.vue'
 
 definePageMeta({ name: 'HomePage' })
 
@@ -315,6 +323,13 @@ const gainValue = ref(1.2)
 const predictionConfidence = ref<number | null>(null)
 const predictionResults = ref<Array<{ label: string; score: number }>>([])
 
+const inferenceServices = ref<Array<{ service_id: string; task_uuid: string; port: number; inference_url: string; labels: string[] }>>([])
+const selectedInferenceService = ref<string>('')
+const isInferring = ref(false)
+const showInferenceModal = ref(false)
+const inferenceImageUrl = ref('')
+const inferenceFileInput = ref<HTMLInputElement | null>(null)
+
 // Modals
 const showProductModal = ref(false)
 const newProductName = ref('')
@@ -331,10 +346,22 @@ const fetchInitialData = async () => {
   }
 }
 
+const fetchInferenceServices = async () => {
+  try {
+    const res = await fetch('/api/deploy/inference-services')
+    const data = await res.json()
+    inferenceServices.value = data.services || []
+  } catch (err) {
+    console.error('Failed to fetch inference services:', err)
+    inferenceServices.value = []
+  }
+}
+
 onMounted(async () => {
   if (window.electronAPI) {
     isPinned.value = await window.electronAPI.isAlwaysOnTop()
     await fetchInitialData()
+    await fetchInferenceServices()
     
     if (products.value.length > 0 && !selectedProductId.value) {
       handleSelectProduct(products.value[0].id)
@@ -695,6 +722,103 @@ const clearResults = () => {
   predictionResults.value = []
 }
 
+const openInferenceModal = () => {
+  if (inferenceServices.value.length === 0) {
+    showToast('当前没有可用的推理服务，请先在部署页面启动服务', 'error')
+    return
+  }
+  inferenceImageUrl.value = mainViewUrl.value || ''
+  selectedInferenceService.value = inferenceServices.value[0]?.service_id || ''
+  showInferenceModal.value = true
+}
+
+const handleInferenceFileChange = async (e: Event) => {
+  const input = e.target as HTMLInputElement | null
+  const file = input?.files?.[0]
+  if (!file) return
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+
+  inferenceImageUrl.value = dataUrl
+  if (input) input.value = ''
+}
+
+const triggerInferenceFileInput = () => {
+  inferenceFileInput.value?.click()
+}
+
+const runInference = async () => {
+  const imageToUse = inferenceImageUrl.value || mainViewUrl.value
+  if (!selectedInferenceService.value || !imageToUse) {
+    showToast('请先选择图片或上传图片', 'error')
+    return
+  }
+
+  isInferring.value = true
+  clearResults()
+
+  try {
+    const res = await fetch('/api/deploy/inference', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: imageToUse,
+        service_id: selectedInferenceService.value
+      })
+    })
+
+    const data = await res.json()
+
+    if (data.status === 'success' && data.result) {
+      const result = data.result
+      if (result.classifications && Array.isArray(result.classifications)) {
+        predictionResults.value = result.classifications.map((c: any) => ({
+          label: c.label || c.class || '未知',
+          score: (c.score || c.confidence || c.probability || 0) * 100
+        }))
+        if (result.classifications.length > 0) {
+          const maxScore = Math.max(...predictionResults.value.map(r => r.score))
+          predictionConfidence.value = maxScore
+        }
+      } else if (result.predictions && Array.isArray(result.predictions)) {
+        predictionResults.value = result.predictions.map((p: any) => ({
+          label: p.label || p.name || '未知',
+          score: (p.score || p.confidence || p.probability || 0) * 100
+        }))
+        if (result.predictions.length > 0) {
+          const maxScore = Math.max(...predictionResults.value.map(r => r.score))
+          predictionConfidence.value = maxScore
+        }
+      } else if (Array.isArray(result)) {
+        predictionResults.value = result.map((r: any) => ({
+          label: r.label || r.class || '未知',
+          score: (r.score || r.confidence || r.probability || 0) * 100
+        }))
+        if (result.length > 0) {
+          const maxScore = Math.max(...predictionResults.value.map(r => r.score))
+          predictionConfidence.value = maxScore
+        }
+      } else {
+        showToast('推理结果格式不正确', 'error')
+      }
+      showToast('推理完成', 'info')
+    } else {
+      showToast(data.message || '推理失败', 'error')
+    }
+  } catch (err: any) {
+    console.error('Inference error:', err)
+    showToast(err.message || '推理请求失败', 'error')
+  } finally {
+    isInferring.value = false
+    showInferenceModal.value = false
+  }
+}
+
 watch(
   () => [mainViewState.value, mainViewUrl.value] as const,
   async ([state, url]) => {
@@ -976,6 +1100,10 @@ onBeforeUnmount(() => {
                 <Upload class="h-4 w-4 text-primary" />
                 {{ t('dashboard.import') }}
               </UiButton>
+              <UiButton variant="default" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2 bg-primary/90 hover:bg-primary" @click="openInferenceModal">
+                <Wand2 class="h-4 w-4" />
+                {{ t('dashboard.inference') }}
+              </UiButton>
             </div>
           </TabsContent>
 
@@ -1155,6 +1283,71 @@ onBeforeUnmount(() => {
     </div>
 
     <input ref="importFileInput" type="file" accept="image/*" class="hidden" @change="handleImportFileChange" />
+
+    <!-- Inference Modal -->
+    <div v-if="showInferenceModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg flex items-center gap-2">
+            <Wand2 class="h-5 w-5 text-primary" />
+            {{ t('dashboard.inferenceTitle') }}
+          </UiCardTitle>
+          <UiCardDescription>
+            {{ t('dashboard.inferenceDesc') }}
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardContent class="space-y-4">
+          <!-- Image Upload Section -->
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.uploadImage') }}</Label>
+            <div 
+              class="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-all"
+              :class="inferenceImageUrl ? 'border-primary bg-primary/5' : 'border-muted hover:border-primary/50'"
+              @click="triggerInferenceFileInput"
+            >
+              <div v-if="inferenceImageUrl" class="space-y-2">
+                <img :src="inferenceImageUrl" class="max-h-32 mx-auto rounded" />
+                <p class="text-[10px] text-muted-foreground">{{ t('dashboard.selectedImage') }}</p>
+              </div>
+              <div v-else class="py-4">
+                <Upload class="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                <p class="text-xs text-muted-foreground">{{ t('dashboard.dragOrClick') }}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Service Selection -->
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.selectService') }}</Label>
+            <div class="grid grid-cols-1 gap-2 max-h-32 overflow-auto">
+              <div
+                v-for="service in inferenceServices"
+                :key="service.service_id"
+                class="p-2 rounded-lg border cursor-pointer transition-all text-xs"
+                :class="selectedInferenceService === service.service_id ? 'border-primary bg-primary/5' : 'border-muted hover:border-primary/50'"
+                @click="selectedInferenceService = service.service_id"
+              >
+                <div class="flex items-center justify-between">
+                  <span class="font-bold">{{ t('dashboard.serviceId') }} #{{ service.service_id.slice(-6) }}</span>
+                  <span class="text-muted-foreground">{{ t('dashboard.port') }}: {{ service.port }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </UiCardContent>
+
+        <UiCardFooter class="gap-2 w-full">
+          <UiButton variant="outline" class="flex-1" @click="showInferenceModal = false" :disabled="isInferring">{{ t('dashboard.cancel') }}</UiButton>
+          <UiButton variant="default" class="flex-1" @click="runInference" :disabled="isInferring">
+            <Loader2 v-if="isInferring" class="h-4 w-4 mr-2 animate-spin" />
+            {{ isInferring ? t('dashboard.inferring') : t('dashboard.inference') }}
+          </UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <input ref="inferenceFileInput" type="file" accept="image/*" class="hidden" @change="handleInferenceFileChange" />
   </div>
 </template>
 

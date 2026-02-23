@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2 } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -372,31 +372,54 @@ const resetMonitorState = (opts?: { clearActive?: boolean }) => {
   }
 }
 
-const loadTaskSnapshot = async (taskId: string) => {
-  if (!taskId) return
+const loadTaskSnapshot = async (taskIdOrUuid: string) => {
+  if (!taskIdOrUuid) return
   try {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
-    const historyUrl = `${apiBase.replace(/\/$/, '')}/train/history/${encodeURIComponent(taskId)}`
+    const taskUuid = trainTaskUuid.value || taskIdOrUuid
+    const historyUrl = `${apiBase.replace(/\/$/, '')}/train/history/${encodeURIComponent(taskUuid)}`
+    console.log('[loadTaskSnapshot] ===== Start =====')
+    console.log('[loadTaskSnapshot] apiBase:', apiBase)
+    console.log('[loadTaskSnapshot] trainTaskUuid.value:', trainTaskUuid.value)
+    console.log('[loadTaskSnapshot] taskIdOrUuid:', taskIdOrUuid)
+    console.log('[loadTaskSnapshot] Final taskUuid:', taskUuid)
+    console.log('[loadTaskSnapshot] Fetching:', historyUrl)
     const res = await fetch(historyUrl)
-    if (!res.ok) return
+    console.log('[loadTaskSnapshot] Response status:', res.status)
+    if (!res.ok) {
+      console.log('[loadTaskSnapshot] Response not ok, returning')
+      return
+    }
     const data = await res.json()
+    console.log('[loadTaskSnapshot] Data received:', JSON.stringify(data).slice(0, 1000))
+    console.log('[loadTaskSnapshot] Has logs:', !!data.logs, 'logs length:', data.logs?.length)
+    console.log('[loadTaskSnapshot] Has metrics:', !!data.metrics, 'metrics length:', data.metrics?.length)
+    console.log('[loadTaskSnapshot] Has eval_metrics:', !!data.eval_metrics, 'eval_metrics length:', data.eval_metrics?.length)
+    
+    const storageKey = taskUuid
+    console.log('[loadTaskSnapshot] Using storageKey:', storageKey)
+    console.log('[loadTaskSnapshot] Current groupMetrics before:', JSON.stringify(groupMetrics.value).slice(0, 200))
+    console.log('[loadTaskSnapshot] Current groupLogs before:', JSON.stringify(groupLogs.value).slice(0, 200))
     
     if (data.logs && Array.isArray(data.logs)) {
-      groupLogs.value[taskId] = data.logs.map((x: any) => String(x))
-      if (monitorTaskId.value === taskId) {
-        monitorLogs.value = groupLogs.value[taskId]
+      groupLogs.value[storageKey] = data.logs.map((x: any) => String(x))
+      if (monitorTaskId.value === storageKey || monitorTaskId.value === 'all') {
+        monitorLogs.value = groupLogs.value[storageKey]
       }
+      console.log('[loadTaskSnapshot] Logs stored, count:', data.logs.length)
     }
     
     if (data.metrics && Array.isArray(data.metrics)) {
-      mergeMetricPoints(taskId, data.metrics, 'replace')
+      mergeMetricPoints(storageKey, data.metrics, 'replace')
+      console.log('[loadTaskSnapshot] Metrics stored via mergeMetricPoints, count:', data.metrics.length)
+      console.log('[loadTaskSnapshot] groupMetrics after:', JSON.stringify(groupMetrics.value).slice(0, 300))
     }
     
     if (data.eval_metrics && Array.isArray(data.eval_metrics)) {
-      groupEvalMetrics.value[taskId] = data.eval_metrics
+      groupEvalMetrics.value[storageKey] = data.eval_metrics
     }
     
-    applyMonitorPayload(taskId, data)
+    applyMonitorPayload(storageKey, data)
   } catch {
   }
 }
@@ -568,6 +591,32 @@ const monitorGroupStatus = ref('')
 const activeMonitorTab = ref('overview')
 const monitorTab = ref<'process' | 'output'>('process')
 
+const trainingRecords = ref<any[]>([])
+const selectedRecord = ref<any>(null)
+const selectedRecordDetails = ref<any>(null)
+const isLoadingRecordDetails = ref(false)
+
+const loadTrainingRecords = async () => {
+  if (!productId.value) return
+  try {
+    trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
+  } catch (err) {
+    console.error('Failed to load training records:', err)
+  }
+}
+
+const selectRecord = async (record: any) => {
+  selectedRecord.value = record
+  isLoadingRecordDetails.value = true
+  try {
+    selectedRecordDetails.value = await window.electronAPI.getTrainingRecord(record.taskUuid, record.labelName)
+  } catch (err) {
+    console.error('Failed to load record details:', err)
+  } finally {
+    isLoadingRecordDetails.value = false
+  }
+}
+
 const monitorTaskId = ref('all')
 const isTaskSelectOpen = ref(false)
 const monitorStatus = ref('')
@@ -624,6 +673,287 @@ const getStatusClass = (status?: string) => {
   return `${color} ${isRunning ? 'animate-pulse' : ''}`
 }
 
+const getRecordLearningRate = () => {
+  if (selectedRecord.value?.learningRate) {
+    return selectedRecord.value.learningRate
+  }
+  if (selectedRecordDetails.value?.config) {
+    try {
+      const config = JSON.parse(selectedRecordDetails.value.config)
+      return config.learningRate || '-'
+    } catch {
+      return '-'
+    }
+  }
+  return '-'
+}
+
+const getLearningRateValue = () => {
+  return Number(trainConfig.value.learningRate || 0.001)
+}
+
+const groupedRecords = computed(() => {
+  const groups: Record<string, any[]> = {}
+  for (const record of trainingRecords.value) {
+    const key = record.taskUuid || 'unknown'
+    if (!groups[key]) {
+      groups[key] = []
+    }
+    groups[key].push(record)
+  }
+  return Object.entries(groups).map(([taskUuid, records]) => ({
+    taskUuid,
+    records,
+    displayName: taskUuid,
+    createdAt: records[0]?.createdAt,
+    status: records.some(r => r.status === 'running' || r.status === 'training') ? 'training' : records[0]?.status
+  })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+})
+
+const selectedGroup = ref<any>(null)
+const recordDetailTab = ref<'params' | 'metrics' | 'logs'>('params')
+const activePopoverGroup = ref<any>(null)
+const popoverRecord = ref<any>(null)
+
+const toggleGroupPopover = (group: any) => {
+  if (activePopoverGroup.value?.taskUuid === group.taskUuid) {
+    activePopoverGroup.value = null
+    popoverRecord.value = null
+  } else {
+    activePopoverGroup.value = group
+    popoverRecord.value = group.records[0]
+    recordDetailTab.value = 'params'
+  }
+}
+
+const showDeleteRecordConfirm = ref(false)
+const deletingRecordGroup = ref<any>(null)
+
+const confirmDeleteRecordGroup = (group: any, event: Event) => {
+  event.stopPropagation()
+  deletingRecordGroup.value = group
+  showDeleteRecordConfirm.value = true
+}
+
+const handleDeleteRecordGroup = async () => {
+  if (!deletingRecordGroup.value || !productId.value) return
+
+  try {
+    for (const record of deletingRecordGroup.value.records) {
+      await window.electronAPI.deleteTrainingRecord(record.taskUuid, record.labelName)
+    }
+    toast?.success(t('common.deleteSuccess'))
+    trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
+    activePopoverGroup.value = null
+    popoverRecord.value = null
+  } catch (err: any) {
+    toast?.error(`${t('common.deleteFailed')}: ${err.message}`)
+  } finally {
+    showDeleteRecordConfirm.value = false
+    deletingRecordGroup.value = null
+  }
+}
+
+const showDeleteDatasetConfirm = ref(false)
+const deletingDataset = ref<any>(null)
+const deleteDatasetMode = ref<'label' | 'task'>('label')
+
+const confirmDeleteDataset = (ds: any, event: Event, mode: 'label' | 'task' = 'label') => {
+  event.stopPropagation()
+  deletingDataset.value = ds
+  deleteDatasetMode.value = mode
+  showDeleteDatasetConfirm.value = true
+}
+
+const handleDeleteDataset = async () => {
+  if (!deletingDataset.value || !productId.value) return
+
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    let url = `${apiBase.replace(/\/$/, '')}/project/${productId.value}/datasets?task_uuid=${deletingDataset.value.task_uuid}`
+    if (deleteDatasetMode.value === 'label') {
+      url += `&label=${encodeURIComponent(deletingDataset.value.label)}`
+    }
+    const res = await fetch(url, { method: 'DELETE' })
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.detail || `HTTP ${res.status}`)
+    }
+    toast?.success(t('common.deleteSuccess'))
+    await fetchProjectResults()
+  } catch (err: any) {
+    toast?.error(`${t('common.deleteFailed')}: ${err.message}`)
+  } finally {
+    showDeleteDatasetConfirm.value = false
+    deletingDataset.value = null
+  }
+}
+
+const showDeleteModelConfirm = ref(false)
+const deletingModel = ref<any>(null)
+const deleteModelMode = ref<'label' | 'task'>('label')
+
+const confirmDeleteModel = (model: any, event: Event, mode: 'label' | 'task' = 'label') => {
+  event.stopPropagation()
+  deletingModel.value = model
+  deleteModelMode.value = mode
+  showDeleteModelConfirm.value = true
+}
+
+const handleDeleteModel = async () => {
+  if (!deletingModel.value || !productId.value) return
+
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const taskUuid = deletingModel.value.task_uuid || deletingModel.value.task_id
+    let url = `${apiBase.replace(/\/$/, '')}/project/${productId.value}/models?task_uuid=${taskUuid}`
+    if (deleteModelMode.value === 'label') {
+      url += `&label=${encodeURIComponent(deletingModel.value.label)}`
+    }
+    const res = await fetch(url, { method: 'DELETE' })
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.detail || `HTTP ${res.status}`)
+    }
+    toast?.success(t('common.deleteSuccess'))
+    await fetchProjectResults()
+  } catch (err: any) {
+    toast?.error(`${t('common.deleteFailed')}: ${err.message}`)
+  } finally {
+    showDeleteModelConfirm.value = false
+    deletingModel.value = null
+  }
+}
+
+const selectGroup = (group: any) => {
+  selectedGroup.value = group
+  if (group.records.length > 0) {
+    selectRecord(group.records[0])
+  }
+}
+
+const getRecordMetrics = () => {
+  if (!selectedRecordDetails.value?.metrics) return []
+  try {
+    return selectedRecordDetails.value.metrics
+  } catch {
+    return []
+  }
+}
+
+const getRecordMetricsForHover = (record: any) => {
+  if (!record?.metrics) return []
+  try {
+    const metrics = typeof record.metrics === 'string' ? JSON.parse(record.metrics) : record.metrics
+    return Array.isArray(metrics) ? metrics : []
+  } catch {
+    return []
+  }
+}
+
+const getRecordChartData = (record: any) => {
+  const metrics = getRecordMetricsForHover(record)
+  if (metrics.length === 0) return { labels: [], datasets: [] }
+  
+  const labels = metrics.map((m: any, idx: number) => `E${(m.epoch || idx) + 1}`)
+  const lossData = metrics.map((m: any) => m.loss || null)
+  const valLossData = metrics.map((m: any) => m.val_loss || null)
+  
+  const datasets: any[] = []
+  
+  if (lossData.some((v: any) => v !== null)) {
+    datasets.push({
+      label: 'Loss',
+      data: lossData,
+      borderColor: 'hsl(var(--primary))',
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointBackgroundColor: 'hsl(var(--primary))',
+      tension: 0.4,
+      spanGaps: true
+    })
+  }
+  
+  if (valLossData.some((v: any) => v !== null)) {
+    datasets.push({
+      label: 'Val Loss',
+      data: valLossData,
+      borderColor: '#f97316',
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointBackgroundColor: '#f97316',
+      tension: 0.4,
+      spanGaps: true
+    })
+  }
+  
+  return { labels, datasets }
+}
+
+const recordChartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: {
+    mode: 'index' as const,
+    intersect: false
+  },
+  plugins: {
+    legend: {
+      display: false
+    },
+    tooltip: {
+      backgroundColor: 'rgba(15, 23, 42, 0.9)',
+      titleColor: '#f8fafc',
+      bodyColor: '#f8fafc',
+      borderColor: 'rgba(148, 163, 184, 0.2)',
+      borderWidth: 1,
+      padding: 10,
+      titleFont: { size: 11 },
+      bodyFont: { size: 10 },
+      displayColors: true,
+      boxPadding: 4
+    }
+  },
+  scales: {
+    y: {
+      beginAtZero: false,
+      grid: { color: 'rgba(148, 163, 184, 0.1)' },
+      ticks: { 
+        font: { size: 9 },
+        color: 'rgba(148, 163, 184, 0.8)'
+      },
+      border: { display: false }
+    },
+    x: {
+      grid: { display: false },
+      ticks: { 
+        font: { size: 9 }, 
+        maxRotation: 45,
+        autoSkip: true,
+        maxTicksLimit: 8,
+        color: 'rgba(148, 163, 184, 0.8)'
+      },
+      border: { display: false }
+    }
+  },
+  elements: {
+    point: {
+      radius: 0,
+      hitRadius: 10,
+      hoverRadius: 5,
+      hoverBorderWidth: 2
+    },
+    line: {
+      tension: 0.4,
+      borderWidth: 2.5
+    }
+  }
+}
+
 const startGroupPolling = () => {
   stopGroupPolling()
   groupPollingTimer = setInterval(async () => {
@@ -637,55 +967,57 @@ const startGroupPolling = () => {
         const isGroupCompleted = String(data.status || '').toLowerCase() === 'completed' || String(data.status || '').toLowerCase() === 'success'
         monitorGroupProgress.value = isGroupCompleted ? 100 : (data.progress || 0)
         monitorGroupStatus.value = data.status || ''
-        if (Array.isArray(data.tasks)) {
-          trainTasks.value = trainTasks.value.map(t => {
-            const remote = data.tasks.find((rt: any) => rt.task_id === t.task_id)
-            if (remote) {
-              const isTaskCompleted = String(remote.status || '').toLowerCase() === 'completed' || String(remote.status || '').toLowerCase() === 'success'
-              
-              const targetE = Number(remote.total_epochs || (remote.config?.train_epochs) || (remote.config?.epochs))
-              if (Number.isFinite(targetE) && targetE > 0) {
-                taskTargetEpochs.value[t.task_id] = targetE
-              }
-
-              if (productId.value && window.electronAPI && trainTaskUuid.value) {
-                const taskMetrics = groupMetrics.value[t.task_id] || []
-                const taskLogs = groupLogs.value[t.task_id] || []
-                // 转换为可序列化的纯对象
-                const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
-                const serializableLogs = taskLogs.map((log: any) => String(log))
-                window.electronAPI.saveTrainingRecord({
-                  productId: productId.value,
-                  taskId: trainTaskUuid.value,
-                  labelName: t.label,
-                  modelName: remote.model_name,
-                  status: remote.status,
-                  progress: isTaskCompleted ? 100 : (remote.progress != null ? Number(remote.progress) : t.progress),
-                  totalEpochs: targetE,
-                  currentEpoch: remote.current_epoch,
-                  metrics: serializableMetrics,
-                  logs: serializableLogs,
-                  startedAt: remote.started_at ? new Date(remote.started_at) : undefined,
-                  completedAt: isTaskCompleted ? new Date() : undefined
-                }).catch(console.error)
-              }
-
-              return { 
-                ...t, 
-                status: remote.status, 
-                progress: isTaskCompleted ? 100 : (remote.progress != null ? Number(remote.progress) : t.progress) 
-              }
-            }
-            return t
-          })
+        
+        // 刷新运行记录
+        if (productId.value && window.electronAPI) {
+          trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
         }
-        const s = String(data.status || '').toLowerCase()
-        const allTasksFinished = trainTasks.value.length > 0 && trainTasks.value.every(t => {
-          const ts = String(t.status || '').toLowerCase()
-          return ['completed', 'success', 'failed', 'stopped', 'canceled', 'interrupted', 'error', 'aborted'].includes(ts)
+        
+        const groupStatus = data.status
+        const groupProgress = data.progress || 0
+        
+        // 新API：更新所有label的进度，使用相同的status和progress
+        trainTasks.value = trainTasks.value.map(t => {
+          const isTaskCompleted = isGroupCompleted
+          
+          const targetE = Number(data.total_epochs || data.config?.train_epochs || 0)
+          if (Number.isFinite(targetE) && targetE > 0) {
+            taskTargetEpochs.value[t.task_id] = targetE
+          }
+
+          if (productId.value && window.electronAPI && trainTaskUuid.value) {
+            const taskMetrics = groupMetrics.value[t.task_id] || []
+            const taskLogs = groupLogs.value[t.task_id] || []
+            const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
+            const serializableLogs = taskLogs.map((log: any) => String(log))
+            window.electronAPI.saveTrainingRecord({
+              productId: productId.value,
+              taskId: trainTaskUuid.value,
+              labelName: t.label,
+              modelName: data.model_name,
+              status: groupStatus,
+              progress: isTaskCompleted ? 100 : groupProgress,
+              totalEpochs: targetE,
+              currentEpoch: data.current_epoch,
+              batchSize: data.config?.train_batch_size || trainConfig.value.batchSize[0],
+              learningRate: data.config?.train_learning_rate || getLearningRateValue(),
+              metrics: serializableMetrics,
+              logs: serializableLogs,
+              startedAt: data.started_at ? new Date(data.started_at) : undefined,
+              completedAt: isTaskCompleted ? new Date() : undefined
+            }).catch(console.error)
+          }
+
+          return { 
+            ...t, 
+            status: groupStatus, 
+            progress: isTaskCompleted ? 100 : groupProgress,
+            current_epoch: data.current_epoch,
+            total_epochs: targetE
+          }
         })
 
-        if (s === 'completed' || s === 'failed' || s === 'success' || s === 'stopped' || s === 'canceled' || s === 'interrupted' || allTasksFinished) {
+        if (isGroupCompleted) {
           stopGroupPolling()
           closeMonitorStream()
           if (typeof window !== 'undefined') {
@@ -924,7 +1256,6 @@ const targetTotalEpochs = computed(() => {
 
 const projectDatasets = ref<any[]>([])
 const projectModels = ref<any[]>([])
-const trainingRecords = ref<any[]>([])
 
 const formatDate = (date: any) => {
   const d = date ? new Date(date) : new Date()
@@ -1059,17 +1390,19 @@ const fetchProjectResults = async () => {
   if (!productId.value) return
   try {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
-    
+
     // Fetch Training Records from DB
     if (window.electronAPI) {
       trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
     }
-    
+
     // Fetch Datasets
     const resDatasets = await fetch(`${apiBase.replace(/\/$/, '')}/project/${productId.value}/datasets`)
     if (resDatasets.ok) {
       const data = await resDatasets.json()
       projectDatasets.value = data.datasets || []
+    } else {
+      projectDatasets.value = []
     }
 
     // Fetch Models
@@ -1077,9 +1410,13 @@ const fetchProjectResults = async () => {
     if (resModels.ok) {
       const data = await resModels.json()
       projectModels.value = data.models || []
+    } else {
+      projectModels.value = []
     }
   } catch (err) {
     console.error('Failed to fetch project results:', err)
+    projectDatasets.value = []
+    projectModels.value = []
   }
 }
 
@@ -1469,10 +1806,18 @@ const openMonitorStream = (taskId: string) => {
   if (!taskId || monitorEventSources[taskId]) return
   const apiBase = config.public.apiBase || 'http://localhost:8000'
   const url = `${apiBase.replace(/\/$/, '')}/train/events/${encodeURIComponent(taskId)}`
-  const es = new EventSource(url)
-  monitorEventSources[taskId] = es
+  console.log('[openMonitorStream] ===== Start =====')
+  console.log('[openMonitorStream] taskId:', taskId)
+  console.log('[openMonitorStream] apiBase:', apiBase)
+  console.log('[openMonitorStream] Connecting to:', url)
+  console.log('[openMonitorStream] monitorTaskId:', monitorTaskId.value)
   
+  const es = new EventSource(url)
+  es.onopen = () => console.log('[openMonitorStream] Connected to:', url)
+  es.onerror = (err) => console.error('[openMonitorStream] Error:', err)
+  monitorEventSources[taskId] = es
   const onAnyEvent = (e: MessageEvent) => {
+    console.log('[openMonitorStream] Received event, data:', (e as any)?.data?.slice?.(0, 200) || (e as any)?.data)
     applyMonitorPayload(taskId, (e as any)?.data)
   }
   es.onmessage = onAnyEvent
@@ -1485,6 +1830,7 @@ const openMonitorStream = (taskId: string) => {
   es.addEventListener('eval_metrics', onAnyEvent as any)
   es.addEventListener('eval_metric', onAnyEvent as any)
   es.onerror = () => {
+    console.log('[openMonitorStream] Connection closed for:', taskId)
     closeMonitorStream(taskId)
   }
 }
@@ -1534,6 +1880,10 @@ const mergeMetricPoints = (taskId: string, incoming: any[], mode: 'replace' | 'a
 }
 
 const applyMonitorPayload = (taskId: string, raw: any) => {
+  console.log('[applyMonitorPayload] ===== Start =====')
+  console.log('[applyMonitorPayload] taskId:', taskId)
+  console.log('[applyMonitorPayload] raw:', raw?.slice?.(0, 300) || raw)
+  
   let data: any = raw
   if (typeof data === 'string') {
     try {
@@ -1542,6 +1892,7 @@ const applyMonitorPayload = (taskId: string, raw: any) => {
       data = { message: raw }
     }
   }
+  console.log('[applyMonitorPayload] parsed data:', JSON.stringify(data).slice(0, 300))
 
   const isCurrentTask = taskId === monitorTaskId.value
 
@@ -1875,27 +2226,41 @@ const startTraining = async () => {
 
     trainGroupId.value = data.group_id || ''
     trainTaskUuid.value = data.task_uuid || ''
-    trainTasks.value = Array.isArray(data.tasks) ? data.tasks : []
     
-    // 为每个分类独立保存训练记录
+    const labels = data.labels || []
+    const labelCount = labels.length
+    const displayLabel = labelCount > 0 
+      ? `${labels.length} 个类别` 
+      : '统一训练'
+    
+    trainTasks.value = [{
+      label: displayLabel,
+      task_id: trainTaskUuid.value,
+      labels: labels,
+      status: 'pending',
+      progress: 0
+    }]
+    
     if (productId.value && window.electronAPI && trainTaskUuid.value) {
-      for (const t of trainTasks.value) {
-        window.electronAPI.saveTrainingRecord({
-          productId: productId.value,
-          taskId: trainTaskUuid.value,
-          labelName: t.label,
-          modelName: trainModelName.value || 'STFPM',
-          status: 'pending',
-          progress: 0,
-          totalEpochs: finalEpochs,
-          currentEpoch: 0,
-          startedAt: new Date()
-        }).catch(console.error)
-      }
+      window.electronAPI.saveTrainingRecord({
+        productId: productId.value,
+        taskId: trainTaskUuid.value,
+        labelName: displayLabel,
+        modelName: trainModelName.value || 'STFPM',
+        status: 'pending',
+        progress: 0,
+        totalEpochs: finalEpochs,
+        currentEpoch: 0,
+        batchSize: trainConfig.value.batchSize[0],
+        learningRate: getLearningRateValue(),
+        startedAt: new Date()
+      }).catch(console.error)
     }
     
-    await Promise.all(trainTasks.value.map(t => loadTaskSnapshot(String((t as any)?.task_id || ''))))
-    monitorTaskId.value = 'all'
+    if (trainTaskUuid.value) {
+      await loadTaskSnapshot(trainTaskUuid.value)
+    }
+    monitorTaskId.value = trainTaskUuid.value
     activeMonitorTab.value = 'overview'
     startGroupPolling()
   } catch (err: any) {
@@ -2693,38 +3058,53 @@ onBeforeUnmount(() => {
                         <span class="font-bold text-foreground">{{ group.displayName }}</span>
                      </div>
                      <div class="h-px bg-border/50 flex-1"></div>
+                     <button
+                       v-if="group.datasets.length > 0"
+                       class="p-1.5 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-colors"
+                       :title="t('training.monitor.deleteAllTask')"
+                       @click.stop="confirmDeleteDataset(group.datasets[0], $event, 'task')"
+                     >
+                       <Trash2 class="w-3 h-3" />
+                     </button>
                   </div>
-                  
+
                   <div class="space-y-4 pl-4 border-l-2 border-muted/30 ml-2">
-                    <div v-if="group.datasets.length > 0" class="space-y-2">                       
+                    <div v-if="group.datasets.length > 0" class="space-y-2">
                        <div class="relative" :ref="(el) => setDatasetContainerRef(el, group.id)">
                          <div class="flex flex-wrap gap-4">
-                            <div 
-                              v-for="ds in group.datasets" 
-                              :key="`${ds.task_uuid}-${ds.label}`" 
+                            <div
+                              v-for="ds in group.datasets"
+                              :key="`${ds.task_uuid}-${ds.label}`"
                               class="group relative w-[160px] border rounded-xl hover:shadow-md transition-all cursor-pointer"
                               :class="{ 'ring-2 ring-primary rounded-xl shadow-md': expandedResultId === `ds-${ds.task_uuid}-${ds.label}` }"
                               @click="(e) => handleDatasetClick(ds, e, group.id)"
                             >
                               <div class="aspect-square bg-muted/30 relative border-b">
-                                 <img 
-                                   v-if="ds.images && ds.images.length > 0" 
-                                   :src="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + ds.images[0].url" 
+                                 <img
+                                   v-if="ds.images && ds.images.length > 0"
+                                   :src="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + ds.images[0].url"
                                    class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 rounded-t-xl"
                                    loading="lazy"
                                  />
                                  <div v-else class="absolute inset-0 flex items-center justify-center text-muted-foreground/30">
                                    <ImageIcon class="w-8 h-8" />
                                  </div>
-                                 
+
                                  <div class="absolute top-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-1">
                                     <ImageIcon class="w-3 h-3" />
                                     {{ ds.image_count }}
                                  </div>
                               </div>
-                              
-                              <div class="p-2.5 bg-card rounded-b-xl">
-                                 <div class="font-bold text-xs truncate text-center" :title="ds.label">{{ ds.label }}</div>
+
+                              <div class="p-2.5 bg-card rounded-b-xl flex items-center justify-between">
+                                 <div class="font-bold text-xs truncate text-center flex-1" :title="ds.label">{{ ds.label }}</div>
+                                 <button
+                                   class="p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-colors opacity-0 group-hover:opacity-100"
+                                   :title="t('training.monitor.deleteThisLabel')"
+                                   @click.stop="confirmDeleteDataset(ds, $event, 'label')"
+                                 >
+                                   <Trash2 class="w-3 h-3" />
+                                 </button>
                               </div>
                             </div>
                          </div>
@@ -2779,19 +3159,27 @@ onBeforeUnmount(() => {
                         <span class="font-bold text-foreground">{{ group.displayName }}</span>
                      </div>
                      <div class="h-px bg-border/50 flex-1"></div>
+                     <button
+                       v-if="group.models.length > 0"
+                       class="p-1.5 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-colors"
+                       :title="t('training.monitor.deleteAllTask')"
+                       @click.stop="confirmDeleteModel(group.models[0], $event, 'task')"
+                     >
+                       <Trash2 class="w-3 h-3" />
+                     </button>
                   </div>
-                  
+
                   <div class="space-y-4 pl-4 border-l-2 border-muted/30 ml-2">
                     <div v-if="group.models.length > 0" class="space-y-2">
                        <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                          <Box class="w-3 h-3" /> 模型产物
                        </div>
-                       
+
                        <div>
                          <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                            <div 
-                              v-for="model in group.models" 
-                              :key="`${model.task_uuid || model.task_id}-${model.label}`" 
+                            <div
+                              v-for="model in group.models"
+                              :key="`${model.task_uuid || model.task_id}-${model.label}`"
                               class="group relative border rounded-xl bg-background hover:shadow-md transition-all cursor-pointer"
                               :class="{ 'ring-2 ring-primary rounded-xl shadow-md': expandedResultId === `md-${model.task_uuid || model.task_id}-${model.label}` }"
                               @click="(e) => handleModelClick(model, e, group.id)"
@@ -2815,6 +3203,13 @@ onBeforeUnmount(() => {
                                             'text-blue-600': model.status === 'running',
                                             'text-red-600': model.status === 'failed' || model.status === 'error'
                                           }" class="uppercase font-medium">{{ model.status }}</span>
+                                         <button
+                                           class="p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-colors opacity-0 group-hover:opacity-100"
+                                           :title="t('training.monitor.deleteThisLabel')"
+                                           @click.stop="confirmDeleteModel(model, $event, 'label')"
+                                         >
+                                           <Trash2 class="w-3 h-3" />
+                                         </button>
                                        </div>
                                     </div>
                                  </div>
@@ -3451,7 +3846,7 @@ onBeforeUnmount(() => {
             <div class="flex items-center justify-between border-b shrink-0 bg-background px-4">
               <div class="flex gap-6">
                 <button 
-                  v-for="tab in ['overview', 'logs']" 
+                  v-for="tab in ['overview', 'logs', 'history']" 
                   :key="tab"
                   class="h-12 text-sm font-medium transition-all relative px-1 capitalize"
                   :class="activeMonitorTab === tab ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
@@ -3678,6 +4073,152 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
+
+              <!-- History Tab -->
+              <div v-else-if="activeMonitorTab === 'history'" class="h-full flex flex-col animate-in slide-in-from-right-4 duration-300 overflow-y-auto custom-scrollbar p-4">
+                <div v-if="groupedRecords.length === 0" class="flex flex-col items-center justify-center h-32 text-muted-foreground">
+                  <History class="w-8 h-8 opacity-40 mb-2" />
+                  <span class="text-xs">{{ t('training.monitor.noRecords') }}</span>
+                </div>
+
+                <div class="space-y-3">
+                  <div 
+                    v-for="group in groupedRecords" 
+                    :key="group.taskUuid" 
+                    class="group relative border rounded-xl bg-background hover:shadow-md transition-all cursor-pointer"
+                    @click="toggleGroupPopover(group)"
+                  >
+                    <div class="flex items-center gap-3 p-3">
+                      <div class="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-lg border text-xs font-mono text-muted-foreground">
+                        <span class="font-bold text-foreground">{{ group.displayName }}</span>
+                      </div>
+                      <div class="h-px bg-border/50 flex-1"></div>
+                      <span class="text-[10px] px-2 py-1 rounded-full" :class="getStatusClass(group.status) + ' text-white'">
+                        {{ t('training.monitor.statusList.' + (normalizeStatus(group.status) || 'pending')) }}
+                      </span>
+                      <span class="text-[10px] text-muted-foreground">{{ group.records.length }} {{ t('training.monitor.labels') }}</span>
+                      <span class="text-[10px] text-muted-foreground">{{ group.createdAt ? new Date(group.createdAt).toLocaleString() : '-' }}</span>
+                      <button
+                        class="p-1.5 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                        @click="confirmDeleteRecordGroup(group, $event)"
+                      >
+                        <Trash2 class="w-4 h-4" />
+                      </button>
+                      <ChevronDown class="w-4 h-4 text-muted-foreground transition-transform duration-300" :class="{ 'rotate-180': activePopoverGroup?.taskUuid === group.taskUuid }" />
+                    </div>
+
+                    <div 
+                      v-if="activePopoverGroup?.taskUuid === group.taskUuid" 
+                      class="absolute left-0 right-0 z-50 bg-popover border shadow-xl rounded-xl p-4 animate-in fade-in slide-in-from-top-2 duration-200"
+                      style="top: calc(100% + 8px);"
+                      @click.stop
+                    >
+                      <div class="absolute -top-1 left-8 w-4 h-4 bg-popover border-t border-l border-border rotate-45 z-20"></div>
+                      
+                      <div class="flex items-center justify-between mb-3">
+                        <span class="text-sm font-bold">{{ group.displayName }}</span>
+                        <button class="p-1 hover:bg-muted rounded-full transition-colors" @click.stop="activePopoverGroup = null">
+                          <X class="w-4 h-4 text-muted-foreground" />
+                        </button>
+                      </div>
+                      
+                      <div v-if="group.records.length > 1" class="flex gap-1 mb-3 overflow-x-auto">
+                        <button 
+                          v-for="rec in group.records" 
+                          :key="rec.id"
+                          class="px-3 py-1.5 text-xs rounded-lg transition-all shrink-0"
+                          :class="popoverRecord?.id === rec.id ? 'bg-primary text-primary-foreground' : 'bg-muted hover:bg-muted/80'"
+                          @click.stop="popoverRecord = rec"
+                        >
+                          {{ rec.labelName }}
+                        </button>
+                      </div>
+
+                      <div v-if="popoverRecord && group.records.find((r: any) => r.id === popoverRecord.id)" class="border rounded-lg bg-muted/20 p-3">
+                        <div class="flex items-center gap-2 mb-3">
+                          <span class="text-sm font-bold">{{ popoverRecord.labelName }}</span>
+                          <span class="text-[10px] px-2 py-0.5 rounded-full" :class="getStatusClass(popoverRecord.status) + ' text-white'">
+                            {{ t('training.monitor.statusList.' + (normalizeStatus(popoverRecord.status) || 'pending')) }}
+                          </span>
+                        </div>
+
+                        <div class="flex gap-1 mb-3 border-b pb-2">
+                          <button 
+                            v-for="tab in ['params', 'metrics', 'logs']" 
+                            :key="tab"
+                            class="px-3 py-1 text-xs rounded-lg transition-all"
+                            :class="recordDetailTab === tab ? 'bg-primary text-primary-foreground' : 'hover:bg-muted/50'"
+                            @click.stop="recordDetailTab = tab"
+                          >
+                            {{ tab === 'params' ? t('training.monitor.tabs.overview') : tab === 'metrics' ? t('training.monitor.metrics') : t('training.monitor.tabs.logs') }}
+                          </button>
+                        </div>
+
+                        <div v-if="recordDetailTab === 'params'" class="max-h-48 overflow-auto custom-scrollbar">
+                          <div class="grid grid-cols-2 gap-2">
+                            <div class="p-2 border rounded-lg bg-background">
+                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.modelName') }}</span>
+                              <div class="text-xs font-medium">{{ popoverRecord.modelName || 'STFPM' }}</div>
+                            </div>
+                            <div class="p-2 border rounded-lg bg-background">
+                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.epochs') }}</span>
+                              <div class="text-xs font-medium">{{ popoverRecord.totalEpochs || '-' }}</div>
+                            </div>
+                            <div class="p-2 border rounded-lg bg-background">
+                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.batchSize') }}</span>
+                              <div class="text-xs font-medium">{{ popoverRecord.batchSize || '-' }}</div>
+                            </div>
+                            <div class="p-2 border rounded-lg bg-background">
+                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.learningRate') }}</span>
+                              <div class="text-xs font-medium">{{ popoverRecord.learningRate || '-' }}</div>
+                            </div>
+                          </div>
+
+                          <div v-if="popoverRecord.startTime || popoverRecord.endTime" class="mt-2">
+                            <h4 class="text-[10px] font-medium text-muted-foreground mb-1">{{ t('training.monitor.timeInfo') }}</h4>
+                            <div class="grid grid-cols-2 gap-2">
+                              <div class="p-2 border rounded-lg bg-background">
+                                <span class="text-[10px] text-muted-foreground">{{ t('training.monitor.startTime') }}</span>
+                                <div class="text-xs">{{ popoverRecord.startTime ? new Date(popoverRecord.startTime).toLocaleString() : '-' }}</div>
+                              </div>
+                              <div class="p-2 border rounded-lg bg-background">
+                                <span class="text-[10px] text-muted-foreground">{{ t('training.monitor.endTime') }}</span>
+                                <div class="text-xs">{{ popoverRecord.endTime ? new Date(popoverRecord.endTime).toLocaleString() : '-' }}</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div v-else-if="recordDetailTab === 'metrics'" class="max-h-64 overflow-auto custom-scrollbar">
+                          <div v-if="getRecordMetricsForHover(popoverRecord).length > 0" class="border rounded-lg bg-background p-2">
+                            <div class="h-48">
+                              <Line :data="getRecordChartData(popoverRecord)" :options="recordChartOptions" />
+                            </div>
+                          </div>
+                          <div v-else class="text-xs text-muted-foreground text-center py-4">
+                            {{ t('training.monitor.noMetrics') }}
+                          </div>
+                        </div>
+
+                        <div v-else-if="recordDetailTab === 'logs'" class="max-h-48 overflow-auto custom-scrollbar">
+                          <div v-if="popoverRecord.logs && popoverRecord.logs.length > 0" class="border rounded-lg bg-slate-950 p-2">
+                            <div v-for="(log, idx) in popoverRecord.logs" :key="idx" class="font-mono text-[9px] text-slate-300 mb-1 last:mb-0 break-all">
+                              {{ typeof log === 'string' ? log : JSON.stringify(log) }}
+                            </div>
+                          </div>
+                          <div v-else class="text-xs text-muted-foreground text-center py-4">
+                            {{ t('training.monitor.noLogs') }}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div v-else class="text-xs text-muted-foreground text-center py-4">
+                        {{ t('training.monitor.selectRecord') }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
         </div>
@@ -3743,6 +4284,67 @@ onBeforeUnmount(() => {
         <div class="flex gap-3 pt-2">
           <UiButton variant="outline" class="flex-1" @click="showDeleteConfirm = false">{{ t('common.cancel') }}</UiButton>
           <UiButton variant="destructive" class="flex-1" @click="handleDeleteVersion">{{ t('common.confirm') }}</UiButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Training Record Confirmation Dialog -->
+    <div v-if="showDeleteRecordConfirm" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="showDeleteRecordConfirm = false">
+      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full space-y-4 animate-in zoom-in-95 duration-200" @click.stop>
+        <div class="flex items-center gap-3 text-destructive">
+          <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+            <Trash2 class="h-5 w-5" />
+          </div>
+          <h3 class="font-bold text-lg">{{ t('common.confirmDelete') }}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground">{{ t('training.monitor.deleteRecordWarning', { name: deletingRecordGroup?.displayName || '' }) }}</p>
+        <div class="flex gap-3 pt-2">
+          <UiButton variant="outline" class="flex-1" @click="showDeleteRecordConfirm = false">{{ t('common.cancel') }}</UiButton>
+          <UiButton variant="destructive" class="flex-1" @click="handleDeleteRecordGroup">{{ t('common.confirm') }}</UiButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Dataset Confirmation Dialog -->
+    <div v-if="showDeleteDatasetConfirm" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="showDeleteDatasetConfirm = false">
+      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full space-y-4 animate-in zoom-in-95 duration-200" @click.stop>
+        <div class="flex items-center gap-3 text-destructive">
+          <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+            <Trash2 class="h-5 w-5" />
+          </div>
+          <h3 class="font-bold text-lg">{{ t('common.confirmDelete') }}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground">
+          {{ deleteDatasetMode === 'label' 
+            ? t('training.monitor.deleteDatasetWarning', { label: deletingDataset?.label || '' }) 
+            : t('training.monitor.deleteDatasetTaskWarning', { task: deletingDataset?.task_uuid || '' }) 
+          }}
+        </p>
+        <div class="flex gap-3 pt-2">
+          <UiButton variant="outline" class="flex-1" @click="showDeleteDatasetConfirm = false">{{ t('common.cancel') }}</UiButton>
+          <UiButton variant="destructive" class="flex-1" @click="handleDeleteDataset">{{ t('common.confirm') }}</UiButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Model Confirmation Dialog -->
+    <div v-if="showDeleteModelConfirm" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="showDeleteModelConfirm = false">
+      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full space-y-4 animate-in zoom-in-95 duration-200" @click.stop>
+        <div class="flex items-center gap-3 text-destructive">
+          <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+            <Trash2 class="h-5 w-5" />
+          </div>
+          <h3 class="font-bold text-lg">{{ t('common.confirmDelete') }}</h3>
+        </div>
+        <p class="text-sm text-muted-foreground">
+          {{ deleteModelMode === 'label' 
+            ? t('training.monitor.deleteModelWarning', { label: deletingModel?.label || '' }) 
+            : t('training.monitor.deleteModelTaskWarning', { task: deletingModel?.task_uuid || deletingModel?.task_id || '' }) 
+          }}
+        </p>
+        <div class="flex gap-3 pt-2">
+          <UiButton variant="outline" class="flex-1" @click="showDeleteModelConfirm = false">{{ t('common.cancel') }}</UiButton>
+          <UiButton variant="destructive" class="flex-1" @click="handleDeleteModel">{{ t('common.confirm') }}</UiButton>
         </div>
       </div>
     </div>

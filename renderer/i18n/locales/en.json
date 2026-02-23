@@ -58,7 +58,20 @@
     "disable": "Disable",
     "enable": "Enable",
     "clear": "Clear",
-    "addProduct": "Add Product"
+    "addProduct": "Add Product",
+    "inference": "Inference",
+    "inferenceTitle": "Start Inference",
+    "inferenceDesc": "Select an inference service to run on the current image",
+    "selectService": "Select Service",
+    "serviceId": "Service",
+    "port": "Port",
+    "labels": "Labels",
+    "noLabels": "None",
+    "cancel": "Cancel",
+    "inferring": "Inferring...",
+    "uploadImage": "Upload Image",
+    "dragOrClick": "Drag or click to upload image",
+    "selectedImage": "Selected Image"
   },
   "annotation": {
     "tools": {
@@ -317,7 +330,8 @@
       "tabs": {
         "overview": "Overview",
         "metrics": "Metrics",
-        "logs": "Logs"
+        "logs": "Logs",
+        "history": "History"
       },
       "stopTask": "Stop Task",
       "stopGroup": "Stop Group",
@@ -332,7 +346,23 @@
       "stopGroupSuccess": "Task group stopped successfully",
       "stopTaskFailed": "Failed to stop task",
       "stopGroupFailed": "Failed to stop task group",
-      "waitingLogs": "Waiting for logs..."
+      "waitingLogs": "Waiting for logs...",
+      "noRecords": "No training records",
+      "selectRecord": "Select a record to view details",
+      "timeInfo": "Time Info",
+      "startTime": "Start Time",
+      "endTime": "End Time",
+      "labels": "labels",
+      "metrics": "Loss Curve",
+      "noMetrics": "No metrics data",
+      "noLogs": "No logs",
+      "deleteRecordWarning": "Are you sure you want to delete the training record \"{name}\"? This action cannot be undone.",
+      "deleteDatasetWarning": "Are you sure you want to delete the dataset \"{label}\"? This action cannot be undone.",
+      "deleteDatasetTaskWarning": "Are you sure you want to delete all datasets for task \"{task}\"? This action cannot be undone.",
+      "deleteModelWarning": "Are you sure you want to delete the model \"{label}\"? This action cannot be undone.",
+      "deleteModelTaskWarning": "Are you sure you want to delete all models for task \"{task}\"? This action cannot be undone.",
+      "deleteThisLabel": "Delete this label",
+      "deleteAllTask": "Delete entire task"
     },
     "messages": {
       "success": "Augmentation preview generated successfully",

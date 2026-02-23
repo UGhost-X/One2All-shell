@@ -80,6 +80,8 @@ model TrainingRecord {
   progress        Float     @default(0)
   totalEpochs     Int?
   currentEpoch    Int?
+  batchSize       Int?
+  learningRate    Float?
   latestIter      Int?
   metrics         String    @default("[]")
   logs            String    @default("[]")

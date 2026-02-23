@@ -541,6 +541,8 @@ app.whenReady().then(() => {
         };
         if (data.metrics) updateData.metrics = JSON.stringify(data.metrics);
         if (data.logs) updateData.logs = JSON.stringify(data.logs);
+        if (data.batchSize != null) updateData.batchSize = data.batchSize;
+        if (data.learningRate != null) updateData.learningRate = data.learningRate;
         return await prisma.trainingRecord.update({
           where: { 
             taskUuid_labelName: { 
@@ -562,6 +564,8 @@ app.whenReady().then(() => {
             progress: data.progress || 0,
             totalEpochs: data.totalEpochs,
             currentEpoch: data.currentEpoch,
+            batchSize: data.batchSize,
+            learningRate: data.learningRate,
             metrics: JSON.stringify(data.metrics || []),
             logs: JSON.stringify(data.logs || []),
             outputPath: data.outputPath,

@@ -49,6 +49,10 @@ interface TrainingRecordData {
   progress?: number
   totalEpochs?: number
   currentEpoch?: number
+  batchSize?: number
+  learningRate?: number
+  metrics?: any[]
+  logs?: string[]
   outputPath?: string
   startedAt?: Date
   completedAt?: Date
@@ -61,6 +65,10 @@ interface TrainingRecord extends TrainingRecordData {
   labelNames: string
   config: string
   latestIter?: number
+  batchSize?: number
+  learningRate?: number
+  metrics?: string
+  logs?: string
   startTime?: Date
   endTime?: Date
   hasBestModel: boolean

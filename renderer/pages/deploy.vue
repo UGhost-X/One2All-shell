@@ -29,12 +29,13 @@ interface Product {
 const products = ref<Product[]>([])
 const productId = ref<number | null>(null)
 const productName = ref('')
-const apiBase = config.public.apiBase || 'http://localhost:8000'
+const apiBase = ''
 
 interface DeployableModel {
   task_uuid: string
   labels: string[]
   model_paths: Record<string, string>
+  onnx_status?: Record<string, boolean>
   created_at?: string
 }
 
@@ -50,6 +51,16 @@ interface DeployService {
   created_at?: string
 }
 
+interface ConvertProgress {
+  currentStep: number
+  totalSteps: number
+  stepName: string
+  status: 'pending' | 'converting' | 'completed' | 'error'
+  message: string
+  convertedLabels: string[]
+  failedLabel?: string
+}
+
 const deployableModels = ref<DeployableModel[]>([])
 const services = ref<DeployService[]>([])
 const isLoadingModels = ref(false)
@@ -58,6 +69,10 @@ const startingUuid = ref<string | null>(null)
 const stoppingId = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
 const isProductSelectOpen = ref(false)
+const showDeployProgress = ref(false)
+const deployProgress = ref<ConvertProgress | null>(null)
+const deployProgressInterval = ref<number | null>(null)
+const currentDeployTask = ref<string | null>(null)
 
 const loadProducts = async () => {
   if (window.electronAPI) {
@@ -83,7 +98,7 @@ const loadDeployableModels = async () => {
   }
   isLoadingModels.value = true
   try {
-    const url = `${apiBase}/deploy/models/${productId.value}`
+    const url = `/api/deploy/models/${productId.value}`
     console.log('[Deploy] Fetching:', url)
     const res = await fetch(url)
     console.log('[Deploy] Response status:', res.status)
@@ -105,7 +120,7 @@ const loadServices = async () => {
   }
   isLoadingServices.value = true
   try {
-    const res = await fetch(`${apiBase}/deploy/list`)
+    const res = await fetch(`/api/deploy/list`)
     const data = await res.json()
     services.value = (data.services || []).filter((s: DeployService) => s.project_id === String(productId.value))
   } catch (err) {
@@ -115,36 +130,98 @@ const loadServices = async () => {
   }
 }
 
-const startService = async (taskUuid: string) => {
+const startService = async (taskUuid: string, labels?: string[]) => {
   startingUuid.value = taskUuid
+  currentDeployTask.value = taskUuid
+  showDeployProgress.value = true
+  deployProgress.value = {
+    currentStep: 0,
+    totalSteps: labels?.length || 1,
+    stepName: '检查模型状态',
+    status: 'pending',
+    message: '正在检查模型状态...',
+    convertedLabels: []
+  }
+
+  if (deployProgressInterval.value) {
+    clearInterval(deployProgressInterval.value)
+  }
+
+  const pollProgress = async () => {
+    try {
+      const res = await fetch(`/api/deploy/progress?task_uuid=${taskUuid}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data) {
+          deployProgress.value = data
+        }
+      }
+    } catch (err) {
+      // 忽略404错误，因为progress可能还没创建
+      if ((err as any)?.status !== 404) {
+        console.error('Failed to poll progress:', err)
+      }
+    }
+  }
+
+  deployProgressInterval.value = window.setInterval(pollProgress, 1000)
+
   try {
-    const res = await fetch(`${apiBase}/deploy/start`, {
+    const res = await fetch(`/api/deploy/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         project_id: String(productId.value),
-        task_uuid: taskUuid
+        task_uuid: taskUuid,
+        labels: labels
       })
     })
     const data = await res.json()
+
     if (data.status === 'success') {
-      toast?.success(`服务启动成功，端口: ${data.port}`)
-      await loadServices()
+      await pollProgress()
+      setTimeout(() => {
+        showDeployProgress.value = false
+        toast?.success(`服务启动成功，端口: ${data.port}`)
+        loadServices()
+      }, 2000)
     } else {
-      toast?.error(data.message || '启动服务失败')
+      await pollProgress()
+      if (deployProgress.value) {
+        deployProgress.value.status = 'error'
+        deployProgress.value.message = data.message || '启动服务失败'
+      }
+      setTimeout(() => {
+        showDeployProgress.value = false
+        toast?.error(data.message || '启动服务失败')
+      }, 3000)
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('Failed to start service:', err)
-    toast?.error('启动服务失败')
+    if (deployProgress.value) {
+      deployProgress.value.status = 'error'
+      deployProgress.value.message = err.message || '启动服务失败'
+    }
+    setTimeout(() => {
+      showDeployProgress.value = false
+      toast?.error(err.message || '启动服务失败')
+    }, 3000)
   } finally {
     startingUuid.value = null
+    if (deployProgressInterval.value) {
+      clearInterval(deployProgressInterval.value)
+      deployProgressInterval.value = null
+    }
+    setTimeout(() => {
+      currentDeployTask.value = null
+    }, 5000)
   }
 }
 
 const stopService = async (serviceId: string) => {
   stoppingId.value = serviceId
   try {
-    const res = await fetch(`${apiBase}/deploy/stop/${serviceId}`, {
+    const res = await fetch(`/api/deploy/stop/${serviceId}`, {
       method: 'POST'
     })
     const data = await res.json()
@@ -165,7 +242,7 @@ const stopService = async (serviceId: string) => {
 const deleteService = async (serviceId: string) => {
   deletingId.value = serviceId
   try {
-    const res = await fetch(`${apiBase}/deploy/${serviceId}`, {
+    const res = await fetch(`/api/deploy/${serviceId}`, {
       method: 'DELETE'
     })
     const data = await res.json()
@@ -185,6 +262,11 @@ const deleteService = async (serviceId: string) => {
 
 const getServiceForUuid = (taskUuid: string) => {
   return services.value.find(s => s.task_uuid === taskUuid)
+}
+
+const hasOnnxModel = (model: DeployableModel) => {
+  if (!model.onnx_status) return false
+  return Object.values(model.onnx_status).some(status => status === true)
 }
 
 const getStatusBadge = (status: string) => {
@@ -304,6 +386,8 @@ onMounted(async () => {
                     <div class="flex flex-wrap gap-1">
                       <Badge v-for="label in model.labels" :key="label" variant="secondary" class="text-xs">
                         {{ label }}
+                        <span v-if="model.onnx_status?.[label]" class="ml-1 text-[10px] text-green-500">✓ ONNX</span>
+                        <span v-else class="ml-1 text-[10px] text-orange-500">⚠ 未转换</span>
                       </Badge>
                     </div>
                     <p class="text-xs text-muted-foreground" v-if="model.created_at">
@@ -330,7 +414,7 @@ onMounted(async () => {
                     <template v-if="!getServiceForUuid(model.task_uuid)">
                       <UiButton 
                         size="sm" 
-                        @click="startService(model.task_uuid)"
+                        @click="startService(model.task_uuid, model.labels)"
                         :disabled="startingUuid === model.task_uuid"
                       >
                         <Loader2 v-if="startingUuid === model.task_uuid" class="h-4 w-4 mr-2 animate-spin" />
@@ -472,6 +556,61 @@ Content-Type: application/json
           </div>
         </template>
       </div>
+
+      <Teleport to="body">
+        <div v-if="showDeployProgress" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div class="bg-background border rounded-lg shadow-lg p-6 w-[480px] max-w-[90vw]">
+            <h3 class="text-lg font-semibold mb-4">部署进度</h3>
+            
+            <div class="space-y-4">
+              <div v-if="deployProgress" class="space-y-3">
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">{{ deployProgress.stepName }}</span>
+                  <span class="text-muted-foreground">{{ deployProgress.currentStep }} / {{ deployProgress.totalSteps }}</span>
+                </div>
+                
+                <div class="h-2 bg-muted rounded-full overflow-hidden">
+                  <div 
+                    class="h-full transition-all duration-300"
+                    :class="{
+                      'bg-primary': deployProgress.status === 'pending',
+                      'bg-blue-500': deployProgress.status === 'converting',
+                      'bg-green-500': deployProgress.status === 'completed',
+                      'bg-red-500': deployProgress.status === 'error'
+                    }"
+                    :style="{ width: `${(deployProgress.currentStep / Math.max(deployProgress.totalSteps, 1)) * 100}%` }"
+                  ></div>
+                </div>
+
+                <div class="flex items-center gap-2 text-sm">
+                  <Loader2 v-if="deployProgress.status === 'converting'" class="h-4 w-4 animate-spin text-blue-500" />
+                  <CheckCircle v-else-if="deployProgress.status === 'completed'" class="h-4 w-4 text-green-500" />
+                  <XCircle v-else-if="deployProgress.status === 'error'" class="h-4 w-4 text-red-500" />
+                  <Clock v-else class="h-4 w-4 text-muted-foreground" />
+                  <span :class="{
+                    'text-muted-foreground': deployProgress.status === 'pending',
+                    'text-blue-500': deployProgress.status === 'converting',
+                    'text-green-500': deployProgress.status === 'completed',
+                    'text-red-500': deployProgress.status === 'error'
+                  }">{{ deployProgress.message }}</span>
+                </div>
+
+                <div v-if="deployProgress.convertedLabels.length > 0" class="flex flex-wrap gap-1">
+                  <Badge 
+                    v-for="label in deployProgress.convertedLabels" 
+                    :key="label" 
+                    variant="secondary"
+                    class="text-xs"
+                  >
+                    <CheckCircle class="h-3 w-3 mr-1" />
+                    {{ label }}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
     </main>
   </div>
 </template>
