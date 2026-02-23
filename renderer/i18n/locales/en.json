@@ -230,6 +230,7 @@
       "epochs": "Epochs",
       "batchSize": "Batch Size",
       "learningRate": "Learning Rate",
+      "parallelTrain": "Parallel Training",
       "start": "Start Training",
       "starting": "Starting...",
       "startFailed": "Failed to start training",

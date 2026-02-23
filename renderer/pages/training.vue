@@ -36,6 +36,7 @@ import UiSelectItem from '@/components/ui/select/SelectItem.vue'
 import UiSelectTrigger from '@/components/ui/select/SelectTrigger.vue'
 import UiSelectValue from '@/components/ui/select/SelectValue.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
+import Switch from '@/components/ui/switch/Switch.vue'
 
 definePageMeta({ 
   keepalive: true,
@@ -1842,6 +1843,7 @@ const startTraining = async () => {
       train_epochs: finalEpochs,
       batch_size: Math.round(Number(trainConfig.value.batchSize[0] || 8)),
       learning_rate: Number(trainConfig.value.learningRate || 0.01),
+      parallel_train: trainConfig.value.parallelTrain || false,
       label_names: selectedTrainLabelNames.value.length > 0 ? selectedTrainLabelNames.value : null,
       resume_path: null,
       resume_mode: trainStartMode.value === 'resume' ? resumeMode.value : null
@@ -2289,7 +2291,8 @@ const previewGridCols = computed(() => {
 const trainConfig = ref({
   epochs: [10],
   batchSize: [8],
-  learningRate: 0.001
+  learningRate: 0.001,
+  parallelTrain: false
 })
 
 const enabledAugmentations = computed(() => {
@@ -3372,9 +3375,15 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="space-y-1">
-                <div class="flex justify-between">
+                <div class="flex justify-between items-center">
                   <Label>{{ trainStartMode === 'resume' && resumeMode === 'extended' ? t('training.train.epochsAdditional') : t('training.train.epochs') }}</Label>
-                  <span class="text-xs font-medium">{{ trainConfig.epochs[0] }}</span>
+                  <Input 
+                    type="number" 
+                    v-model.number="trainConfig.epochs[0]" 
+                    :min="1" 
+                    :max="200" 
+                    class="h-7 w-16 text-xs px-2 text-right" 
+                  />
                 </div>
                 <Slider v-model="trainConfig.epochs" :min="1" :max="200" />
                 <div v-if="trainStartMode === 'resume' && resumeMode === 'interrupted'" class="text-[9px] text-amber-600 dark:text-amber-400">
@@ -3382,9 +3391,15 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div class="space-y-1">
-                <div class="flex justify-between">
+                <div class="flex justify-between items-center">
                   <Label>{{ t('training.train.batchSize') }}</Label>
-                  <span class="text-xs font-medium">{{ trainConfig.batchSize[0] }}</span>
+                  <Input 
+                    type="number" 
+                    v-model.number="trainConfig.batchSize[0]" 
+                    :min="1" 
+                    :max="64" 
+                    class="h-7 w-16 text-xs px-2 text-right" 
+                  />
                 </div>
                 <Slider v-model="trainConfig.batchSize" :min="1" :max="64" />
               </div>
@@ -3392,6 +3407,11 @@ onBeforeUnmount(() => {
               <div class="space-y-1">
                 <Label class="text-xs">{{ t('training.train.learningRate') }}</Label>
                 <Input type="number" v-model="trainConfig.learningRate" step="0.0001" class="h-9 text-xs px-2" />
+              </div>
+
+              <div class="flex items-center justify-between">
+                <Label class="text-xs">{{ t('training.train.parallelTrain') }}</Label>
+                <Switch v-model="trainConfig.parallelTrain" />
               </div>
 
               <div class="space-y-1">

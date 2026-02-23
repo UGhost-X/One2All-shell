@@ -246,6 +246,7 @@
       "epochs": "训练轮数",
       "batchSize": "批大小",
       "learningRate": "学习率",
+      "parallelTrain": "并行训练",
       "start": "开始训练",
       "starting": "启动中...",
       "startFailed": "启动训练失败",
