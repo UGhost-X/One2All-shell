@@ -3675,7 +3675,7 @@ onBeforeUnmount(() => {
         </div>
         <p class="text-sm text-muted-foreground">{{ t('training.view.unsavedWarning') }}</p>
         <div class="flex gap-3 pt-2">
-          <UiButton variant="outline" class="flex-1" @click="showUnsavedDialog = false">{{ t('training.view.saveFirst') }}</UiButton>
+          <UiButton variant="outline" class="flex-1" @click="openSaveDialog(); showUnsavedDialog = false">{{ t('training.view.saveFirst') }}</UiButton>
           <UiButton variant="destructive" class="flex-1" @click="enterTrainStep({ useCurrent: true }); showUnsavedDialog = false">{{ t('training.view.confirmNext') }}</UiButton>
         </div>
       </div>

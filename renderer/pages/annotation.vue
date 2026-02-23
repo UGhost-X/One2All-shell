@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, reactive, onUnmounted, watch, nextTick, onActivated, onDeactivated } from 'vue'
+import { onMounted, ref, reactive, onUnmounted, watch, nextTick, onActivated, onDeactivated, markRaw } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Canvas, Rect, Polygon, FabricImage, Point, Line, Circle } from 'fabric'
 import { 
@@ -58,7 +58,6 @@ interface ImageData {
   annotations: Annotation[]
 }
 
-// --- State ---
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const containerRef = ref<HTMLDivElement | null>(null)
 const fCanvas = ref<Canvas | null>(null)
@@ -74,7 +73,6 @@ const activeSchemeId = ref<number | null>(null)
 
 const showLabelPanel = ref(true)
 
-// --- Image Viewer State (Home同款) ---
 const viewerViewportRef = ref<HTMLElement | null>(null)
 const viewerImageNatural = ref<{ w: number; h: number } | null>(null)
 const viewerViewportSize = ref({ w: 0, h: 0 })
@@ -96,7 +94,6 @@ const updateViewerViewportSize = () => {
   if (!el) return
   const rect = el.getBoundingClientRect()
   
-  // Use container dimensions as fallback if rect is 0
   const w = rect.width || (containerRef.value?.clientWidth ?? 800)
   const h = rect.height || (containerRef.value?.clientHeight ?? 600)
   
@@ -155,7 +152,6 @@ const bindScheme = async (schemeId: number) => {
       } else {
         customColors.splice(0, customColors.length)
       }
-      // Don't auto-select label anymore per user request
       activeLabelId.value = null
       activeTool.value = 'select'
     }
@@ -212,7 +208,6 @@ const confirmDeleteScheme = async () => {
   }
 }
 
-// --- Label Config State ---
 const labelConfigs = reactive<LabelConfig[]>([
   { id: '1', name: 'Label A', type: 'rect', color: '#3b82f6' },
   { id: '2', name: 'Label B', type: 'polygon', color: '#ef4444' },
@@ -220,7 +215,6 @@ const labelConfigs = reactive<LabelConfig[]>([
 ])
 const activeLabelId = ref<string | null>(null)
 
-// --- Label Management ---
 const isEditingLabel = ref(false)
 const isAddingMode = ref(false)
 const editingLabel = reactive<LabelConfig>({
@@ -233,7 +227,6 @@ const editingLabel = reactive<LabelConfig>({
 const customColors = reactive<string[]>([])
 
 const addNewLabel = async () => {
-  // If no active scheme, create one first
   if (!activeSchemeId.value && window.electronAPI && productId.value) {
     const schemeName = `Scheme for ${productName.value || productId.value}`
     const newScheme = await window.electronAPI.saveScheme({
@@ -246,10 +239,8 @@ const addNewLabel = async () => {
 
   const newId = Math.random().toString(36).substr(2, 9)
   
-  // High contrast color palette
   const palette = [...defaultPalette, ...customColors]
   
-  // Find a color that isn't already used
   const usedColors = labelConfigs.map(l => l.color.toLowerCase())
   const availableColor = palette.find(c => !usedColors.includes(c.toLowerCase())) || palette[Math.floor(Math.random() * palette.length)]
   
@@ -349,7 +340,6 @@ const saveLabelConfig = async () => {
     const index = labelConfigs.findIndex(c => c.id === editingLabel.id)
     if (index !== -1) {
       labelConfigs[index] = { ...editingLabel }
-      // Update existing annotations with this label
       images.forEach(img => {
         img.annotations.forEach((ann: any) => {
           if (ann.labelId === editingLabel.id) {
@@ -359,7 +349,6 @@ const saveLabelConfig = async () => {
         })
       })
 
-      // Update canvas if current image has annotations with this label
       if (fCanvas.value) {
         fCanvas.value.getObjects().forEach((obj: any) => {
           if (obj.labelId === editingLabel.id) {
@@ -374,7 +363,6 @@ const saveLabelConfig = async () => {
     }
   }
 
-  // Save to DB
   if (activeSchemeId.value && window.electronAPI) {
     await window.electronAPI.saveScheme({
       id: activeSchemeId.value,
@@ -413,6 +401,9 @@ let polygonPoints: Point[] = []
 let activeLine: Line | null = null
 let tempPoints: Circle[] = []
 let tempLines: Line[] = []
+let isFirstPointEnlarged = false
+let dashAnimationFrame: number | null = null
+let dashOffset = 0
 
 // --- Initialization ---
 let listenersBound = false
@@ -645,6 +636,11 @@ const handleKeyDown = (e: KeyboardEvent) => {
 
 const cancelDrawing = () => {
   isDrawing = false
+  isFirstPointEnlarged = false
+  if (dashAnimationFrame !== null) {
+    cancelAnimationFrame(dashAnimationFrame)
+    dashAnimationFrame = null
+  }
   if (tempObj) fCanvas.value?.remove(tempObj)
   tempPoints.forEach(p => fCanvas.value?.remove(p))
   tempLines.forEach(l => fCanvas.value?.remove(l))
@@ -693,15 +689,27 @@ const initCanvasEvents = () => {
   if (!fCanvas.value) return
 
   fCanvas.value.on('mouse:down', (opt) => {
-    // If clicking on an annotation, don't start drawing a new one
     const target = opt.target as any
     const targetId = target?.id ? String(target.id) : ''
-    if (targetId.startsWith('ann_')) {
+    
+    if (targetId.startsWith('ann_') || (opt.transform)) {
       return
     }
 
-    // We use getScenePoint to get coordinates in the transformed image space
     const pointer = fCanvas.value!.getScenePoint(opt.e)
+    
+    if (isDrawing && activeTool.value === 'polygon' && polygonPoints.length >= 2) {
+      const firstPoint = polygonPoints[0]
+      const dist = Math.sqrt(
+        Math.pow(pointer.x - firstPoint.x, 2) + 
+        Math.pow(pointer.y - firstPoint.y, 2)
+      )
+      
+      if (dist < 15) {
+        finishDrawing()
+        return
+      }
+    }
     
     if (activeTool.value === 'rect') {
       if (!activeLabelId.value) return
@@ -722,7 +730,6 @@ const initCanvasEvents = () => {
       })
       fCanvas.value!.add(tempObj)
     } else if (activeTool.value === 'polygon') {
-      // ... similar adjustments for polygon strokeWidth ...
       if (!activeLabelId.value) return
       const config = labelConfigs.find(c => c.id === activeLabelId.value)
       if (!config || config.type !== 'polygon') return
@@ -775,28 +782,78 @@ const initCanvasEvents = () => {
 
   fCanvas.value.on('mouse:move', (opt) => {
     if (!fCanvas.value) return
+    if (!isDrawing) return
+    
     const pointer = fCanvas.value.getScenePoint(opt.e)
 
-    if (!isDrawing) return
-
-  if (activeTool.value === 'rect' && startPoint && tempObj) {
-    const width = pointer.x - startPoint.x
-    const height = pointer.y - startPoint.y
-    
-    // Maintain minimum size
-    const finalWidth = Math.abs(width)
-    const finalHeight = Math.abs(height)
-    
-    tempObj.set({
-      width: finalWidth,
-      height: finalHeight,
-      left: width > 0 ? startPoint.x : pointer.x,
-      top: height > 0 ? startPoint.y : pointer.y,
-    })
-    fCanvas.value.renderAll()
-  } else if (activeTool.value === 'polygon' && activeLine) {
-      activeLine.set({ x2: pointer.x, y2: pointer.y })
+    if (activeTool.value === 'rect' && startPoint && tempObj) {
+      const width = pointer.x - startPoint.x
+      const height = pointer.y - startPoint.y
+      
+      const finalWidth = Math.abs(width)
+      const finalHeight = Math.abs(height)
+      
+      tempObj.set({
+        width: finalWidth,
+        height: finalHeight,
+        left: width > 0 ? startPoint.x : pointer.x,
+        top: height > 0 ? startPoint.y : pointer.y,
+      })
       fCanvas.value.renderAll()
+    } else if (activeTool.value === 'polygon') {
+      if (activeLine) {
+        activeLine.set({ x2: pointer.x, y2: pointer.y })
+        
+        if (dashAnimationFrame === null) {
+          const animateDash = () => {
+            if (!fCanvas.value || !activeLine) return
+            dashOffset -= 0.5
+            activeLine.set({ strokeDashOffset: dashOffset })
+            fCanvas.value.renderAll()
+            dashAnimationFrame = requestAnimationFrame(animateDash)
+          }
+          dashAnimationFrame = requestAnimationFrame(animateDash)
+        }
+      }
+      
+      if (polygonPoints.length >= 2) {
+        const firstPoint = polygonPoints[0]
+        const config = labelConfigs.find(c => c.id === activeLabelId.value)
+        const color = config?.color || '#fff'
+        const dist = Math.sqrt(
+          Math.pow(pointer.x - firstPoint.x, 2) + 
+          Math.pow(pointer.y - firstPoint.y, 2)
+        )
+        const s = viewerScale.value
+        
+        if (dist < 15) {
+          if (!isFirstPointEnlarged && tempPoints.length > 0) {
+            tempPoints[0].set({ 
+              radius: 8 / s,
+              left: firstPoint.x - 8 / s,
+              top: firstPoint.y - 8 / s,
+              fill: 'transparent',
+              stroke: color,
+              strokeWidth: 2 / s
+            })
+            isFirstPointEnlarged = true
+            fCanvas.value.renderAll()
+          }
+        } else {
+          if (isFirstPointEnlarged && tempPoints.length > 0) {
+            tempPoints[0].set({ 
+              radius: 4 / s,
+              left: firstPoint.x - 4 / s,
+              top: firstPoint.y - 4 / s,
+              fill: color,
+              stroke: '#fff',
+              strokeWidth: 1 / s
+            })
+            isFirstPointEnlarged = false
+            fCanvas.value.renderAll()
+          }
+        }
+      }
     }
   })
 
@@ -891,6 +948,11 @@ const finishDrawing = () => {
   if (!config) return
 
   isDrawing = false
+  isFirstPointEnlarged = false
+  if (dashAnimationFrame !== null) {
+    cancelAnimationFrame(dashAnimationFrame)
+    dashAnimationFrame = null
+  }
 
   pushHistory()
 
@@ -925,20 +987,23 @@ const finishDrawing = () => {
       lockRotation: true,
       lockScalingFlip: true,
       hasControls: true,
+      selectable: true,
+      evented: true,
       id: id as any,
       labelId: config.id as any,
       cornerColor: '#fff',
       cornerStrokeColor: color,
       cornerSize: 8,
-      cornerStyle: 'circle',
+      cornerStyle: 'rect',
       transparentCorners: false,
       padding: 5,
     } as any)
 
     rect.setControlVisible('mtr', false);
     
-    fCanvas.value.add(rect)
-    fCanvas.value.setActiveObject(rect)
+    fCanvas.value.add(markRaw(rect))
+    rect.setCoords()
+    fCanvas.value.setActiveObject(markRaw(rect))
   } else if (activeTool.value === 'polygon' && polygonPoints.length >= 3) {
     newAnn = {
       id,
@@ -956,7 +1021,7 @@ const finishDrawing = () => {
     if (activeLine) fCanvas.value!.remove(activeLine)
     
     const poly = new Polygon(polygonPoints, {
-      fill: `${color}1A`, // 10% opacity
+      fill: `${color}1A`,
       stroke: color,
       strokeWidth: 2,
       lockMovementX: false,
@@ -966,21 +1031,23 @@ const finishDrawing = () => {
       lockRotation: true,
       lockScalingFlip: true,
       hasControls: true,
+      selectable: true,
+      evented: true,
       cornerColor: '#fff',
       cornerStrokeColor: color,
       cornerSize: 8,
-      cornerStyle: 'circle',
+      cornerStyle: 'rect',
       transparentCorners: false,
       padding: 5,
       id: id as any,
       labelId: config.id as any,
       objectCaching: false,
-      
     } as any)
     //取消长柄
     poly.setControlVisible('mtr', false);
-    fCanvas.value.add(poly)
-    fCanvas.value.setActiveObject(poly)
+    fCanvas.value.add(markRaw(poly))
+    poly.setCoords()
+    fCanvas.value.setActiveObject(markRaw(poly))
     
     polygonPoints = []
     tempPoints = []
@@ -990,6 +1057,7 @@ const finishDrawing = () => {
 
   if (newAnn) {
     images[currentImgIndex.value].annotations.push(newAnn)
+    activeTool.value = 'select'
   }
   
   tempObj = null
@@ -1042,7 +1110,7 @@ const loadImage = async (index: number) => {
       hoverCursor: 'default'
     })
     
-    fCanvas.value.add(img)
+    fCanvas.value.add(markRaw(img))
     fCanvas.value.sendObjectToBack(img)
     
     // Draw existing annotations
@@ -1064,7 +1132,7 @@ const drawAnnotation = (ann: Annotation) => {
       top: ann.points[1],
       width: ann.points[2],
       height: ann.points[3],
-      fill: `${ann.color}1A`, // 10% opacity
+      fill: `${ann.color}1A`,
       stroke: ann.color,
       strokeWidth: 2,
       lockMovementX: false,
@@ -1074,16 +1142,20 @@ const drawAnnotation = (ann: Annotation) => {
       lockRotation: true,
       lockScalingFlip: true,
       hasControls: true,
+      selectable: true,
+      evented: true,
       id: ann.id as any,
       labelId: ann.labelId as any,
       cornerColor: '#fff',
       cornerStrokeColor: ann.color,
       cornerSize: 12,
-      cornerStyle: 'circle',
+      cornerStyle: 'rect',
       transparentCorners: false,
       padding: 5,
     } as any)
-    fCanvas.value.add(rect)
+    fCanvas.value.add(markRaw(rect))
+    rect.setCoords()
+    rect.setControlVisible('mtr', false)
   } else {
     // COCO segmentation is [x1, y1, x2, y2, ...]
     // Need to convert to [{x, y}, ...] for fabric.Polygon
@@ -1097,7 +1169,7 @@ const drawAnnotation = (ann: Annotation) => {
     }
 
     const poly = new Polygon(points.length > 0 ? points : (ann.points as any), {
-      fill: `${ann.color}1A`, // 10% opacity
+      fill: `${ann.color}1A`,
       stroke: ann.color,
       strokeWidth: 2,
       lockMovementX: false,
@@ -1107,17 +1179,21 @@ const drawAnnotation = (ann: Annotation) => {
       lockRotation: true,
       lockScalingFlip: true,
       hasControls: true,
+      selectable: true,
+      evented: true,
       cornerColor: '#fff',
       cornerStrokeColor: ann.color,
       cornerSize: 12,
-      cornerStyle: 'circle',
+      cornerStyle: 'rect',
       transparentCorners: false,
       padding: 5,
       id: ann.id as any,
       labelId: ann.labelId as any,
       objectCaching: false,
     } as any)
-    fCanvas.value.add(poly)
+    fCanvas.value.add(markRaw(poly))
+    poly.setCoords()
+    poly.setControlVisible('mtr', false)
   }
 }
 
@@ -1207,7 +1283,6 @@ const saveAllChanges = async () => {
 
 const handleNextStep = async () => {
   await saveAllChanges()
-  // Wait a bit for the "Saved" state to show, then move to training page
   setTimeout(async () => {
     const currentImg = images[currentImgIndex.value]
     if (!currentImg) return
