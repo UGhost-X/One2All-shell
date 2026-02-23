@@ -37,6 +37,8 @@ import TabsList from '@/components/ui/tabs/TabsList.vue'
 import TabsTrigger from '@/components/ui/tabs/TabsTrigger.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
 
+definePageMeta({ name: 'HomePage' })
+
 const { t } = useI18n()
 const router = useRouter()
 const globalToast = inject<any>('toast')

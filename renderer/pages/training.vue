@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -37,7 +37,10 @@ import UiSelectTrigger from '@/components/ui/select/SelectTrigger.vue'
 import UiSelectValue from '@/components/ui/select/SelectValue.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
 
-definePageMeta({ keepalive: true })
+definePageMeta({ 
+  keepalive: true,
+  name: 'TrainingPage'
+})
 
 const { t } = useI18n()
 const route = useRoute()
@@ -2494,10 +2497,6 @@ const getSvgPoints = (ann: any) => {
 }
 
 onMounted(async () => {
-  if (window.electronAPI) {
-    isPinned.value = await window.electronAPI.isAlwaysOnTop()
-  }
-
   if (window.electronAPI?.getSettings) {
     const settings = await window.electronAPI.getSettings()
     if (settings?.dataPath) settingsDataPath.value = settings.dataPath
@@ -2519,16 +2518,15 @@ onMounted(async () => {
     innerStep.value = 'augment'
   }
 
+  // 加载图片
   if (productId.value && window.electronAPI) {
-    const files = await window.electronAPI.getProductImages(productId.value)
-    if (files && files.length > 0) {
-      // Use provided image path or default to the first one
-      const targetImagePath = (qImagePath as string) || files[0]
-      const url = await window.electronAPI.loadImage(targetImagePath)
-      baseImageUrl.value = url || ''
-      console.log('Loaded image for training:', { path: targetImagePath, hasUrl: !!url })
-      
+    // 优先使用传入的imagePath，否则获取产品的所有图片
+    if (qImagePath) {
+      // 直接加载传入的图片路径
+      const url = await window.electronAPI.loadImage(qImagePath)
+      console.log('[Training] Loading specific image:', qImagePath, 'URL exists:', !!url)
       if (url) {
+        baseImageUrl.value = url
         const img = new Image()
         img.onload = () => {
           baseImageSize.value = { width: img.width, height: img.height }
@@ -2536,35 +2534,98 @@ onMounted(async () => {
         img.src = url
       }
       
-      // Load annotations for the selected image
-      const ann = await window.electronAPI.getAnnotations(productId.value, targetImagePath)
+      // Load annotations
+      const ann = await window.electronAPI.getAnnotations(productId.value, qImagePath)
       if (ann && ann.data) {
         currentAnnotations.value = JSON.parse(ann.data)
       }
+    } else {
+      // 获取产品的所有图片，取第一张
+      const files = await window.electronAPI.getProductImages(productId.value)
+      console.log('[Training] Product images:', files)
+      if (files && files.length > 0) {
+        const targetImagePath = files[0]
+        const url = await window.electronAPI.loadImage(targetImagePath)
+        baseImageUrl.value = url || ''
+        
+        if (url) {
+          const img = new Image()
+          img.onload = () => {
+            baseImageSize.value = { width: img.width, height: img.height }
+          }
+          img.src = url
+        }
+        
+        const ann = await window.electronAPI.getAnnotations(productId.value, targetImagePath)
+        if (ann && ann.data) {
+          currentAnnotations.value = JSON.parse(ann.data)
+        }
+      }
+    }
 
-      // Load product labels for COCO category_id mapping
+    // Load product labels for COCO category_id mapping
+    const products = await window.electronAPI.getProducts()
+    const product = products.find(p => p.id === productId.value)
+    console.log('[Training] Loading labels for product:', productId.value, 'Product found:', !!product, 'Scheme:', product?.scheme ? 'exists' : 'none')
+    if (product?.scheme) {
+      const config = JSON.parse(product.scheme.config)
+      console.log('[Training] Labels config:', config.labels)
+      labelConfigs.value = config.labels || []
+    }
+
+    // Load dataset versions
+    datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
+    versionName.value = getNextVersionName(datasetVersions.value)
+
+    const restored = await restoreActiveTrainingState()
+    if (restored) {
+      const key = innerStepStorageKey.value
+      if (key && typeof window !== 'undefined') window.localStorage.setItem(key, innerStep.value)
+    }
+
+    // Default to basic augmentation
+    applyPreset('basic')
+  }
+})
+
+watch(() => route.query, async (newQuery) => {
+  const qImagePath = newQuery.imagePath
+  const qProductId = newQuery.productId
+  
+  if (qProductId) {
+    productId.value = Number(qProductId)
+    
+    // Load label configs from product scheme
+    if (window.electronAPI) {
       const products = await window.electronAPI.getProducts()
       const product = products.find(p => p.id === productId.value)
       if (product?.scheme) {
         const config = JSON.parse(product.scheme.config)
         labelConfigs.value = config.labels || []
       }
-
-      // Load dataset versions
-      datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
-      versionName.value = getNextVersionName(datasetVersions.value)
-
-      const restored = await restoreActiveTrainingState()
-      if (restored) {
-        const key = innerStepStorageKey.value
-        if (key && typeof window !== 'undefined') window.localStorage.setItem(key, innerStep.value)
-      }
-
-      // Default to basic augmentation
-      applyPreset('basic')
     }
   }
-})
+  
+  if (qImagePath && window.electronAPI) {
+    console.log('[Training] Route query changed, loading image:', qImagePath)
+    const url = await window.electronAPI.loadImage(qImagePath)
+    if (url) {
+      baseImageUrl.value = url
+      const img = new Image()
+      img.onload = () => {
+        baseImageSize.value = { width: img.width, height: img.height }
+      }
+      img.src = url
+    }
+    
+    if (productId.value) {
+      const ann = await window.electronAPI.getAnnotations(productId.value, qImagePath)
+      if (ann && ann.data) {
+        currentAnnotations.value = JSON.parse(ann.data)
+      }
+    }
+  }
+}, { immediate: false })
 
 onBeforeUnmount(() => {
   closeMonitorStream()

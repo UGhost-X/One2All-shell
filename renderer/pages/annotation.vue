@@ -14,6 +14,7 @@ import {
   Plus,
   Check,
   X,
+  Settings2,
   Palette,
   BookOpen,
   Maximize
@@ -21,7 +22,10 @@ import {
 import { useI18n } from 'vue-i18n'
 import { computed } from 'vue'
 
-definePageMeta({ keepalive: true })
+definePageMeta({ 
+  keepalive: true,
+  name: 'AnnotationPage'
+})
 
 import Separator from '@/components/ui/separator/Separator.vue'
 import UiSelect from '@/components/ui/select/Select.vue'
@@ -427,15 +431,11 @@ const unbindWindowListeners = () => {
 }
 
 onMounted(async () => {
-  if (window.electronAPI) {
-    isPinned.value = await window.electronAPI.isAlwaysOnTop()
-  }
-
   // Handle image from route query
   const qProductId = route.query.productId
   const qImagePath = route.query.imagePath
   const qProductName = route.query.productName
-
+  
   if (qProductId) productId.value = Number(qProductId)
   if (qImagePath) imagePath.value = String(qImagePath)
   if (qProductName) productName.value = String(qProductName)
@@ -571,6 +571,48 @@ onActivated(() => {
     syncCanvasToViewer()
   })
 })
+
+watch(() => route.query, async (newQuery) => {
+  console.log('[Annotation] Route query changed:', newQuery)
+  const qProductId = newQuery.productId
+  const qImagePath = newQuery.imagePath
+  const qProductName = newQuery.productName
+  
+  if (qProductId) {
+    productId.value = Number(qProductId)
+    productName.value = String(qProductName || '')
+    
+    if (qImagePath) {
+      imagePath.value = String(qImagePath)
+      
+      const normalize = (p: string) => (p || '').replace(/\\/g, '/').toLowerCase()
+      const targetPath = normalize(imagePath.value)
+      
+      const existingImg = images.find(img => normalize(img.fullPath || '') === targetPath)
+      if (existingImg) {
+        const idx = images.indexOf(existingImg)
+        currentImgIndex.value = idx
+        if (!existingImg.url && existingImg.fullPath) {
+          const dataUrl = await window.electronAPI.loadImage(existingImg.fullPath)
+          existingImg.url = dataUrl || ''
+        }
+      } else if (window.electronAPI) {
+        const savedAnnotations = await window.electronAPI.getAnnotations(productId.value, imagePath.value)
+        const annData = savedAnnotations ? JSON.parse(savedAnnotations.data) : []
+        
+        const dataUrl = await window.electronAPI.loadImage(imagePath.value)
+        
+        images.unshift({
+          url: dataUrl || '',
+          fullPath: imagePath.value,
+          name: imagePath.value.split(/[\\/]/).pop() || 'image.jpg',
+          annotations: annData
+        })
+        currentImgIndex.value = 0
+      }
+    }
+  }
+}, { immediate: true })
 
 onDeactivated(() => {
   unbindWindowListeners()
@@ -1169,6 +1211,12 @@ const handleNextStep = async () => {
   setTimeout(async () => {
     const currentImg = images[currentImgIndex.value]
     if (!currentImg) return
+    
+    console.log('[Annotation] Going to training with:', {
+      productId: productId.value,
+      productName: productName.value,
+      imagePath: currentImg.fullPath
+    })
     
     router.push({
       path: '/training',
