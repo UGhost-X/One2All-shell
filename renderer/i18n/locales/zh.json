@@ -17,7 +17,8 @@
     "deleteFailed": "删除失败",
     "confirmDelete": "确认删除",
     "cancel": "取消",
-    "confirm": "确认"
+    "confirm": "确认",
+    "download": "下载"
   },
   "settings": {
     "title": "系统设置",
@@ -378,7 +379,9 @@
       "deleteModelWarning": "确定要删除模型 \"{label}\" 吗？此操作不可恢复。",
       "deleteModelTaskWarning": "确定要删除整个任务 \"{task}\" 的所有模型吗？此操作不可恢复。",
       "deleteThisLabel": "删除当前分类",
-      "deleteAllTask": "删除整个任务"
+      "deleteAllTask": "删除整个任务",
+      "converted": "已转换",
+      "inference": "推理配置"
     },
     "messages": {
       "success": "增强预览生成成功",

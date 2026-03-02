@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2 } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -368,6 +368,7 @@ const resetMonitorState = (opts?: { clearActive?: boolean }) => {
     trainTasks.value = []
     trainGroupId.value = ''
     trainTaskUuid.value = ''
+    trainDatasetVersionId.value = ''
     currentBaseEpoch.value = 0
   }
 }
@@ -429,9 +430,11 @@ const restoreActiveTrainingState = async () => {
   const gidKey = trainGroupIdStorageKey.value
   const uuidKey = trainTaskUuidStorageKey.value
   const tasksKey = trainTasksStorageKey.value
+  const datasetVersionKey = trainDatasetVersionIdStorageKey.value
   const savedGid = window.localStorage.getItem(gidKey)
   const savedUuid = window.localStorage.getItem(uuidKey)
   const savedTasksRaw = window.localStorage.getItem(tasksKey)
+  const savedDatasetVersionId = window.localStorage.getItem(datasetVersionKey)
   if (!savedGid || !savedTasksRaw) return false
   try {
     const savedTasks = JSON.parse(savedTasksRaw)
@@ -442,9 +445,20 @@ const restoreActiveTrainingState = async () => {
     innerStep.value = 'train'
     activeMonitorTab.value = 'overview'
     monitorTaskId.value = 'all'
+
+    // 恢复数据集
+    if (savedDatasetVersionId) {
+      trainDatasetVersionId.value = savedDatasetVersionId
+      try {
+        await loadTrainDatasetFromVersion(savedDatasetVersionId)
+      } catch (err) {
+        console.error('Failed to restore dataset version:', err)
+      }
+    }
+
     startGroupPolling()
     await Promise.all(savedTasks.map((t: any) => loadTaskSnapshot(String(t?.task_id || ''))))
-    
+
     // 如果是续训模式，尝试自动设置目标轮数为之前任务的目标轮数
     if (trainStartMode.value === 'resume') {
       let maxRemoteTarget = 0
@@ -556,6 +570,11 @@ const trainTasksStorageKey = computed(() => {
   return `one2all.training.activeTasks.${pid}`
 })
 
+const trainDatasetVersionIdStorageKey = computed(() => {
+  const pid = productId.value == null ? '' : String(productId.value)
+  return `one2all.training.datasetVersionId.${pid}`
+})
+
 // Persistence for active training state
 watch(trainGroupId, (id) => {
   const key = trainGroupIdStorageKey.value
@@ -586,6 +605,17 @@ watch(trainTasks, (tasks) => {
     window.localStorage.removeItem(key)
   }
 }, { deep: true })
+
+watch(trainDatasetVersionId, (id) => {
+  const key = trainDatasetVersionIdStorageKey.value
+  if (!key || typeof window === 'undefined') return
+  if (id) {
+    window.localStorage.setItem(key, id)
+  } else {
+    window.localStorage.removeItem(key)
+  }
+})
+
 const monitorGroupProgress = ref(0)
 const monitorGroupStatus = ref('')
 const activeMonitorTab = ref('overview')
@@ -967,64 +997,99 @@ const startGroupPolling = () => {
         const isGroupCompleted = String(data.status || '').toLowerCase() === 'completed' || String(data.status || '').toLowerCase() === 'success'
         monitorGroupProgress.value = isGroupCompleted ? 100 : (data.progress || 0)
         monitorGroupStatus.value = data.status || ''
-        
+
         // 刷新运行记录
         if (productId.value && window.electronAPI) {
           trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
         }
-        
+
         const groupStatus = data.status
-        const groupProgress = data.progress || 0
-        
-        // 新API：更新所有label的进度，使用相同的status和progress
-        trainTasks.value = trainTasks.value.map(t => {
-          const isTaskCompleted = isGroupCompleted
-          
-          const targetE = Number(data.total_epochs || data.config?.train_epochs || 0)
-          if (Number.isFinite(targetE) && targetE > 0) {
+        const targetE = Number(data.total_epochs || data.config?.train_epochs || data.config?.train_iters || 0)
+        if (Number.isFinite(targetE) && targetE > 0) {
+          for (const t of trainTasks.value) {
             taskTargetEpochs.value[t.task_id] = targetE
           }
+        }
 
-          if (productId.value && window.electronAPI && trainTaskUuid.value) {
-            const taskMetrics = groupMetrics.value[t.task_id] || []
-            const taskLogs = groupLogs.value[t.task_id] || []
-            const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
-            const serializableLogs = taskLogs.map((log: any) => String(log))
-            window.electronAPI.saveTrainingRecord({
-              productId: productId.value,
-              taskId: trainTaskUuid.value,
-              labelName: t.label,
-              modelName: data.model_name,
-              status: groupStatus,
-              progress: isTaskCompleted ? 100 : groupProgress,
-              totalEpochs: targetE,
-              currentEpoch: data.current_epoch,
-              batchSize: data.config?.train_batch_size || trainConfig.value.batchSize[0],
-              learningRate: data.config?.train_learning_rate || getLearningRateValue(),
-              metrics: serializableMetrics,
-              logs: serializableLogs,
-              startedAt: data.started_at ? new Date(data.started_at) : undefined,
-              completedAt: isTaskCompleted ? new Date() : undefined
-            }).catch(console.error)
-          }
-
-          return { 
-            ...t, 
-            status: groupStatus, 
-            progress: isTaskCompleted ? 100 : groupProgress,
-            current_epoch: data.current_epoch,
-            total_epochs: targetE
-          }
-        })
-
+        // 仅当组完成时，统一更新所有子任务为完成状态
+        // 子任务的独立进度由 SSE 流 (applyMonitorPayload) 维护，避免轮询覆盖
         if (isGroupCompleted) {
+          trainTasks.value = trainTasks.value.map(t => {
+            const taskProgress = t.progress || 0
+            const taskStatus = t.status || ''
+            const isAlreadyCompleted = ['completed', 'success'].includes(String(taskStatus).toLowerCase())
+
+            if (productId.value && window.electronAPI && trainTaskUuid.value) {
+              const taskMetrics = groupMetrics.value[t.task_id] || []
+              const taskLogs = groupLogs.value[t.task_id] || []
+              const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
+              const serializableLogs = taskLogs.map((log: any) => String(log))
+              window.electronAPI.saveTrainingRecord({
+                productId: productId.value,
+                taskId: trainTaskUuid.value,
+                labelName: t.label,
+                modelName: data.model_name,
+                status: 'completed',
+                progress: 100,
+                totalEpochs: targetE,
+                currentEpoch: data.current_epoch,
+                batchSize: data.config?.train_batch_size || trainConfig.value.batchSize[0],
+                learningRate: data.config?.train_learning_rate || getLearningRateValue(),
+                metrics: serializableMetrics,
+                logs: serializableLogs,
+                startedAt: data.started_at ? new Date(data.started_at) : undefined,
+                completedAt: new Date()
+              }).catch(console.error)
+            }
+
+            return {
+              ...t,
+              status: 'completed',
+              progress: 100,
+              current_epoch: data.current_epoch,
+              total_epochs: targetE
+            }
+          })
+
           stopGroupPolling()
           closeMonitorStream()
           if (typeof window !== 'undefined') {
             window.localStorage.removeItem(trainGroupIdStorageKey.value)
             window.localStorage.removeItem(trainTasksStorageKey.value)
             window.localStorage.removeItem(trainTaskUuidStorageKey.value)
+            window.localStorage.removeItem(trainDatasetVersionIdStorageKey.value)
           }
+        } else {
+          // 组未完成时，仅同步目标轮数，不覆盖子任务的独立进度
+          trainTasks.value = trainTasks.value.map(t => {
+            if (productId.value && window.electronAPI && trainTaskUuid.value) {
+              const taskMetrics = groupMetrics.value[t.task_id] || []
+              const taskLogs = groupLogs.value[t.task_id] || []
+              const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
+              const serializableLogs = taskLogs.map((log: any) => String(log))
+              window.electronAPI.saveTrainingRecord({
+                productId: productId.value,
+                taskId: trainTaskUuid.value,
+                labelName: t.label,
+                modelName: data.model_name,
+                status: t.status || groupStatus,
+                progress: t.progress || 0,
+                totalEpochs: targetE,
+                currentEpoch: t.current_epoch || data.current_epoch,
+                batchSize: data.config?.train_batch_size || trainConfig.value.batchSize[0],
+                learningRate: data.config?.train_learning_rate || getLearningRateValue(),
+                metrics: serializableMetrics,
+                logs: serializableLogs,
+                startedAt: data.started_at ? new Date(data.started_at) : undefined,
+                completedAt: undefined
+              }).catch(console.error)
+            }
+
+            return {
+              ...t,
+              total_epochs: targetE
+            }
+          })
         }
       }
     } catch (err) {
@@ -1409,7 +1474,26 @@ const fetchProjectResults = async () => {
     const resModels = await fetch(`${apiBase.replace(/\/$/, '')}/project/${productId.value}/models`)
     if (resModels.ok) {
       const data = await resModels.json()
-      projectModels.value = data.models || []
+      const models = data.models || []
+
+      // 为每个模型检查 ONNX 转换状态
+      for (const model of models) {
+        try {
+          const taskUuid = model.task_uuid || model.task_id
+          const labelName = model.label
+          const resOnnx = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${productId.value}/${taskUuid}/${labelName}`)
+          if (resOnnx.ok) {
+            const onnxData = await resOnnx.json()
+            model.has_onnx = onnxData.has_onnx
+          } else {
+            model.has_onnx = false
+          }
+        } catch (e) {
+          model.has_onnx = false
+        }
+      }
+
+      projectModels.value = models
     } else {
       projectModels.value = []
     }
@@ -1421,6 +1505,263 @@ const fetchProjectResults = async () => {
 }
 
 const expandedResultId = ref<string | null>(null)
+
+// 组收起展开状态
+const collapsedGroups = ref<Record<string, boolean>>({})
+
+// 模型操作菜单状态
+const activeModelMenuId = ref<string | null>(null)
+let modelMenuTimer: ReturnType<typeof setTimeout> | null = null
+
+const openModelMenu = (modelId: string) => {
+  if (modelMenuTimer) {
+    clearTimeout(modelMenuTimer)
+    modelMenuTimer = null
+  }
+  activeModelMenuId.value = modelId
+  // 15秒后自动收起
+  modelMenuTimer = setTimeout(() => {
+    activeModelMenuId.value = null
+  }, 15000)
+}
+
+const closeModelMenu = () => {
+  if (modelMenuTimer) {
+    clearTimeout(modelMenuTimer)
+    modelMenuTimer = null
+  }
+  activeModelMenuId.value = null
+}
+
+const toggleGroupExpand = (groupId: string) => {
+  collapsedGroups.value[groupId] = !collapsedGroups.value[groupId]
+}
+
+// 模型转化相关
+const showConvertDialog = ref(false)
+const convertingModel = ref<any>(null)
+const convertingGroup = ref<any>(null)
+const isConverting = ref(false)
+const convertHasOnnx = ref(false)
+const convertModelInfo = ref<any>(null)
+const groupConvertStatus = ref<Record<string, boolean>>({})
+
+// Label 颜色配置
+const labelColorMap: Record<string, string> = {}
+const colorPalette = [
+  { name: 'blue', bg: 'bg-gradient-to-r from-blue-50/50 to-transparent', hover: 'hover:bg-blue-50 hover:border-blue-200', border: 'border-blue-100', ring: 'ring-2 ring-blue-400 shadow-md', iconBg: 'bg-gradient-to-br from-blue-500/10 to-blue-500/5', iconBorder: 'border-blue-500/20', iconText: 'text-blue-600' },
+  { name: 'green', bg: 'bg-gradient-to-r from-green-50/50 to-transparent', hover: 'hover:bg-green-50 hover:border-green-200', border: 'border-green-100', ring: 'ring-2 ring-green-400 shadow-md', iconBg: 'bg-gradient-to-br from-green-500/10 to-green-500/5', iconBorder: 'border-green-500/20', iconText: 'text-green-600' },
+  { name: 'purple', bg: 'bg-gradient-to-r from-purple-50/50 to-transparent', hover: 'hover:bg-purple-50 hover:border-purple-200', border: 'border-purple-100', ring: 'ring-2 ring-purple-400 shadow-md', iconBg: 'bg-gradient-to-br from-purple-500/10 to-purple-500/5', iconBorder: 'border-purple-500/20', iconText: 'text-purple-600' },
+  { name: 'orange', bg: 'bg-gradient-to-r from-orange-50/50 to-transparent', hover: 'hover:bg-orange-50 hover:border-orange-200', border: 'border-orange-100', ring: 'ring-2 ring-orange-400 shadow-md', iconBg: 'bg-gradient-to-br from-orange-500/10 to-orange-500/5', iconBorder: 'border-orange-500/20', iconText: 'text-orange-600' },
+  { name: 'pink', bg: 'bg-gradient-to-r from-pink-50/50 to-transparent', hover: 'hover:bg-pink-50 hover:border-pink-200', border: 'border-pink-100', ring: 'ring-2 ring-pink-400 shadow-md', iconBg: 'bg-gradient-to-br from-pink-500/10 to-pink-500/5', iconBorder: 'border-pink-500/20', iconText: 'text-pink-600' },
+  { name: 'cyan', bg: 'bg-gradient-to-r from-cyan-50/50 to-transparent', hover: 'hover:bg-cyan-50 hover:border-cyan-200', border: 'border-cyan-100', ring: 'ring-2 ring-cyan-400 shadow-md', iconBg: 'bg-gradient-to-br from-cyan-500/10 to-cyan-500/5', iconBorder: 'border-cyan-500/20', iconText: 'text-cyan-600' },
+  { name: 'indigo', bg: 'bg-gradient-to-r from-indigo-50/50 to-transparent', hover: 'hover:bg-indigo-50 hover:border-indigo-200', border: 'border-indigo-100', ring: 'ring-2 ring-indigo-400 shadow-md', iconBg: 'bg-gradient-to-br from-indigo-500/10 to-indigo-500/5', iconBorder: 'border-indigo-500/20', iconText: 'text-indigo-600' },
+  { name: 'teal', bg: 'bg-gradient-to-r from-teal-50/50 to-transparent', hover: 'hover:bg-teal-50 hover:border-teal-200', border: 'border-teal-100', ring: 'ring-2 ring-teal-400 shadow-md', iconBg: 'bg-gradient-to-br from-teal-500/10 to-teal-500/5', iconBorder: 'border-teal-500/20', iconText: 'text-teal-600' }
+]
+
+const getLabelColorClass = (label: string, index: number) => {
+  if (!labelColorMap[label]) {
+    labelColorMap[label] = colorPalette[index % colorPalette.length].name
+  }
+  const colorName = labelColorMap[label]
+  return colorPalette.find(c => c.name === colorName) || colorPalette[0]
+}
+
+const openConvertDialog = async (model: any) => {
+  convertingModel.value = model
+  convertingGroup.value = null
+  showConvertDialog.value = true
+  convertHasOnnx.value = false
+  convertModelInfo.value = null
+
+  // 检查模型是否已有ONNX转换
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const projectId = productId.value
+    const taskUuid = model.task_uuid || model.task_id
+    const labelName = model.label
+
+    const response = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${projectId}/${taskUuid}/${labelName}`)
+    if (response.ok) {
+      const data = await response.json()
+      convertHasOnnx.value = data.has_onnx
+      convertModelInfo.value = data.model_info
+    }
+  } catch (e) {
+    console.error('获取模型信息失败:', e)
+  }
+}
+
+const openGroupConvertDialog = async (group: any) => {
+  convertingGroup.value = group
+  convertingModel.value = null
+  showConvertDialog.value = true
+  convertHasOnnx.value = false
+  convertModelInfo.value = null
+  groupConvertStatus.value = {}
+
+  // 检查组内所有模型的ONNX转换状态
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const projectId = productId.value
+
+    for (const model of group.models) {
+      const taskUuid = model.task_uuid || model.task_id
+      const labelName = model.label
+
+      try {
+        const response = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${projectId}/${taskUuid}/${labelName}`)
+        if (response.ok) {
+          const data = await response.json()
+          groupConvertStatus.value[model.label] = data.has_onnx
+        } else {
+          groupConvertStatus.value[model.label] = false
+        }
+      } catch (e) {
+        groupConvertStatus.value[model.label] = false
+      }
+    }
+  } catch (e) {
+    console.error('获取组模型信息失败:', e)
+  }
+}
+
+const closeConvertDialog = () => {
+  showConvertDialog.value = false
+  convertingModel.value = null
+  convertingGroup.value = null
+  convertHasOnnx.value = false
+  convertModelInfo.value = null
+  groupConvertStatus.value = {}
+}
+
+const handleModelConvert = async () => {
+  if (convertingGroup.value) {
+    // 批量转换组内所有未转换的模型
+    await handleGroupConvert()
+    return
+  }
+
+  if (!convertingModel.value) {
+    toast?.error('未选择模型')
+    return
+  }
+
+  isConverting.value = true
+
+  try {
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const projectId = productId.value
+    const taskUuid = convertingModel.value.task_uuid || convertingModel.value.task_id
+    const labelName = convertingModel.value.label
+
+    // 使用查询参数而不是 JSON body
+    const url = `${apiBase.replace(/\/$/, '')}/convert/onnx/convert/${projectId}/${taskUuid}/${labelName}?opset_version=11&simplify=true`
+    const response = await fetch(url, {
+      method: 'POST'
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      toast?.success('模型转换成功: ONNX')
+      closeConvertDialog()
+      // 刷新模型列表以获取最新的转换状态
+      await fetchProjectResults()
+    } else {
+      const error = await response.text()
+      throw new Error(error)
+    }
+  } catch (err: any) {
+    toast?.error(`模型转换失败: ${err.message}`)
+  } finally {
+    isConverting.value = false
+  }
+}
+
+const handleGroupConvert = async () => {
+  if (!convertingGroup.value) return
+
+  isConverting.value = true
+  let successCount = 0
+  let failCount = 0
+
+  const apiBase = config.public.apiBase || 'http://localhost:8000'
+  const projectId = productId.value
+
+  for (const model of convertingGroup.value.models) {
+    if (groupConvertStatus.value[model.label]) continue
+
+    try {
+      const taskUuid = model.task_uuid || model.task_id
+      const labelName = model.label
+
+      const url = `${apiBase.replace(/\/$/, '')}/convert/onnx/convert/${projectId}/${taskUuid}/${labelName}?opset_version=11&simplify=true`
+      const response = await fetch(url, {
+        method: 'POST'
+      })
+
+      if (response.ok) {
+        successCount++
+      } else {
+        failCount++
+      }
+    } catch (e) {
+      failCount++
+    }
+  }
+
+  isConverting.value = false
+
+  if (successCount > 0) {
+    toast?.success(`成功转换 ${successCount} 个模型`)
+  }
+  if (failCount > 0) {
+    toast?.error(`${failCount} 个模型转换失败`)
+  }
+
+  closeConvertDialog()
+  await fetchProjectResults()
+}
+
+// 点击空白处关闭悬浮框
+const handleClickOutside = (event: MouseEvent) => {
+  if (!expandedResultId.value) return
+  
+  const target = event.target as HTMLElement
+  if (!target) return
+  
+  // 检查点击是否在悬浮框内部
+  const popoverElements = document.querySelectorAll('.result-popover-content')
+  let isInsidePopover = false
+  
+  popoverElements.forEach(el => {
+    if (el.contains(target)) {
+      isInsidePopover = true
+    }
+  })
+  
+  // 检查点击是否在触发卡片上
+  const cardElements = document.querySelectorAll('.result-card')
+  let isOnCard = false
+  
+  cardElements.forEach(el => {
+    if (el.contains(target)) {
+      isOnCard = true
+    }
+  })
+  
+  if (!isInsidePopover && !isOnCard) {
+    expandedResultId.value = null
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleClickOutside)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleClickOutside)
+})
 
   const unifiedResults = computed(() => {
     const list = []
@@ -1811,24 +2152,23 @@ const openMonitorStream = (taskId: string) => {
   console.log('[openMonitorStream] apiBase:', apiBase)
   console.log('[openMonitorStream] Connecting to:', url)
   console.log('[openMonitorStream] monitorTaskId:', monitorTaskId.value)
-  
+
   const es = new EventSource(url)
   es.onopen = () => console.log('[openMonitorStream] Connected to:', url)
   es.onerror = (err) => console.error('[openMonitorStream] Error:', err)
   monitorEventSources[taskId] = es
-  const onAnyEvent = (e: MessageEvent) => {
-    console.log('[openMonitorStream] Received event, data:', (e as any)?.data?.slice?.(0, 200) || (e as any)?.data)
-    applyMonitorPayload(taskId, (e as any)?.data)
+
+  // 后端SSE只发送标准message事件，data字段包含JSON
+  es.onmessage = (e: MessageEvent) => {
+    console.log('[openMonitorStream] Received message, data:', (e as any)?.data?.slice?.(0, 200) || (e as any)?.data)
+    try {
+      const data = JSON.parse(e.data || '{}')
+      applyMonitorPayload(taskId, data)
+    } catch (err) {
+      console.error('[openMonitorStream] Failed to parse SSE data:', err)
+    }
   }
-  es.onmessage = onAnyEvent
-  es.addEventListener('metrics', onAnyEvent as any)
-  es.addEventListener('metric', onAnyEvent as any)
-  es.addEventListener('logs', onAnyEvent as any)
-  es.addEventListener('log', onAnyEvent as any)
-  es.addEventListener('progress', onAnyEvent as any)
-  es.addEventListener('status', onAnyEvent as any)
-  es.addEventListener('eval_metrics', onAnyEvent as any)
-  es.addEventListener('eval_metric', onAnyEvent as any)
+
   es.onerror = () => {
     console.log('[openMonitorStream] Connection closed for:', taskId)
     closeMonitorStream(taskId)
@@ -1879,92 +2219,68 @@ const mergeMetricPoints = (taskId: string, incoming: any[], mode: 'replace' | 'a
   groupMetrics.value[taskId] = out
 }
 
-const applyMonitorPayload = (taskId: string, raw: any) => {
+const applyMonitorPayload = (taskId: string, data: any) => {
   console.log('[applyMonitorPayload] ===== Start =====')
   console.log('[applyMonitorPayload] taskId:', taskId)
-  console.log('[applyMonitorPayload] raw:', raw?.slice?.(0, 300) || raw)
-  
-  let data: any = raw
-  if (typeof data === 'string') {
-    try {
-      data = JSON.parse(data || '{}')
-    } catch {
-      data = { message: raw }
-    }
+  console.log('[applyMonitorPayload] data:', JSON.stringify(data).slice(0, 300))
+
+  if (!data || typeof data !== 'object') {
+    console.log('[applyMonitorPayload] Invalid data format')
+    return
   }
-  console.log('[applyMonitorPayload] parsed data:', JSON.stringify(data).slice(0, 300))
 
   const isCurrentTask = taskId === monitorTaskId.value
 
-  if (data && typeof data === 'object') {
-    if (isCurrentTask && typeof data.status === 'string') monitorStatus.value = data.status
-    const isCompleted = String(data.status || '').toLowerCase() === 'completed' || String(data.status || '').toLowerCase() === 'success'
-    
+  // 更新状态
+  if (typeof data.status === 'string') {
+    if (isCurrentTask) monitorStatus.value = data.status
+    const isCompleted = ['completed', 'success'].includes(String(data.status).toLowerCase())
+
     // 同步任务的目标轮数
-    const targetE = Number(data.total_epochs || (data.config?.train_epochs) || (data.config?.epochs))
+    const targetE = Number(data.total_epochs || data.config?.train_epochs || data.config?.train_iters || data.config?.epochs || 0)
     if (Number.isFinite(targetE) && targetE > 0) {
       taskTargetEpochs.value[taskId] = targetE
     }
 
+    // 更新当前任务的进度
     if (isCurrentTask) {
       if (isCompleted) {
         monitorProgress.value = 100
-      } else if (data.progress != null && data.progress !== '') {
+      } else if (data.progress != null) {
         const p = Number(data.progress)
         if (Number.isFinite(p)) monitorProgress.value = p
       }
     }
+
+    // 更新任务列表中的状态
+    const taskIndex = trainTasks.value.findIndex(t => t.task_id === taskId)
+    if (taskIndex >= 0) {
+      trainTasks.value[taskIndex].status = data.status
+      if (data.progress != null) {
+        trainTasks.value[taskIndex].progress = isCompleted ? 100 : Number(data.progress)
+      }
+      if (data.current_epoch != null) {
+        trainTasks.value[taskIndex].current_epoch = data.current_epoch
+      }
+      if (data.total_epochs != null) {
+        trainTasks.value[taskIndex].total_epochs = data.total_epochs
+      }
+    }
   }
 
-  const logsCandidate =
-    data?.new_logs ??
-    data?.logs ??
-    data?.log ??
-    data?.new_log ??
-    data?.message
-
-  const logsArr = normalizeToArray(logsCandidate)
-  if (logsArr && logsArr.length > 0) {
-    const newLogs = logsArr.map((x: any) => String(x))
+  // 处理日志 - 后端返回 new_logs 数组
+  if (Array.isArray(data.new_logs) && data.new_logs.length > 0) {
+    const newLogs = data.new_logs.map((x: any) => String(x))
     if (!groupLogs.value[taskId]) groupLogs.value[taskId] = []
     groupLogs.value[taskId] = groupLogs.value[taskId].concat(newLogs)
     if (isCurrentTask) {
       monitorLogs.value = groupLogs.value[taskId]
     }
-  } else if (typeof logsCandidate === 'string' && logsCandidate.trim()) {
-    if (!groupLogs.value[taskId]) groupLogs.value[taskId] = []
-    groupLogs.value[taskId].push(logsCandidate)
-    if (isCurrentTask) {
-      monitorLogs.value = groupLogs.value[taskId]
-    }
   }
 
-  const metricsCandidate =
-    data?.new_metrics ??
-    data?.metrics ??
-    data?.metric ??
-    data?.new_metric
-
-  const metricsArr = normalizeToArray(metricsCandidate)
-  if (metricsArr && metricsArr.length > 0) {
-    const mode: 'replace' | 'append' = data?.new_metrics != null || data?.new_metric != null ? 'append' : 'replace'
-    mergeMetricPoints(taskId, metricsArr, mode)
-  } else if (Array.isArray(data)) {
-    mergeMetricPoints(taskId, data, 'replace')
-  }
-
-  const evalMetricsCandidate =
-    data?.new_eval_metrics ??
-    data?.eval_metrics ??
-    data?.eval_metric ??
-    data?.new_eval_metric
-
-  const evalMetricsArr = normalizeToArray(evalMetricsCandidate)
-  if (evalMetricsArr && evalMetricsArr.length > 0) {
-    const mode: 'replace' | 'append' = data?.new_eval_metrics != null || data?.new_eval_metric != null ? 'append' : 'replace'
-    const current = groupEvalMetrics.value[taskId] || []
-    const base = mode === 'replace' ? [] : current
-    groupEvalMetrics.value[taskId] = base.concat(evalMetricsArr)
+  // 处理指标 - 后端返回 metrics 数组
+  if (Array.isArray(data.metrics) && data.metrics.length > 0) {
+    mergeMetricPoints(taskId, data.metrics, 'append')
   }
 }
 
@@ -2175,6 +2491,7 @@ const startTraining = async () => {
       window.localStorage.removeItem(trainGroupIdStorageKey.value)
       window.localStorage.removeItem(trainTasksStorageKey.value)
       window.localStorage.removeItem(trainTaskUuidStorageKey.value)
+      window.localStorage.removeItem(trainDatasetVersionIdStorageKey.value)
     }
     
     await nextTick()
@@ -2187,9 +2504,6 @@ const startTraining = async () => {
       coco_data: cocoData,
       base_path: basePath,
       project_id: String(productId.value),
-      version: String(trainProjectVersion.value || 'v1'),
-      data_version: String(trainDataVersionName.value || versionName.value || 'v1'),
-      run_count: runCountToSend,
       model_name: String(trainModelName.value || 'STFPM'),
       train_epochs: finalEpochs,
       batch_size: Math.round(Number(trainConfig.value.batchSize[0] || 8)),
@@ -2227,19 +2541,34 @@ const startTraining = async () => {
     trainGroupId.value = data.group_id || ''
     trainTaskUuid.value = data.task_uuid || ''
     
-    const labels = data.labels || []
-    const labelCount = labels.length
-    const displayLabel = labelCount > 0 
-      ? `${labels.length} 个类别` 
-      : '统一训练'
+    // 处理后端返回的 tasks 数组
+    const tasks = data.tasks || []
+    let displayLabel: string
     
-    trainTasks.value = [{
-      label: displayLabel,
-      task_id: trainTaskUuid.value,
-      labels: labels,
-      status: 'pending',
-      progress: 0
-    }]
+    if (tasks.length > 0) {
+      trainTasks.value = tasks.map((t: any) => ({
+        label: t.label,
+        task_id: t.task_id,
+        status: 'pending',
+        progress: 0
+      }))
+      displayLabel = tasks.length > 1 ? `${tasks.length} 个任务` : tasks[0]?.label || '训练任务'
+    } else {
+      // 兼容旧格式
+      const labels = data.labels || []
+      const labelCount = labels.length
+      displayLabel = labelCount > 0 
+        ? `${labels.length} 个类别` 
+        : '统一训练'
+      
+      trainTasks.value = [{
+        label: displayLabel,
+        task_id: trainTaskUuid.value,
+        labels: labels,
+        status: 'pending',
+        progress: 0
+      }]
+    }
     
     if (productId.value && window.electronAPI && trainTaskUuid.value) {
       window.electronAPI.saveTrainingRecord({
@@ -2260,9 +2589,19 @@ const startTraining = async () => {
     if (trainTaskUuid.value) {
       await loadTaskSnapshot(trainTaskUuid.value)
     }
-    monitorTaskId.value = trainTaskUuid.value
+
+    // 保持在训练页面，不自动跳转
+    // innerStep.value = 'monitor'
+    monitorTaskId.value = 'all'
     activeMonitorTab.value = 'overview'
     startGroupPolling()
+
+    // 为所有任务开启SSE监控
+    for (const t of trainTasks.value) {
+      if (t.task_id) {
+        openMonitorStream(t.task_id)
+      }
+    }
   } catch (err: any) {
     toast?.error(`${t('training.train.startFailed')}: ${err.message}`)
   } finally {
@@ -2314,6 +2653,9 @@ const stopGroup = async () => {
         }
         return t
       })
+      // Update group status to stopped
+      monitorGroupStatus.value = 'stopped'
+      monitorGroupProgress.value = 0
       stopGroupPolling()
     } else {
       throw new Error(await res.text())
@@ -3075,7 +3417,7 @@ onBeforeUnmount(() => {
                             <div
                               v-for="ds in group.datasets"
                               :key="`${ds.task_uuid}-${ds.label}`"
-                              class="group relative w-[160px] border rounded-xl hover:shadow-md transition-all cursor-pointer"
+                              class="result-card group relative w-[160px] border rounded-xl hover:shadow-md transition-all cursor-pointer"
                               :class="{ 'ring-2 ring-primary rounded-xl shadow-md': expandedResultId === `ds-${ds.task_uuid}-${ds.label}` }"
                               @click="(e) => handleDatasetClick(ds, e, group.id)"
                             >
@@ -3110,12 +3452,12 @@ onBeforeUnmount(() => {
                          </div>
 
                          <template v-if="group.datasets.some(ds => expandedResultId === `ds-${ds.task_uuid}-${ds.label}`)">
-                            <div class="border rounded-xl bg-popover p-4 animate-in fade-in slide-in-from-top-2 duration-300 absolute left-0 right-0 z-50 shadow-2xl" style="top: calc(100% + 12px);">
-                               <div 
+                            <div class="result-popover-content border rounded-xl bg-popover p-4 animate-in fade-in slide-in-from-top-2 duration-300 absolute left-0 right-0 z-50 shadow-2xl" style="top: calc(100% + 12px);">
+                               <div
                                  class="absolute -top-2 w-4 h-4 bg-popover border-t border-l border-border rotate-45 z-20 transition-all duration-300"
                                  :style="previewArrowStyle"
                                ></div>
-                               
+
                                <button class="absolute top-2 right-2 p-1.5 hover:bg-muted rounded-full transition-colors" @click.stop="expandedResultId = null">
                                   <X class="w-4 h-4 text-muted-foreground" />
                                </button>
@@ -3152,13 +3494,26 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div v-else-if="monitorTab === 'output'" class="space-y-4">
-              <div v-if="groupedResults.length > 0" class="space-y-8">
-                <div v-for="group in groupedResults" :key="group.id" class="space-y-4">
-                  <div class="flex items-center gap-3">
-                     <div class="flex items-center gap-2 bg-muted/50 px-3 py-1 rounded-md border text-xs font-mono text-muted-foreground">
+              <div v-if="groupedResults.length > 0" class="space-y-6">
+                <div v-for="group in groupedResults" :key="group.id" class="space-y-3">
+                  <div 
+                    class="flex items-center gap-3 cursor-pointer group"
+                    @click="toggleGroupExpand(group.id)"
+                  >
+                     <div class="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-md border text-xs font-mono text-muted-foreground group-hover:bg-muted/70 transition-colors">
+                        <ChevronDown class="w-3 h-3 transition-transform duration-300" :class="{ 'rotate-180': !collapsedGroups[group.id] }" />
                         <span class="font-bold text-foreground">{{ group.displayName }}</span>
+                        <span class="text-muted-foreground/70">({{ group.models.length }})</span>
                      </div>
                      <div class="h-px bg-border/50 flex-1"></div>
+                     <button
+                       v-if="group.models.length > 0"
+                       class="p-1.5 hover:bg-primary/10 hover:text-primary rounded-lg transition-colors"
+                       title="模型转换"
+                       @click.stop="openGroupConvertDialog(group)"
+                     >
+                       <Zap class="w-3 h-3" />
+                     </button>
                      <button
                        v-if="group.models.length > 0"
                        class="p-1.5 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-colors"
@@ -3169,92 +3524,170 @@ onBeforeUnmount(() => {
                      </button>
                   </div>
 
-                  <div class="space-y-4 pl-4 border-l-2 border-muted/30 ml-2">
+                  <div v-show="!collapsedGroups[group.id]" class="space-y-3 pl-4 border-l-2 border-muted/30 ml-2">
                     <div v-if="group.models.length > 0" class="space-y-2">
                        <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                          <Box class="w-3 h-3" /> 模型产物
                        </div>
 
-                       <div>
-                         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                            <div
-                              v-for="model in group.models"
-                              :key="`${model.task_uuid || model.task_id}-${model.label}`"
-                              class="group relative border rounded-xl bg-background hover:shadow-md transition-all cursor-pointer"
-                              :class="{ 'ring-2 ring-primary rounded-xl shadow-md': expandedResultId === `md-${model.task_uuid || model.task_id}-${model.label}` }"
-                              @click="(e) => handleModelClick(model, e, group.id)"
+                       <div class="grid grid-cols-1 gap-1.5">
+                          <div
+                            v-for="(model, modelIndex) in group.models"
+                            :key="`${model.task_uuid || model.task_id}-${model.label}`"
+                            class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all group/file relative"
+                            :class="[getLabelColorClass(model.label, modelIndex).bg, getLabelColorClass(model.label, modelIndex).hover, getLabelColorClass(model.label, modelIndex).border]"
+                          >
+                            <div class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                              :class="[getLabelColorClass(model.label, modelIndex).iconBg, getLabelColorClass(model.label, modelIndex).iconBorder]"
                             >
-                              <div class="flex items-center p-3 min-h-[60px]">
-                                 <div class="flex items-center gap-3 flex-1 min-w-0">
-                                    <div class="w-8 h-8 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shrink-0 text-purple-600">
-                                       <Award v-if="model.has_best_model" class="w-4 h-4" />
-                                       <Box v-else class="w-4 h-4" />
-                                    </div>
-                                    <div class="min-w-0">
-                                       <div class="flex items-center gap-2 mb-0.5">
-                                         <span class="font-mono text-xs font-bold truncate">{{ model.task_uuid || model.task_id }}</span>
-                                         <span v-if="model.has_best_model" class="bg-amber-100 text-amber-700 text-[9px] px-1 py-0 rounded border border-amber-200 font-bold">BEST</span>
-                                       </div>
-                                       <div class="flex items-center gap-2 text-[10px] text-muted-foreground">
-                                         <span class="bg-muted px-1 py-0 rounded truncate max-w-[100px]">{{ model.label }}</span>
-                                         <span>Iter: {{ model.latest_iter }}</span>
-                                         <span :class="{
-                                            'text-green-600': model.status === 'completed' || model.status === 'success',
-                                            'text-blue-600': model.status === 'running',
-                                            'text-red-600': model.status === 'failed' || model.status === 'error'
-                                          }" class="uppercase font-medium">{{ model.status }}</span>
-                                         <button
-                                           class="p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-colors opacity-0 group-hover:opacity-100"
-                                           :title="t('training.monitor.deleteThisLabel')"
-                                           @click.stop="confirmDeleteModel(model, $event, 'label')"
-                                         >
-                                           <Trash2 class="w-3 h-3" />
-                                         </button>
-                                       </div>
-                                    </div>
-                                 </div>
-
-                                 <div class="flex items-center gap-2 pl-3 border-l ml-3">
-                                    <ChevronDown class="w-3 h-3 text-muted-foreground/50 transition-transform duration-300" :class="{ 'rotate-180': expandedResultId === `md-${model.task_uuid || model.task_id}-${model.label}` }" />
-                                 </div>
-                              </div>
-
-                              <template v-if="expandedResultId === `md-${model.task_uuid || model.task_id}-${model.label}`">
-                                <div class="border border-border bg-popover p-4 animate-in fade-in slide-in-from-top-2 duration-300 absolute left-0 right-0 z-50 shadow-xl rounded-xl" style="top: calc(100% + 8px);">
-                                  <div 
-                                    class="absolute -top-1 left-1/2 -translate-x-1/2 w-4 h-4 bg-popover border-t border-l border-border rotate-45 z-20 transition-all duration-300"
-                                  ></div>
-                                  <button class="absolute top-2 right-2 p-1.5 hover:bg-muted rounded-full transition-colors" @click.stop="expandedResultId = null">
-                                    <X class="w-4 h-4 text-muted-foreground" />
-                                  </button>
-
-                                  <div class="mb-4 flex items-center gap-2">
-                                    <div class="font-bold text-sm bg-background px-2 py-1 rounded border">{{ model.label }}</div>
-                                    <span class="text-xs text-muted-foreground">Task: {{ model.task_uuid || model.task_id }}</span>
-                                  </div>
-                                  <div v-if="model.files && model.files.length > 0" class="grid grid-cols-1 gap-2 max-h-[300px] overflow-y-auto custom-scrollbar p-1">
-                                    <a 
-                                      v-for="(f, i) in model.files" 
-                                      :key="i"
-                                      :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + f.url"
-                                      target="_blank"
-                                      class="flex items-center gap-2 p-2 rounded border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-decoration-none group/file"
-                                    >
-                                      <div class="w-6 h-6 rounded bg-muted flex items-center justify-center shrink-0 group-hover/file:bg-background border transition-colors">
-                                        <Award v-if="f.type === 'best_model'" class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" />
-                                        <FileText v-else-if="f.type === 'log' || f.type === 'vdl_log'" class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" />
-                                        <Save v-else class="w-3 h-3 text-muted-foreground group-hover/file:text-primary" />
-                                      </div>
-                                      <div class="flex-1 min-w-0">
-                                        <div class="text-[10px] font-medium truncate" :title="f.name">{{ f.name }}</div>
-                                      </div>
-                                      <Download class="w-3 h-3 text-muted-foreground opacity-0 group-hover/file:opacity-100 transition-opacity" />
-                                    </a>
-                                  </div>
-                                  <div v-else class="text-[10px] text-muted-foreground italic py-1 text-center">无输出文件</div>
-                                </div>
-                              </template>
+                              <Award v-if="model.has_best_model" class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                              <Box v-else class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
                             </div>
+                            <div class="flex-1 min-w-0">
+                              <div class="text-sm font-medium text-foreground truncate" :title="model.label + (model.files && model.files.find(f => f.name.endsWith('.pdparams')) ? ' - ' + model.files.find(f => f.name.endsWith('.pdparams')).name.replace('best_model/', '') : '')">
+                                <span>{{ model.label }}</span>
+                                <span v-if="model.files && model.files.find(f => f.name.endsWith('.pdparams'))" class="text-muted-foreground text-xs ml-1">
+                                  {{ model.files.find(f => f.name.endsWith('.pdparams')).name.replace('best_model/', '') }}
+                                </span>
+                                <span v-if="model.has_onnx" class="bg-blue-100 text-blue-700 text-[9px] px-1 py-0 rounded border border-blue-200 font-bold ml-1">
+                                  {{ t('training.monitor.converted') }}
+                                </span>
+                              </div>
+                            </div>
+                            <div class="relative flex items-center gap-1">
+                              <a
+                                v-if="model.files && model.files.find(f => f.name.endsWith('.pdparams')) && activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}`"
+                                :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + model.files.find(f => f.name.endsWith('.pdparams')).url"
+                                target="_blank"
+                                class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-primary/10 menu-item-enter"
+                                :class="getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10')"
+                                :title="t('common.download')"
+                                @click="closeModelMenu"
+                              >
+                                <Download class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                              </a>
+                              <button
+                                v-if="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}`"
+                                class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-destructive/10 menu-item-enter-delay"
+                                :class="getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10')"
+                                :title="t('training.monitor.deleteThisLabel')"
+                                @click.stop="closeModelMenu(); confirmDeleteModel(model, $event, 'label')"
+                              >
+                                <Trash2 class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                              </button>
+                              <button
+                                class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-muted"
+                                :class="[getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10'), { 'rotate-90': activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}` }]"
+                                @click.stop="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}` ? closeModelMenu() : openModelMenu(`${model.task_uuid || model.task_id}-${model.label}`)"
+                              >
+                                <MoreVertical class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                              </button>
+                            </div>
+                          </div>
+                       </div>
+                    </div>
+
+                    <!-- 转换产物 -->
+                    <div v-if="group.models.some(m => m.has_onnx)" class="space-y-2 mt-4 pt-3 border-t border-dashed">
+                       <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                         <Zap class="w-3 h-3" /> 转换产物
+                       </div>
+                       <div class="grid grid-cols-1 gap-1.5">
+                         <div v-for="(model, modelIndex) in group.models.filter(m => m.has_onnx)" :key="`${model.task_uuid || model.task_id}-${model.label}-onnx`" 
+                           class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all group/file relative"
+                           :class="[getLabelColorClass(model.label, modelIndex).bg, getLabelColorClass(model.label, modelIndex).hover, getLabelColorClass(model.label, modelIndex).border]"
+                         >
+                           <div class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                             :class="[getLabelColorClass(model.label, modelIndex).iconBg, getLabelColorClass(model.label, modelIndex).iconBorder]"
+                           >
+                             <Award class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                           </div>
+                           <div class="flex-1 min-w-0">
+                             <div class="text-sm font-medium text-foreground truncate" :title="model.label + ' - model.onnx'">
+                               <span>{{ model.label }}</span>
+                               <span class="text-muted-foreground text-xs ml-1">model.onnx</span>
+                             </div>
+                           </div>
+                           <div class="relative flex items-center gap-1">
+                             <a
+                               v-if="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx`"
+                               :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + '/static/output/' + productId + '/' + (model.task_uuid || model.task_id) + '/' + model.label + '/best_model/model.onnx'"
+                               target="_blank"
+                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-primary/10"
+                               :class="getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10')"
+                               :title="t('common.download')"
+                               @click="closeModelMenu"
+                             >
+                               <Download class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                             </a>
+                             <button
+                               v-if="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx`"
+                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-destructive/10"
+                               :class="getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10')"
+                               :title="t('training.monitor.deleteThisLabel')"
+                               @click.stop="closeModelMenu(); confirmDeleteModel(model, $event, 'label')"
+                             >
+                               <Trash2 class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                             </button>
+                             <button
+                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-muted"
+                               :class="[getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10'), { 'rotate-90': activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx` }]"
+                               @click.stop="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx` ? closeModelMenu() : openModelMenu(`${model.task_uuid || model.task_id}-${model.label}-onnx`)"
+                             >
+                               <MoreVertical class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                             </button>
+                           </div>
+                         </div>
+                       </div>
+                    </div>
+
+                    <!-- 推理配置 -->
+                    <div v-if="group.models.some(m => m.files && m.files.some(f => f.name.includes('inference')))" class="space-y-2 mt-4 pt-3 border-t border-dashed">
+                       <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                         <Play class="w-3 h-3" /> 推理配置
+                       </div>
+                       <div class="grid grid-cols-1 gap-1.5">
+                         <div
+                           v-for="(inferenceFile, fileIndex) in group.models.flatMap(m => m.files || []).filter(f => f.name && f.name.includes('inference')).slice(0, 1)"
+                           :key="`${group.id}-inference`"
+                           class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all group/file relative bg-gradient-to-r from-purple-50/50 to-transparent hover:bg-purple-50 hover:border-purple-200 border-purple-100"
+                         >
+                           <div class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5 border-purple-500/20">
+                             <Play class="w-3.5 h-3.5 text-purple-600" />
+                           </div>
+                           <div class="flex-1 min-w-0">
+                             <div class="text-sm font-medium text-foreground truncate" :title="inferenceFile.name.replace('best_model/', '')">
+                               <span>{{ t('training.monitor.inference') }}</span>
+                               <span class="text-muted-foreground text-xs ml-1">{{ inferenceFile.name.replace('best_model/', '') }}</span>
+                             </div>
+                           </div>
+                           <div class="relative flex items-center gap-1">
+                             <a
+                               v-if="activeModelMenuId === `${group.id}-inference`"
+                               :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + inferenceFile.url"
+                               target="_blank"
+                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-primary/10 bg-purple-500/10"
+                               :title="t('common.download')"
+                               @click="closeModelMenu"
+                             >
+                               <Download class="w-3.5 h-3.5 text-purple-600" />
+                             </a>
+                             <button
+                               v-if="activeModelMenuId === `${group.id}-inference`"
+                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-destructive/10 bg-purple-500/10"
+                               :title="t('training.monitor.deleteThisLabel')"
+                               @click.stop="closeModelMenu()"
+                             >
+                               <Trash2 class="w-3.5 h-3.5 text-purple-600" />
+                             </button>
+                             <button
+                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-muted bg-purple-500/10"
+                               :class="{ 'rotate-90': activeModelMenuId === `${group.id}-inference` }"
+                               @click.stop="activeModelMenuId === `${group.id}-inference` ? closeModelMenu() : openModelMenu(`${group.id}-inference`)"
+                             >
+                               <MoreVertical class="w-3.5 h-3.5 text-purple-600" />
+                             </button>
+                           </div>
                          </div>
                        </div>
                     </div>
@@ -3825,6 +4258,7 @@ onBeforeUnmount(() => {
                   </UiSelectContent>
                 </UiSelect>
               </div>
+
             </div>
 
             <div class="mt-auto pt-4 shrink-0">
@@ -4337,14 +4771,89 @@ onBeforeUnmount(() => {
           <h3 class="font-bold text-lg">{{ t('common.confirmDelete') }}</h3>
         </div>
         <p class="text-sm text-muted-foreground">
-          {{ deleteModelMode === 'label' 
-            ? t('training.monitor.deleteModelWarning', { label: deletingModel?.label || '' }) 
-            : t('training.monitor.deleteModelTaskWarning', { task: deletingModel?.task_uuid || deletingModel?.task_id || '' }) 
+          {{ deleteModelMode === 'label'
+            ? t('training.monitor.deleteModelWarning', { label: deletingModel?.label || '' })
+            : t('training.monitor.deleteModelTaskWarning', { task: deletingModel?.task_uuid || deletingModel?.task_id || '' })
           }}
         </p>
         <div class="flex gap-3 pt-2">
           <UiButton variant="outline" class="flex-1" @click="showDeleteModelConfirm = false">{{ t('common.cancel') }}</UiButton>
           <UiButton variant="destructive" class="flex-1" @click="handleDeleteModel">{{ t('common.confirm') }}</UiButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model Conversion Dialog -->
+    <div v-if="showConvertDialog" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="closeConvertDialog">
+      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-md w-full space-y-4 animate-in zoom-in-95 duration-200" @click.stop>
+        <div class="flex items-center gap-3 text-primary">
+          <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+            <Zap class="h-5 w-5" />
+          </div>
+          <h3 class="font-bold text-lg">模型转换</h3>
+        </div>
+
+        <!-- 单模型转换 -->
+        <div v-if="convertingModel" class="space-y-3">
+          <p class="text-sm text-muted-foreground">
+            将模型 <span class="font-medium text-foreground">{{ convertingModel?.label }}</span> 转换为 ONNX 格式
+          </p>
+          <div v-if="convertHasOnnx" class="p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div class="flex items-center gap-2 text-green-700 text-sm">
+              <Award class="w-4 h-4" />
+              <span>该模型已转换为 ONNX 格式</span>
+            </div>
+          </div>
+          <div v-else-if="convertModelInfo" class="p-3 bg-muted/50 rounded-lg space-y-2">
+            <div class="text-xs text-muted-foreground">模型信息</div>
+            <div class="text-sm space-y-1">
+              <div class="flex justify-between">
+                <span class="text-muted-foreground">输入形状:</span>
+                <span class="font-medium">{{ convertModelInfo.input_shape }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-muted-foreground">输出形状:</span>
+                <span class="font-medium">{{ convertModelInfo.output_shape }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-muted-foreground">参数数量:</span>
+                <span class="font-medium">{{ convertModelInfo.param_count?.toLocaleString() }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 组批量转换 -->
+        <div v-else-if="convertingGroup" class="space-y-3">
+          <p class="text-sm text-muted-foreground">
+            将任务组 <span class="font-medium text-foreground">{{ convertingGroup?.displayName }}</span> 中的所有模型转换为 ONNX 格式
+          </p>
+          <div class="max-h-[300px] overflow-y-auto space-y-2">
+            <div v-for="model in convertingGroup?.models" :key="model.label" class="flex items-center justify-between p-2 rounded-lg border" :class="groupConvertStatus[model.label] ? 'bg-green-50 border-green-200' : 'bg-muted/30'">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium">{{ model.label }}</span>
+                <span v-if="groupConvertStatus[model.label]" class="bg-blue-100 text-blue-700 text-[9px] px-1 py-0 rounded border border-blue-200 font-bold">ONNX</span>
+              </div>
+              <span v-if="groupConvertStatus[model.label]" class="text-green-600 text-xs flex items-center gap-1">
+                <Award class="w-3 h-3" /> 已转换
+              </span>
+              <span v-else class="text-muted-foreground text-xs">待转换</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <UiButton variant="outline" class="flex-1" @click="closeConvertDialog">{{ t('common.cancel') }}</UiButton>
+          <UiButton
+            class="flex-1"
+            :disabled="isConverting || (convertingModel && convertHasOnnx) || (convertingGroup && convertingGroup.models.every(m => groupConvertStatus[m.label]))"
+            @click="handleModelConvert"
+          >
+            <span v-if="isConverting">转换中...</span>
+            <span v-else-if="convertingModel && convertHasOnnx">已转换</span>
+            <span v-else-if="convertingGroup && convertingGroup.models.every(m => groupConvertStatus[m.label])">全部已转换</span>
+            <span v-else>开始转换</span>
+          </UiButton>
         </div>
       </div>
     </div>

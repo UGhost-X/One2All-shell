@@ -17,7 +17,8 @@
     "deleteFailed": "Delete failed",
     "confirmDelete": "Confirm Delete",
     "cancel": "Cancel",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "download": "Download"
   },
   "settings": {
     "title": "Settings",
@@ -362,7 +363,9 @@
       "deleteModelWarning": "Are you sure you want to delete the model \"{label}\"? This action cannot be undone.",
       "deleteModelTaskWarning": "Are you sure you want to delete all models for task \"{task}\"? This action cannot be undone.",
       "deleteThisLabel": "Delete this label",
-      "deleteAllTask": "Delete entire task"
+      "deleteAllTask": "Delete entire task",
+      "converted": "Converted",
+      "inference": "Inference Config"
     },
     "messages": {
       "success": "Augmentation preview generated successfully",

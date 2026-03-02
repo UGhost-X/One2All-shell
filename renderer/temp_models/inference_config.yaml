@@ -1,0 +1,31 @@
+input:
+  dtype: float32
+  name: x
+  shape:
+  - 1
+  - 3
+  - 1
+  - 1
+model_type: anomaly_detection
+output:
+  description: 异常检测特征向量
+  name: feature
+postprocess:
+  threshold: 0.5
+  type: anomaly_score
+preprocess:
+  bgr_to_rgb: false
+  normalize:
+    mean:
+    - 0.485
+    - 0.456
+    - 0.406
+    std:
+    - 0.229
+    - 0.224
+    - 0.225
+  resize:
+    height: 256
+    width: 256
+  scale: 0.00392156862745098
+  to_rgb: true
