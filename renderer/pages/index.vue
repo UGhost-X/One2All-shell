@@ -82,6 +82,7 @@ const mainViewUrl = ref('')
 
 const viewerViewportRef = ref<HTMLElement | null>(null)
 const viewerImageRef = ref<HTMLImageElement | null>(null)
+const detectionCanvasRef = ref<HTMLCanvasElement | null>(null)
 
 const viewerZoom = ref(1)
 const viewerRotationDeg = ref(0)
@@ -322,6 +323,7 @@ const gainValue = ref(1.2)
 
 const predictionConfidence = ref<number | null>(null)
 const predictionResults = ref<Array<{ label: string; score: number }>>([])
+const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number] }>>([])
 
 const inferenceServices = ref<Array<{ service_id: string; task_uuid: string; port: number; inference_url: string; labels: string[] }>>([])
 const selectedInferenceService = ref<string>('')
@@ -720,6 +722,7 @@ const handleGainInput = (value: string | number) => {
 const clearResults = () => {
   predictionConfidence.value = null
   predictionResults.value = []
+  detectionResults.value = []
 }
 
 const openInferenceModal = () => {
@@ -776,7 +779,22 @@ const runInference = async () => {
 
     if (data.status === 'success' && data.result) {
       const result = data.result
-      if (result.classifications && Array.isArray(result.classifications)) {
+      
+      // 处理目标检测结果（包含bbox）
+      if (result.detections && Array.isArray(result.detections)) {
+        detectionResults.value = result.detections.map((d: any) => ({
+          label: d.label || d.class || '未知',
+          score: (d.score || d.confidence || d.probability || 0) * 100,
+          bbox: d.bbox || d.box || [0, 0, 0, 0]
+        }))
+        if (detectionResults.value.length > 0) {
+          const maxScore = Math.max(...detectionResults.value.map(r => r.score))
+          predictionConfidence.value = maxScore
+        }
+        showToast(`检测到 ${detectionResults.value.length} 个目标`, 'info')
+      }
+      // 处理分类结果
+      else if (result.classifications && Array.isArray(result.classifications)) {
         predictionResults.value = result.classifications.map((c: any) => ({
           label: c.label || c.class || '未知',
           score: (c.score || c.confidence || c.probability || 0) * 100
@@ -785,6 +803,7 @@ const runInference = async () => {
           const maxScore = Math.max(...predictionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
+        showToast('推理完成', 'info')
       } else if (result.predictions && Array.isArray(result.predictions)) {
         predictionResults.value = result.predictions.map((p: any) => ({
           label: p.label || p.name || '未知',
@@ -794,6 +813,7 @@ const runInference = async () => {
           const maxScore = Math.max(...predictionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
+        showToast('推理完成', 'info')
       } else if (Array.isArray(result)) {
         predictionResults.value = result.map((r: any) => ({
           label: r.label || r.class || '未知',
@@ -803,10 +823,10 @@ const runInference = async () => {
           const maxScore = Math.max(...predictionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
+        showToast('推理完成', 'info')
       } else {
         showToast('推理结果格式不正确', 'error')
       }
-      showToast('推理完成', 'info')
     } else {
       showToast(data.message || '推理失败', 'error')
     }
@@ -816,8 +836,61 @@ const runInference = async () => {
   } finally {
     isInferring.value = false
     showInferenceModal.value = false
+    // 绘制检测框
+    if (detectionResults.value.length > 0) {
+      nextTick(() => drawDetectionBoxes())
+    }
   }
 }
+
+// 绘制检测框
+const drawDetectionBoxes = () => {
+  const canvas = detectionCanvasRef.value
+  const img = viewerImageRef.value
+  if (!canvas || !img) return
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  // 设置canvas尺寸与图片一致
+  canvas.width = img.naturalWidth
+  canvas.height = img.naturalHeight
+
+  // 清空画布
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+  // 绘制每个检测框
+  detectionResults.value.forEach((det, index) => {
+    const [x, y, w, h] = det.bbox
+    const color = `hsl(${(index * 60) % 360}, 70%, 50%)`
+
+    // 绘制矩形框
+    ctx.strokeStyle = color
+    ctx.lineWidth = 3
+    ctx.strokeRect(x, y, w, h)
+
+    // 绘制标签背景
+    const label = `${det.label} ${det.score.toFixed(1)}%`
+    ctx.font = 'bold 16px sans-serif'
+    const textMetrics = ctx.measureText(label)
+    const textWidth = textMetrics.width
+    const textHeight = 20
+
+    ctx.fillStyle = color
+    ctx.fillRect(x, y - textHeight - 4, textWidth + 8, textHeight + 4)
+
+    // 绘制标签文字
+    ctx.fillStyle = 'white'
+    ctx.fillText(label, x + 4, y - 6)
+  })
+}
+
+// 监听检测结果变化，自动绘制
+watch(detectionResults, () => {
+  if (detectionResults.value.length > 0) {
+    nextTick(() => drawDetectionBoxes())
+  }
+})
 
 watch(
   () => [mainViewState.value, mainViewUrl.value] as const,
@@ -904,8 +977,7 @@ onBeforeUnmount(() => {
               @pointerup="onViewerPointerUp"
               @pointercancel="onViewerPointerUp"
               @wheel.prevent="onViewerWheel"
-            >
-              <div class="absolute left-1/2 top-1/2 will-change-transform" :style="viewerTransformStyle">
+            >              <div class="absolute left-1/2 top-1/2 will-change-transform" :style="viewerTransformStyle">
                 <img
                   ref="viewerImageRef"
                   :src="mainViewUrl"
@@ -914,6 +986,13 @@ onBeforeUnmount(() => {
                   alt="Preview"
                   draggable="false"
                   @load="handleMainImageLoad"
+                />
+                <!-- 检测框画布 -->
+                <canvas
+                  v-if="detectionResults.length > 0"
+                  ref="detectionCanvasRef"
+                  class="absolute top-0 left-0 pointer-events-none"
+                  :style="viewerImageStyle"
                 />
               </div>
 
@@ -1207,7 +1286,32 @@ onBeforeUnmount(() => {
             </UiButton>
           </div>
           <div class="flex-1 overflow-auto p-4">
-            <div v-if="predictionResults.length > 0" class="space-y-4">
+            <!-- 目标检测结果 -->
+            <div v-if="detectionResults.length > 0" class="space-y-4">
+              <div class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
+                <div>
+                  <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">目标检测</div>
+                  <div class="text-2xl font-bold tracking-tighter">{{ detectionResults.length }} 个目标</div>
+                </div>
+                <div class="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin-slow"></div>
+              </div>
+
+              <div class="space-y-3">
+                <div v-for="(item, index) in detectionResults" :key="index" class="space-y-1.5">
+                  <div class="flex justify-between text-[10px] font-bold">
+                    <span class="text-muted-foreground uppercase tracking-tight">{{ item.label }}</span>
+                    <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
+                  </div>
+                  <Progress :model-value="item.score" class="h-1.5" />
+                  <div class="text-[9px] text-muted-foreground/60">
+                    位置: [{{ item.bbox.map(v => Math.round(v)).join(', ') }}]
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 分类结果 -->
+            <div v-else-if="predictionResults.length > 0" class="space-y-4">
               <div v-if="predictionConfidence !== null" class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
                 <div>
                   <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">置信度评分</div>

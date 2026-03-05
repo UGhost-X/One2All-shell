@@ -325,6 +325,7 @@ app.whenReady().then(() => {
         
         if (cocoData.images[i]) {
           cocoData.images[i].file_name = fileName;
+          cocoData.images[i].params = img.params;
         }
       }
 
@@ -384,6 +385,7 @@ app.whenReady().then(() => {
             imageUrl: base64,
             width: imgEntry.width,
             height: imgEntry.height,
+            params: imgEntry.params,
             annotations: imgAnnotations.map(ann => {
               let type = 'polygon';
               let points = ann.segmentation[0];
@@ -400,7 +402,10 @@ app.whenReady().then(() => {
                 id: ann.id,
                 categoryId: ann.category_id,
                 type,
-                points
+                points,
+                angle: ann.angle || 0,
+                horizontal_flip: ann.horizontal_flip || false,
+                vertical_flip: ann.vertical_flip || false
               };
             })
           });
@@ -587,7 +592,17 @@ app.whenReady().then(() => {
         orderBy: { createdAt: 'desc' }
       });
       
-      return records.map(r => ({
+      // 过滤掉组记录（labelName 包含"个任务"、"个类别"、"统一训练"等的记录）
+      const filteredRecords = records.filter(r => {
+        const labelName = r.labelName || '';
+        // 排除组记录
+        if (labelName.includes('个任务') || labelName.includes('个类别') || labelName === '统一训练') {
+          return false;
+        }
+        return true;
+      });
+      
+      return filteredRecords.map(r => ({
         ...r,
         metrics: JSON.parse(r.metrics || '[]'),
         logs: JSON.parse(r.logs || '[]')

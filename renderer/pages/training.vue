@@ -209,7 +209,10 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
             segmentation,
             area,
             bbox,
-            iscrowd: 0
+            iscrowd: 0,
+            angle: res.params?.rotate || 0,
+            horizontal_flip: res.params?.horizontal_flip || false,
+            vertical_flip: res.params?.vertical_flip || false,
           }
         })
       ),
@@ -684,6 +687,7 @@ const normalizeStatus = (status?: string): string => {
   const s = String(status || '').toLowerCase()
   if (s === 'waiting') return 'pending'
   if (s === 'running') return 'training'
+  if (s === 'retrying') return 'retry'
   return s
 }
 
@@ -836,9 +840,11 @@ const handleDeleteModel = async () => {
   try {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const taskUuid = deletingModel.value.task_uuid || deletingModel.value.task_id
+    // 对于统一结构，使用 labels 数组中的第一个标签
+    const labelName = deletingModel.value.labels && deletingModel.value.labels.length > 0 ? deletingModel.value.labels[0] : deletingModel.value.label
     let url = `${apiBase.replace(/\/$/, '')}/project/${productId.value}/models?task_uuid=${taskUuid}`
     if (deleteModelMode.value === 'label') {
-      url += `&label=${encodeURIComponent(deletingModel.value.label)}`
+      url += `&label=${encodeURIComponent(labelName)}`
     }
     const res = await fetch(url, { method: 'DELETE' })
     if (!res.ok) {
@@ -1377,7 +1383,9 @@ const groupedResults = computed(() => {
 
   for (const md of projectModels.value) {
     const uuid = md.task_uuid || 'unknown'
-    const record = getRecordForTask(uuid, md.label)
+    // 对于统一结构，使用 labels 数组中的第一个标签来获取记录
+    const labelForRecord = md.labels && md.labels.length > 0 ? md.labels[0] : md.label
+    const record = getRecordForTask(uuid, labelForRecord)
     getGroup(uuid).models.push({
       ...md,
       record,
@@ -1480,7 +1488,8 @@ const fetchProjectResults = async () => {
       for (const model of models) {
         try {
           const taskUuid = model.task_uuid || model.task_id
-          const labelName = model.label
+          // 对于统一结构，使用 labels 数组中的第一个标签
+          const labelName = model.labels && model.labels.length > 0 ? model.labels[0] : model.label
           const resOnnx = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${productId.value}/${taskUuid}/${labelName}`)
           if (resOnnx.ok) {
             const onnxData = await resOnnx.json()
@@ -1607,18 +1616,21 @@ const openGroupConvertDialog = async (group: any) => {
 
     for (const model of group.models) {
       const taskUuid = model.task_uuid || model.task_id
-      const labelName = model.label
+      // 对于统一结构，使用 labels 数组中的第一个标签
+      const labelName = model.labels && model.labels.length > 0 ? model.labels[0] : model.label
+      // 使用 model.label 作为状态键（可能是 "multiple"）
+      const statusKey = model.label
 
       try {
         const response = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${projectId}/${taskUuid}/${labelName}`)
         if (response.ok) {
           const data = await response.json()
-          groupConvertStatus.value[model.label] = data.has_onnx
+          groupConvertStatus.value[statusKey] = data.has_onnx
         } else {
-          groupConvertStatus.value[model.label] = false
+          groupConvertStatus.value[statusKey] = false
         }
       } catch (e) {
-        groupConvertStatus.value[model.label] = false
+        groupConvertStatus.value[statusKey] = false
       }
     }
   } catch (e) {
@@ -1653,7 +1665,8 @@ const handleModelConvert = async () => {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const projectId = productId.value
     const taskUuid = convertingModel.value.task_uuid || convertingModel.value.task_id
-    const labelName = convertingModel.value.label
+    // 对于统一结构，使用 labels 数组中的第一个标签
+    const labelName = convertingModel.value.labels && convertingModel.value.labels.length > 0 ? convertingModel.value.labels[0] : convertingModel.value.label
 
     // 使用查询参数而不是 JSON body
     const url = `${apiBase.replace(/\/$/, '')}/convert/onnx/convert/${projectId}/${taskUuid}/${labelName}?opset_version=11&simplify=true`
@@ -1689,11 +1702,14 @@ const handleGroupConvert = async () => {
   const projectId = productId.value
 
   for (const model of convertingGroup.value.models) {
-    if (groupConvertStatus.value[model.label]) continue
+    // 使用 model.label 作为状态键（可能是 "multiple"）
+    const statusKey = model.label
+    if (groupConvertStatus.value[statusKey]) continue
 
     try {
       const taskUuid = model.task_uuid || model.task_id
-      const labelName = model.label
+      // 对于统一结构，使用 labels 数组中的第一个标签
+      const labelName = model.labels && model.labels.length > 0 ? model.labels[0] : model.label
 
       const url = `${apiBase.replace(/\/$/, '')}/convert/onnx/convert/${projectId}/${taskUuid}/${labelName}?opset_version=11&simplify=true`
       const response = await fetch(url, {
@@ -1783,7 +1799,7 @@ onBeforeUnmount(() => {
         name: m.task_uuid,
         label: m.label,
         info: `迭代 ${m.latest_iter}`,
-        tags: m.has_best_model ? ['best'] : [],
+        tags: m.has_model ? ['best'] : [],
         files: m.files || [],
         raw: m
       })
@@ -2403,7 +2419,10 @@ const buildTrainCocoData = (results: any[]) => {
         area,
         iscrowd: 0,
         label: ann.label,
-        type: ann.type
+        type: ann.type,
+        angle: ann.angle ?? img.params?.rotate ?? 0,
+        horizontal_flip: ann.horizontal_flip ?? img.params?.horizontal_flip ?? false,
+        vertical_flip: ann.vertical_flip ?? img.params?.vertical_flip ?? false,
       }
     })
   })
@@ -2570,20 +2589,23 @@ const startTraining = async () => {
       }]
     }
     
+    // 为每个任务保存训练记录，而不是保存组记录
     if (productId.value && window.electronAPI && trainTaskUuid.value) {
-      window.electronAPI.saveTrainingRecord({
-        productId: productId.value,
-        taskId: trainTaskUuid.value,
-        labelName: displayLabel,
-        modelName: trainModelName.value || 'STFPM',
-        status: 'pending',
-        progress: 0,
-        totalEpochs: finalEpochs,
-        currentEpoch: 0,
-        batchSize: trainConfig.value.batchSize[0],
-        learningRate: getLearningRateValue(),
-        startedAt: new Date()
-      }).catch(console.error)
+      for (const t of trainTasks.value) {
+        window.electronAPI.saveTrainingRecord({
+          productId: productId.value,
+          taskId: trainTaskUuid.value,
+          labelName: t.label,
+          modelName: trainModelName.value || 'STFPM',
+          status: 'pending',
+          progress: 0,
+          totalEpochs: finalEpochs,
+          currentEpoch: 0,
+          batchSize: trainConfig.value.batchSize[0],
+          learningRate: getLearningRateValue(),
+          startedAt: new Date()
+        }).catch(console.error)
+      }
     }
     
     if (trainTaskUuid.value) {
@@ -3163,7 +3185,8 @@ const handleAugment = async () => {
           color: ann.color || labelInfo.color || '#3b82f6',
           label: ann.label || labelInfo.name || 'unknown',
           labelId: labelInfo.id,
-          categoryId: ann.category_id
+          categoryId: ann.category_id,
+          angle: ann.angle || 0
         }
       })
 
@@ -3540,7 +3563,7 @@ onBeforeUnmount(() => {
                             <div class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
                               :class="[getLabelColorClass(model.label, modelIndex).iconBg, getLabelColorClass(model.label, modelIndex).iconBorder]"
                             >
-                              <Award v-if="model.has_best_model" class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
+                              <Award v-if="model.has_model" class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
                               <Box v-else class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
                             </div>
                             <div class="flex-1 min-w-0">
@@ -3610,8 +3633,8 @@ onBeforeUnmount(() => {
                            </div>
                            <div class="relative flex items-center gap-1">
                              <a
-                               v-if="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx`"
-                               :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + '/static/output/' + productId + '/' + (model.task_uuid || model.task_id) + '/' + model.label + '/best_model/model.onnx'"
+                               v-if="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx` && model.files && model.files.find(f => f.name.endsWith('.onnx'))"
+                               :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + (model.files.find(f => f.name.endsWith('.onnx'))?.url || '')"
                                target="_blank"
                                class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-primary/10"
                                :class="getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10')"

@@ -1,10 +1,23 @@
-import { defineEventHandler, getQuery, createError, readBody } from 'h3'
+import { defineEventHandler, getQuery, createError, readBody, getRequestURL } from 'h3'
 import { InferenceServer } from '../../utils/inference-server'
 import fs from 'fs'
 import path from 'path'
 
 const pythonApiBase = process.env.PYTHON_PUBLIC_API_BASE || 'http://localhost:8000'
 const modelOutputBase = process.env.MODEL_OUTPUT_BASE || process.cwd()
+// 是否使用远程推理服务（与 PYTHON_PUBLIC_API_BASE 相同的 IP）
+const useRemoteInference = process.env.USE_REMOTE_INFERENCE === 'true'
+
+// 从 PYTHON_PUBLIC_API_BASE 提取主机地址
+function getInferenceHost(): string {
+  if (!useRemoteInference) return 'localhost'
+  try {
+    const url = new URL(pythonApiBase)
+    return url.hostname
+  } catch {
+    return 'localhost'
+  }
+}
 
 interface ModelInfo {
   task_uuid: string
@@ -25,6 +38,8 @@ interface DeployService {
   model_count: number
   created_at?: string
   model_paths: Record<string, string>
+  service_type?: 'grpc' | 'http'
+  device?: string
 }
 
 interface ConvertProgress {
@@ -119,7 +134,8 @@ async function resolveModelPath(serverPath: string): Promise<string> {
 }
 
 export default defineEventHandler(async (event) => {
-  const eventPath = event.path
+  const requestURL = getRequestURL(event)
+  const eventPath = requestURL.pathname
   const method = event.method
 
   if (eventPath === '/api/deploy/list' && method === 'GET') {
@@ -141,6 +157,7 @@ export default defineEventHandler(async (event) => {
     const projectId = eventPath.split('/api/deploy/models/')[1]
     
     try {
+      // 使用 /project/{project_id}/models 接口（支持新旧结构）
       const res = await fetch(`${pythonApiBase}/project/${projectId}/models`)
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`)
@@ -164,21 +181,23 @@ export default defineEventHandler(async (event) => {
         
         const modelInfo = modelMap.get(taskUuid)!
         
-        if (model.is_unified_structure) {
+        // 支持统一结构和扁平结构
+        if (model.is_unified_structure || model.labels) {
           modelInfo.labels = model.labels || []
           for (const label of modelInfo.labels) {
             modelInfo.model_paths[label] = model.model_path || ''
           }
         } else {
-          modelInfo.labels.push(model.label)
-          modelInfo.model_paths[model.label] = model.model_path || ''
+          // 单标签结构
+          if (model.label) {
+            modelInfo.labels.push(model.label)
+            modelInfo.model_paths[model.label] = model.model_path || ''
+          }
         }
       }
 
       for (const [taskUuid, modelInfo] of modelMap) {
-        const onnxStatus: Record<string, boolean> = {}
-        const configStatus: Record<string, boolean> = {}
-        
+        // 检查每个标签的 ONNX 转换状态
         for (const label of modelInfo.labels) {
           try {
             const checkRes = await fetch(
@@ -186,29 +205,14 @@ export default defineEventHandler(async (event) => {
             )
             if (checkRes.ok) {
               const checkData = await checkRes.json()
-              onnxStatus[label] = checkData.has_onnx || false
-              
-              const projectRoot = getProjectRoot()
-              const configPath = path.join(
-                projectRoot, 
-                'output', 
-                projectId, 
-                taskUuid, 
-                label, 
-                'best_model', 
-                'inference_config.yaml'
-              )
-              configStatus[label] = fs.existsSync(configPath)
+              modelInfo.onnx_status[label] = checkData.has_onnx || false
             } else {
-              onnxStatus[label] = false
-              configStatus[label] = false
+              modelInfo.onnx_status[label] = false
             }
           } catch {
-            onnxStatus[label] = false
-            configStatus[label] = false
+            modelInfo.onnx_status[label] = false
           }
         }
-        modelInfo.onnx_status = onnxStatus
         models.push(modelInfo)
       }
 
@@ -224,7 +228,7 @@ export default defineEventHandler(async (event) => {
   if (eventPath === '/api/deploy/start' && method === 'POST') {
     try {
       const body = await readBody(event)
-      const { project_id, task_uuid, labels } = body
+      const { project_id, task_uuid, labels, device } = body
 
       if (!project_id || !task_uuid) {
         throw createError({
@@ -233,101 +237,65 @@ export default defineEventHandler(async (event) => {
         })
       }
 
-      const labelsToProcess = labels || []
-      
-      if (labelsToProcess.length === 0) {
-        throw createError({
-          statusCode: 400,
-          message: '请至少选择一个模型进行部署'
-        })
-      }
-
-      const modelInfoRes = await fetch(`${pythonApiBase}/project/${project_id}/models`)
-      const modelInfoData = await modelInfoRes.json()
-      
-      const taskModel = modelInfoData.models?.find((m: any) => m.task_uuid === task_uuid)
-      if (!taskModel) {
-        throw createError({
-          statusCode: 404,
-          message: '未找到模型信息'
-        })
-      }
-
-      const modelPaths: Record<string, string> = {}
-      const configPaths: Record<string, string> = {}
-      const missingConfigs: string[] = []
-
-      for (const label of labelsToProcess) {
-        const serverModelPath = taskModel.model_path || ''
-        const serverLabelPath = serverModelPath.endsWith('/') ? serverModelPath : serverModelPath + '/'
-        
-        const onnxPath = await resolveModelPath(serverLabelPath + 'best_model/model.onnx')
-        const configPath = await resolveModelPath(serverLabelPath + 'best_model/inference_config.yaml')
-
-        console.log(`[Deploy] Checking ONNX path: ${onnxPath}, exists=${fs.existsSync(onnxPath)}`)
-
-        if (!fs.existsSync(onnxPath)) {
-          throw createError({
-            statusCode: 400,
-            message: `模型 ${label} 的ONNX文件不存在: ${onnxPath}，请先进行转换`
-          })
-        }
-
-        if (!fs.existsSync(configPath)) {
-          missingConfigs.push(label)
-        }
-
-        modelPaths[label] = onnxPath
-        configPaths[label] = configPath
-      }
-
-      if (missingConfigs.length > 0) {
-        console.warn(`[Deploy] Missing config files for: ${missingConfigs.join(', ')}`)
-      }
-
-      const serviceId = `svc_${Date.now()}_${task_uuid.slice(0, 8)}`
-      const port = getAvailablePort()
-
-      const primaryLabel = labelsToProcess[0]
-      const primaryModelPath = modelPaths[primaryLabel]
-      const primaryConfigPath = configPaths[primaryLabel]
+      const deviceType = device || 'GPU'
 
       convertProgress.set(task_uuid, {
         currentStep: 1,
-        totalSteps: 2,
-        stepName: '正在启动推理服务...',
+        totalSteps: 1,
+        stepName: '正在部署HTTP服务...',
         status: 'converting',
-        message: `正在加载模型: ${primaryLabel}`,
+        message: '正在调用Python后端启动HTTP服务...',
         convertedLabels: []
       })
 
       try {
-        const server = new InferenceServer(port, primaryModelPath, primaryConfigPath, labelsToProcess)
-        await server.start()
-        runningServers.set(serviceId, server)
+        // 调用 HTTP deploy 接口
+        const deployRes = await fetch(`${pythonApiBase}/deploy/http`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            project_id: String(project_id),
+            task_uuid: task_uuid,
+            device: deviceType
+          })
+        })
 
+        const deployData = await deployRes.json()
+
+        if (!deployRes.ok || !deployData.success) {
+          throw new Error(deployData.message || deployData.error || 'HTTP服务部署失败')
+        }
+
+        const serviceId = deployData.service_id
+        const port = deployData.port
+        
+        // 构建推理服务地址
+        const host = getInferenceHost()
+        const inferenceUrl = `http://${host}:${port}`
         const service: DeployService = {
           service_id: serviceId,
           task_uuid,
           project_id: String(project_id),
           port,
           status: 'running',
-          inference_url: `http://localhost:${port}`,
-          labels: labelsToProcess,
-          model_count: labelsToProcess.length,
+          inference_url: inferenceUrl,
+          labels: labels || [],
+          model_count: labels?.length || 1,
           created_at: new Date().toISOString(),
-          model_paths: modelPaths
+          model_paths: {},
+          service_type: 'http',
+          device: deviceType
         }
 
         runningServices.set(serviceId, service)
 
         convertProgress.set(task_uuid, {
-          currentStep: 2,
-          totalSteps: 2,
+          currentStep: 1,
+          totalSteps: 1,
           stepName: '服务已启动',
           status: 'completed',
-          message: `服务启动成功，端口: ${port}`,
-          convertedLabels: labelsToProcess
+          message: `HTTP服务启动成功，端口: ${port}`,
+          convertedLabels: labels || []
         })
 
         setTimeout(() => {
@@ -338,14 +306,16 @@ export default defineEventHandler(async (event) => {
           status: 'success',
           service_id: serviceId,
           port,
-          inference_url: service.inference_url,
-          labels: labelsToProcess,
-          model_count: labelsToProcess.length
+          inference_url: inferenceUrl,
+          labels: labels || [],
+          model_count: labels?.length || 1,
+          service_type: 'http',
+          device: deviceType
         }
       } catch (serverErr: any) {
         convertProgress.set(task_uuid, {
           currentStep: 0,
-          totalSteps: 2,
+          totalSteps: 1,
           stepName: '启动失败',
           status: 'error',
           message: serverErr.message || '服务启动失败',
@@ -353,7 +323,7 @@ export default defineEventHandler(async (event) => {
         })
         throw createError({
           statusCode: 500,
-          message: `启动推理服务失败: ${serverErr.message}`
+          message: `启动HTTP服务失败: ${serverErr.message}`
         })
       }
     } catch (err: any) {
@@ -366,8 +336,38 @@ export default defineEventHandler(async (event) => {
 
   if (eventPath.startsWith('/api/deploy/stop/') && method === 'POST') {
     const serviceId = eventPath.split('/api/deploy/stop/')[1]
+
+    let service = runningServices.get(serviceId)
     
-    const service = runningServices.get(serviceId)
+    // 如果本地找不到，尝试从后端获取服务列表
+    if (!service) {
+      try {
+        const servicesRes = await fetch(`${pythonApiBase}/deploy/http/services`)
+        if (servicesRes.ok) {
+          const servicesData = await servicesRes.json()
+          for (const svc of servicesData.services || []) {
+            const host = getInferenceHost()
+            const serviceUrl = `http://${host}:${svc.port}`
+            runningServices.set(svc.service_id, {
+              service_id: svc.service_id,
+              task_uuid: svc.task_uuid || '',
+              project_id: svc.project_id || '',
+              port: svc.port || 0,
+              status: 'running',
+              inference_url: serviceUrl,
+              labels: svc.labels || [],
+              model_count: svc.labels?.length || 1,
+              model_paths: {},
+              service_type: 'http'
+            })
+          }
+          service = runningServices.get(serviceId)
+        }
+      } catch (syncErr) {
+        console.warn('同步服务列表失败:', syncErr)
+      }
+    }
+    
     if (!service) {
       throw createError({
         statusCode: 404,
@@ -375,10 +375,18 @@ export default defineEventHandler(async (event) => {
       })
     }
 
-    const server = runningServers.get(serviceId)
-    if (server) {
-      await server.stop()
-      runningServers.delete(serviceId)
+    try {
+      const stopRes = await fetch(`${pythonApiBase}/deploy/http/service/${serviceId}/stop`, {
+        method: 'POST'
+      })
+
+      const stopData = await stopRes.json()
+
+      if (!stopRes.ok || !stopData.success) {
+        console.warn(`停止服务失败: ${stopData.message || '未知错误'}`)
+      }
+    } catch (stopErr: any) {
+      console.warn(`停止服务请求失败: ${stopErr.message}`)
     }
 
     service.status = 'stopped'
@@ -391,52 +399,66 @@ export default defineEventHandler(async (event) => {
   }
 
   if (eventPath === '/api/deploy/inference' && method === 'POST') {
-    try {
-      const body = await readBody(event)
-      const { image, service_id } = body
+      try {
+        const formData = await readMultipartFormData(event)
+        let imageFile: any = null
+        let originalFilename = 'image.jpg'
+        let originalType = 'image/jpeg'
+        let service_id = ''
+        
+        if (formData) {
+          for (const field of formData) {
+            if (field.name === 'file' && field.data) {
+              imageFile = field.data
+              if (field.filename) originalFilename = field.filename
+              if (field.type) originalType = field.type
+            } else if (field.name === 'service_id') {
+              service_id = field.data?.toString() || ''
+            }
+          }
+        }
 
-      if (!image || !service_id) {
-        throw createError({
-          statusCode: 400,
-          message: '缺少必要参数 image 或 service_id'
+        if (!imageFile || !service_id) {
+          throw createError({ statusCode: 400, message: '缺少必要参数 file 或 service_id' })
+        }
+
+        const service = runningServices.get(service_id)
+        if (!service || service.status !== 'running') {
+          throw createError({ statusCode: 404, message: '服务不存在或未运行' })
+        }
+
+        const host = getInferenceHost()
+        const inferenceUrl = `http://${host}:${service.port}`
+        
+        const inferenceFormData = new FormData()
+        
+        const blob = new Blob([new Uint8Array(imageFile)], { type: originalType })
+        inferenceFormData.append('file', blob, originalFilename)
+        inferenceFormData.append('service_id', service_id)
+        
+        console.log(`[Deploy Inference] Blob size: ${blob.size}, Name: ${originalFilename}, Type: ${originalType}`)
+        
+        const inferenceRes = await fetch(`${inferenceUrl}/predict`, {
+          method: 'POST',
+          body: inferenceFormData
         })
-      }
-
-      const service = runningServices.get(service_id)
-      if (!service) {
-        throw createError({
-          statusCode: 404,
-          message: '服务不存在或未启动'
-        })
-      }
-
-      if (service.status !== 'running') {
-        throw createError({
-          statusCode: 400,
-          message: '服务未在运行'
-        })
-      }
-
-      const base64Data = image.replace(/^data:image\/\w+;base64,/, '')
-      const imageBuffer = Buffer.from(base64Data, 'base64')
-
-      const inferenceRes = await fetch(`${service.inference_url}/predict`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: imageBuffer.toString('base64')
-        })
-      })
-
       if (!inferenceRes.ok) {
         const errorData = await inferenceRes.json().catch(() => ({}))
         throw new Error(errorData.error || `推理请求失败: ${inferenceRes.status}`)
       }
 
       const result = await inferenceRes.json()
+      console.log('[Deploy Inference] result:', JSON.stringify(result))
+      const convertedResult = {
+        results: result.results || [],
+        processing_time: result.processing_time || 0,
+        total_detections: result.total_detections || 0,
+        anomaly_count: result.anomaly_count || 0
+      }
+
       return {
         status: 'success',
-        result
+        result: convertedResult
       }
     } catch (err: any) {
       throw createError({
@@ -446,9 +468,85 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  if (eventPath === '/api/deploy/inference-services' && method === 'GET') {
-    return {
-      services: Array.from(runningServices.values()).filter(s => s.status === 'running')
+  if (eventPath === '/api/deploy/http/services' && method === 'GET') {
+    const query = getQuery(event)
+    const projectId = query.project_id as string
+    const includeHealth = query.include_health === 'true'
+    
+    // 转发到 Python 后端的服务列表接口
+    let servicesUrl = `${pythonApiBase}/deploy/http/services`
+    const params = []
+    if (projectId) params.push(`project_id=${projectId}`)
+    if (includeHealth) params.push('include_health=true')
+    if (params.length > 0) servicesUrl += '?' + params.join('&')
+    
+    try {
+      const httpRes = await fetch(servicesUrl)
+      if (!httpRes.ok) {
+        throw new Error(`后端服务返回 ${httpRes.status}`)
+      }
+      
+      const httpData = await httpRes.json()
+      
+      // 同步到本地缓存，并确保返回的数据包含 http_url
+      const httpServices = httpData.services || []
+      const processedServices = httpServices.map((svc: any) => {
+        let serviceStatus = 'running'
+        
+        if (svc.health) {
+          if (!svc.health.healthy) {
+            if (!svc.health.process_alive) {
+              serviceStatus = 'stopped'
+            } else if (!svc.health.port_listening) {
+              serviceStatus = 'starting'
+            } else if (!svc.health.service_responsive) {
+              serviceStatus = 'unhealthy'
+            }
+          }
+        }
+
+        let serviceUrl = svc.inference_url || svc.http_url || `http://localhost:${svc.port}`
+        // 将 0.0.0.0 替换为 localhost，因为 0.0.0.0 不能用于客户端访问
+        serviceUrl = serviceUrl.replace('0.0.0.0', 'localhost')
+        
+        const processedService = {
+          ...svc,
+          status: serviceStatus,
+          http_url: serviceUrl,
+          inference_url: serviceUrl,
+          created_at: svc.created_at ? new Date(svc.created_at * 1000).toISOString() : new Date().toISOString()
+        }
+
+        runningServices.set(svc.service_id, {
+          service_id: svc.service_id,
+          task_uuid: svc.task_uuid || '',
+          project_id: svc.project_id || '',
+          port: svc.port || 0,
+          status: serviceStatus,
+          inference_url: serviceUrl,
+          http_url: serviceUrl,
+          labels: svc.labels || [],
+          model_count: svc.model_count || 1,
+          created_at: processedService.created_at,
+          model_paths: {},
+          service_type: 'http',
+          device: svc.device,
+          health: svc.health
+        })
+        
+        return processedService
+      })
+      
+      return {
+        ...httpData,
+        services: processedServices
+      }
+    } catch (err: any) {
+      console.warn('Failed to fetch HTTP services:', err.message)
+      throw createError({
+        statusCode: 500,
+        message: `获取服务列表失败：${err.message}`
+      })
     }
   }
 
@@ -601,19 +699,19 @@ export default defineEventHandler(async (event) => {
 
   if (eventPath.startsWith('/api/deploy/') && method === 'DELETE') {
     const serviceId = eventPath.split('/api/deploy/')[1]
-    
-    const service = runningServices.get(serviceId)
-    if (!service) {
-      throw createError({
-        statusCode: 404,
-        message: '服务不存在'
-      })
-    }
 
-    const server = runningServers.get(serviceId)
-    if (server) {
-      await server.stop()
-      runningServers.delete(serviceId)
+    try {
+      const deleteRes = await fetch(`${pythonApiBase}/deploy/http/service/${serviceId}`, {
+        method: 'DELETE'
+      })
+
+      const deleteData = await deleteRes.json()
+
+      if (!deleteRes.ok || !deleteData.success) {
+        console.warn(`删除服务失败: ${deleteData.message || '未知错误'}`)
+      }
+    } catch (deleteErr: any) {
+      console.warn(`删除服务请求失败: ${deleteErr.message}`)
     }
 
     runningServices.delete(serviceId)
@@ -621,6 +719,27 @@ export default defineEventHandler(async (event) => {
     return {
       status: 'success',
       message: '服务已删除'
+    }
+  }
+
+  // 单个服务健康检查
+  if (eventPath.startsWith('/api/deploy/http/service/') && eventPath.endsWith('/health') && method === 'GET') {
+    const pathParts = eventPath.split('/')
+    const serviceId = pathParts[pathParts.length - 2]
+
+    try {
+      const healthRes = await fetch(`${pythonApiBase}/deploy/http/service/${serviceId}/health`)
+      if (!healthRes.ok) {
+        throw new Error(`后端服务返回 ${healthRes.status}`)
+      }
+      const healthData = await healthRes.json()
+      return healthData
+    } catch (err: any) {
+      console.warn(`Failed to fetch health for service ${serviceId}:`, err.message)
+      throw createError({
+        statusCode: 500,
+        message: `获取服务健康状态失败：${err.message}`
+      })
     }
   }
 
