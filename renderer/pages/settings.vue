@@ -23,6 +23,8 @@ const isSaving = ref(false)
 const showSavedMessage = ref(false)
 
 const backendMode = ref<'local' | 'remote'>('local')
+const backendIp = ref('localhost')
+const remoteBackendIp = ref('')
 const backendUrl = ref('http://localhost:8000')
 const backendPort = ref('8000')
 
@@ -48,23 +50,36 @@ onMounted(async () => {
     const settings = await window.electronAPI.getSettings()
     if (settings.dataPath) dataPath.value = settings.dataPath
     if (settings.backendMode) backendMode.value = settings.backendMode
-    if (settings.backendUrl) backendUrl.value = settings.backendUrl
+    if (settings.backendIp) backendIp.value = settings.backendIp
+    if (settings.backendUrl) {
+      backendUrl.value = settings.backendUrl
+      if (settings.backendMode === 'remote') {
+        try {
+          const url = new URL(settings.backendUrl)
+          remoteBackendIp.value = url.hostname
+          backendPort.value = url.port || '8000'
+        } catch {
+          remoteBackendIp.value = ''
+        }
+      }
+    }
     if (settings.backendPort) backendPort.value = settings.backendPort
   }
 })
 
 const handleSave = async () => {
   isSaving.value = true
-  
-  const finalUrl = backendMode.value === 'local' 
-    ? `http://localhost:${backendPort.value}` 
-    : backendUrl.value
-  
+
+  const finalUrl = backendMode.value === 'local'
+    ? `http://${backendIp.value}:${backendPort.value}`
+    : `http://${remoteBackendIp.value}:${backendPort.value}`
+
   if (window.electronAPI?.saveSettings) {
     await window.electronAPI.saveSettings({
       dataPath: dataPath.value,
       locale: locale.value,
       backendMode: backendMode.value,
+      backendIp: backendMode.value === 'local' ? backendIp.value : remoteBackendIp.value,
       backendUrl: finalUrl,
       backendPort: backendPort.value
     })
@@ -109,17 +124,11 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
     <main class="flex-1 overflow-auto bg-muted/20 p-8">
       <div class="max-w-2xl mx-auto space-y-6">
         <section class="space-y-3">
-          <div class="flex items-center gap-2 text-muted-foreground px-1">
-            <Monitor class="h-3.5 w-3.5" />
-            <h2 class="text-[11px] font-bold uppercase tracking-wider">{{ t('settings.general') }}</h2>
-          </div>
-          
           <UiCard>
             <UiCardContent class="pt-6">
               <div class="flex items-center justify-between">
                 <div class="space-y-1">
                   <Label>{{ t('settings.language') }}</Label>
-                  <div class="text-[11px] text-muted-foreground font-medium">选择界面的显示语言</div>
                 </div>
                 <div class="flex items-center gap-2">
                   <UiButton 
@@ -145,17 +154,11 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
         </section>
 
         <section class="space-y-3">
-          <div class="flex items-center gap-2 text-muted-foreground px-1">
-            <Server class="h-3.5 w-3.5" />
-            <h2 class="text-[11px] font-bold uppercase tracking-wider">后端服务配置</h2>
-          </div>
-          
           <UiCard>
             <UiCardContent class="pt-6 space-y-6">
               <div class="space-y-3">
                 <div class="space-y-1">
                   <Label>运行模式</Label>
-                  <div class="text-[11px] text-muted-foreground font-medium">选择本地模型或远程服务器</div>
                 </div>
                 <div class="flex items-center gap-3">
                   <UiButton 
@@ -179,38 +182,38 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
                 </div>
               </div>
 
-              <div v-if="backendMode === 'local'" class="space-y-3">
+              <div class="space-y-3">
                 <div class="space-y-1">
-                  <Label>本地端口</Label>
-                  <div class="text-[11px] text-muted-foreground font-medium">Python后端服务运行的端口号</div>
+                  <Label>服务地址</Label>
                 </div>
-                <Input 
-                  v-model="backendPort"
-                  type="number"
-                  placeholder="8000"
-                  class="font-mono text-sm max-w-[200px]"
-                />
-              </div>
-
-              <div v-if="backendMode === 'remote'" class="space-y-3">
-                <div class="space-y-1">
-                  <Label>远程服务地址</Label>
-                  <div class="text-[11px] text-muted-foreground font-medium">输入远程Python后端的完整URL地址</div>
+                <div class="flex items-center gap-2">
+                  <div class="relative flex-1">
+                    <span class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">http://</span>
+                    <Input
+                      :model-value="backendMode === 'local' ? backendIp : remoteBackendIp"
+                      @update:model-value="backendMode === 'local' ? null : remoteBackendIp = $event"
+                      :readonly="backendMode === 'local'"
+                      :placeholder="backendMode === 'local' ? 'localhost' : '输入远程IP'"
+                      class="font-mono text-sm pl-[60px]"
+                    />
+                  </div>
+                  <span class="text-muted-foreground">:</span>
+                  <Input
+                    v-model="backendPort"
+                    type="number"
+                    :readonly="backendMode === 'local'"
+                    placeholder="8000"
+                    class="font-mono text-sm w-[100px]"
+                  />
                 </div>
-                <Input 
-                  v-model="backendUrl"
-                  type="url"
-                  placeholder="http://192.168.1.100:8000"
-                  class="font-mono text-sm"
-                />
               </div>
 
               <div class="flex items-center gap-2 p-3 bg-muted/50 rounded-lg">
                 <div class="w-2 h-2 rounded-full" :class="backendMode === 'local' ? 'bg-green-500' : 'bg-blue-500'"></div>
                 <span class="text-xs text-muted-foreground">
-                  当前配置: 
+                  当前配置:
                   <code class="bg-background px-1.5 py-0.5 rounded text-xs">
-                    {{ backendMode === 'local' ? `http://localhost:${backendPort}` : backendUrl }}
+                    {{ backendMode === 'local' ? `http://${backendIp}:${backendPort}` : `http://${remoteBackendIp}:${backendPort}` }}
                   </code>
                 </span>
               </div>
@@ -219,17 +222,11 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
         </section>
 
         <section class="space-y-3">
-          <div class="flex items-center gap-2 text-muted-foreground px-1">
-            <Database class="h-3.5 w-3.5" />
-            <h2 class="text-[11px] font-bold uppercase tracking-wider">{{ t('settings.storage') }}</h2>
-          </div>
-          
           <UiCard>
             <UiCardContent class="pt-6 space-y-4">
               <div class="space-y-3">
                 <div class="space-y-1">
                   <Label>{{ t('settings.dataDir') }}</Label>
-                  <div class="text-[11px] text-muted-foreground font-medium">用于存储拍摄的照片和预测数据</div>
                 </div>
                 <div class="flex gap-2">
                   <Input 

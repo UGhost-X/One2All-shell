@@ -34,8 +34,9 @@ declare global {
       deleteDatasetVersion: (id: number | string) => Promise<any>
       saveTrainingRecord: (data: TrainingRecordData) => Promise<any>
       getTrainingRecords: (productId: number) => Promise<TrainingRecord[]>
-      getTrainingRecord: (taskId: string) => Promise<TrainingRecord | null>
-      deleteTrainingRecord: (taskId: string) => Promise<any>
+      getTrainingRecord: (taskId: string, labelName?: string) => Promise<TrainingRecord | null>
+      getTrainingRecordsByTaskUuid: (taskUuid: string) => Promise<TrainingRecord[]>
+      deleteTrainingRecord: (taskId: string, labelName?: string) => Promise<any>
     }
   }
 }

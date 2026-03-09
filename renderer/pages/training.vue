@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Zap, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical, Zap } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -382,41 +382,23 @@ const loadTaskSnapshot = async (taskIdOrUuid: string) => {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const taskUuid = trainTaskUuid.value || taskIdOrUuid
     const historyUrl = `${apiBase.replace(/\/$/, '')}/train/history/${encodeURIComponent(taskUuid)}`
-    console.log('[loadTaskSnapshot] ===== Start =====')
-    console.log('[loadTaskSnapshot] apiBase:', apiBase)
-    console.log('[loadTaskSnapshot] trainTaskUuid.value:', trainTaskUuid.value)
-    console.log('[loadTaskSnapshot] taskIdOrUuid:', taskIdOrUuid)
-    console.log('[loadTaskSnapshot] Final taskUuid:', taskUuid)
-    console.log('[loadTaskSnapshot] Fetching:', historyUrl)
     const res = await fetch(historyUrl)
-    console.log('[loadTaskSnapshot] Response status:', res.status)
     if (!res.ok) {
-      console.log('[loadTaskSnapshot] Response not ok, returning')
       return
     }
     const data = await res.json()
-    console.log('[loadTaskSnapshot] Data received:', JSON.stringify(data).slice(0, 1000))
-    console.log('[loadTaskSnapshot] Has logs:', !!data.logs, 'logs length:', data.logs?.length)
-    console.log('[loadTaskSnapshot] Has metrics:', !!data.metrics, 'metrics length:', data.metrics?.length)
-    console.log('[loadTaskSnapshot] Has eval_metrics:', !!data.eval_metrics, 'eval_metrics length:', data.eval_metrics?.length)
-    
+   
     const storageKey = taskUuid
-    console.log('[loadTaskSnapshot] Using storageKey:', storageKey)
-    console.log('[loadTaskSnapshot] Current groupMetrics before:', JSON.stringify(groupMetrics.value).slice(0, 200))
-    console.log('[loadTaskSnapshot] Current groupLogs before:', JSON.stringify(groupLogs.value).slice(0, 200))
     
     if (data.logs && Array.isArray(data.logs)) {
       groupLogs.value[storageKey] = data.logs.map((x: any) => String(x))
       if (monitorTaskId.value === storageKey || monitorTaskId.value === 'all') {
         monitorLogs.value = groupLogs.value[storageKey]
       }
-      console.log('[loadTaskSnapshot] Logs stored, count:', data.logs.length)
     }
     
     if (data.metrics && Array.isArray(data.metrics)) {
       mergeMetricPoints(storageKey, data.metrics, 'replace')
-      console.log('[loadTaskSnapshot] Metrics stored via mergeMetricPoints, count:', data.metrics.length)
-      console.log('[loadTaskSnapshot] groupMetrics after:', JSON.stringify(groupMetrics.value).slice(0, 300))
     }
     
     if (data.eval_metrics && Array.isArray(data.eval_metrics)) {
@@ -735,13 +717,28 @@ const groupedRecords = computed(() => {
     }
     groups[key].push(record)
   }
-  return Object.entries(groups).map(([taskUuid, records]) => ({
-    taskUuid,
-    records,
-    displayName: taskUuid,
-    createdAt: records[0]?.createdAt,
-    status: records.some(r => r.status === 'running' || r.status === 'training') ? 'training' : records[0]?.status
-  })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  return Object.entries(groups).map(([taskUuid, records]) => {
+    const createdAt = records[0]?.createdAt
+    const dateStr = createdAt ? new Date(createdAt).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-') : '-'
+    const status = records.some(r => r.status === 'running' || r.status === 'training') ? 'training' : records[0]?.status
+    const labelCount = records.length
+    return {
+      taskUuid,
+      records,
+      displayName: `${dateStr}@${taskUuid}`,
+      labelCount,
+      createdAt,
+      status
+    }
+  }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 })
 
 const selectedGroup = ref<any>(null)
@@ -1483,25 +1480,6 @@ const fetchProjectResults = async () => {
     if (resModels.ok) {
       const data = await resModels.json()
       const models = data.models || []
-
-      // 为每个模型检查 ONNX 转换状态
-      for (const model of models) {
-        try {
-          const taskUuid = model.task_uuid || model.task_id
-          // 对于统一结构，使用 labels 数组中的第一个标签
-          const labelName = model.labels && model.labels.length > 0 ? model.labels[0] : model.label
-          const resOnnx = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${productId.value}/${taskUuid}/${labelName}`)
-          if (resOnnx.ok) {
-            const onnxData = await resOnnx.json()
-            model.has_onnx = onnxData.has_onnx
-          } else {
-            model.has_onnx = false
-          }
-        } catch (e) {
-          model.has_onnx = false
-        }
-      }
-
       projectModels.value = models
     } else {
       projectModels.value = []
@@ -1546,14 +1524,7 @@ const toggleGroupExpand = (groupId: string) => {
   collapsedGroups.value[groupId] = !collapsedGroups.value[groupId]
 }
 
-// 模型转化相关
-const showConvertDialog = ref(false)
-const convertingModel = ref<any>(null)
-const convertingGroup = ref<any>(null)
-const isConverting = ref(false)
-const convertHasOnnx = ref(false)
-const convertModelInfo = ref<any>(null)
-const groupConvertStatus = ref<Record<string, boolean>>({})
+
 
 // Label 颜色配置
 const labelColorMap: Record<string, string> = {}
@@ -1576,168 +1547,7 @@ const getLabelColorClass = (label: string, index: number) => {
   return colorPalette.find(c => c.name === colorName) || colorPalette[0]
 }
 
-const openConvertDialog = async (model: any) => {
-  convertingModel.value = model
-  convertingGroup.value = null
-  showConvertDialog.value = true
-  convertHasOnnx.value = false
-  convertModelInfo.value = null
 
-  // 检查模型是否已有ONNX转换
-  try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
-    const projectId = productId.value
-    const taskUuid = model.task_uuid || model.task_id
-    const labelName = model.label
-
-    const response = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${projectId}/${taskUuid}/${labelName}`)
-    if (response.ok) {
-      const data = await response.json()
-      convertHasOnnx.value = data.has_onnx
-      convertModelInfo.value = data.model_info
-    }
-  } catch (e) {
-    console.error('获取模型信息失败:', e)
-  }
-}
-
-const openGroupConvertDialog = async (group: any) => {
-  convertingGroup.value = group
-  convertingModel.value = null
-  showConvertDialog.value = true
-  convertHasOnnx.value = false
-  convertModelInfo.value = null
-  groupConvertStatus.value = {}
-
-  // 检查组内所有模型的ONNX转换状态
-  try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
-    const projectId = productId.value
-
-    for (const model of group.models) {
-      const taskUuid = model.task_uuid || model.task_id
-      // 对于统一结构，使用 labels 数组中的第一个标签
-      const labelName = model.labels && model.labels.length > 0 ? model.labels[0] : model.label
-      // 使用 model.label 作为状态键（可能是 "multiple"）
-      const statusKey = model.label
-
-      try {
-        const response = await fetch(`${apiBase.replace(/\/$/, '')}/convert/onnx/model/${projectId}/${taskUuid}/${labelName}`)
-        if (response.ok) {
-          const data = await response.json()
-          groupConvertStatus.value[statusKey] = data.has_onnx
-        } else {
-          groupConvertStatus.value[statusKey] = false
-        }
-      } catch (e) {
-        groupConvertStatus.value[statusKey] = false
-      }
-    }
-  } catch (e) {
-    console.error('获取组模型信息失败:', e)
-  }
-}
-
-const closeConvertDialog = () => {
-  showConvertDialog.value = false
-  convertingModel.value = null
-  convertingGroup.value = null
-  convertHasOnnx.value = false
-  convertModelInfo.value = null
-  groupConvertStatus.value = {}
-}
-
-const handleModelConvert = async () => {
-  if (convertingGroup.value) {
-    // 批量转换组内所有未转换的模型
-    await handleGroupConvert()
-    return
-  }
-
-  if (!convertingModel.value) {
-    toast?.error('未选择模型')
-    return
-  }
-
-  isConverting.value = true
-
-  try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
-    const projectId = productId.value
-    const taskUuid = convertingModel.value.task_uuid || convertingModel.value.task_id
-    // 对于统一结构，使用 labels 数组中的第一个标签
-    const labelName = convertingModel.value.labels && convertingModel.value.labels.length > 0 ? convertingModel.value.labels[0] : convertingModel.value.label
-
-    // 使用查询参数而不是 JSON body
-    const url = `${apiBase.replace(/\/$/, '')}/convert/onnx/convert/${projectId}/${taskUuid}/${labelName}?opset_version=11&simplify=true`
-    const response = await fetch(url, {
-      method: 'POST'
-    })
-
-    if (response.ok) {
-      const data = await response.json()
-      toast?.success('模型转换成功: ONNX')
-      closeConvertDialog()
-      // 刷新模型列表以获取最新的转换状态
-      await fetchProjectResults()
-    } else {
-      const error = await response.text()
-      throw new Error(error)
-    }
-  } catch (err: any) {
-    toast?.error(`模型转换失败: ${err.message}`)
-  } finally {
-    isConverting.value = false
-  }
-}
-
-const handleGroupConvert = async () => {
-  if (!convertingGroup.value) return
-
-  isConverting.value = true
-  let successCount = 0
-  let failCount = 0
-
-  const apiBase = config.public.apiBase || 'http://localhost:8000'
-  const projectId = productId.value
-
-  for (const model of convertingGroup.value.models) {
-    // 使用 model.label 作为状态键（可能是 "multiple"）
-    const statusKey = model.label
-    if (groupConvertStatus.value[statusKey]) continue
-
-    try {
-      const taskUuid = model.task_uuid || model.task_id
-      // 对于统一结构，使用 labels 数组中的第一个标签
-      const labelName = model.labels && model.labels.length > 0 ? model.labels[0] : model.label
-
-      const url = `${apiBase.replace(/\/$/, '')}/convert/onnx/convert/${projectId}/${taskUuid}/${labelName}?opset_version=11&simplify=true`
-      const response = await fetch(url, {
-        method: 'POST'
-      })
-
-      if (response.ok) {
-        successCount++
-      } else {
-        failCount++
-      }
-    } catch (e) {
-      failCount++
-    }
-  }
-
-  isConverting.value = false
-
-  if (successCount > 0) {
-    toast?.success(`成功转换 ${successCount} 个模型`)
-  }
-  if (failCount > 0) {
-    toast?.error(`${failCount} 个模型转换失败`)
-  }
-
-  closeConvertDialog()
-  await fetchProjectResults()
-}
 
 // 点击空白处关闭悬浮框
 const handleClickOutside = (event: MouseEvent) => {
@@ -2163,20 +1973,12 @@ const openMonitorStream = (taskId: string) => {
   if (!taskId || monitorEventSources[taskId]) return
   const apiBase = config.public.apiBase || 'http://localhost:8000'
   const url = `${apiBase.replace(/\/$/, '')}/train/events/${encodeURIComponent(taskId)}`
-  console.log('[openMonitorStream] ===== Start =====')
-  console.log('[openMonitorStream] taskId:', taskId)
-  console.log('[openMonitorStream] apiBase:', apiBase)
-  console.log('[openMonitorStream] Connecting to:', url)
-  console.log('[openMonitorStream] monitorTaskId:', monitorTaskId.value)
 
   const es = new EventSource(url)
-  es.onopen = () => console.log('[openMonitorStream] Connected to:', url)
-  es.onerror = (err) => console.error('[openMonitorStream] Error:', err)
   monitorEventSources[taskId] = es
 
   // 后端SSE只发送标准message事件，data字段包含JSON
   es.onmessage = (e: MessageEvent) => {
-    console.log('[openMonitorStream] Received message, data:', (e as any)?.data?.slice?.(0, 200) || (e as any)?.data)
     try {
       const data = JSON.parse(e.data || '{}')
       applyMonitorPayload(taskId, data)
@@ -2186,7 +1988,6 @@ const openMonitorStream = (taskId: string) => {
   }
 
   es.onerror = () => {
-    console.log('[openMonitorStream] Connection closed for:', taskId)
     closeMonitorStream(taskId)
   }
 }
@@ -2236,12 +2037,8 @@ const mergeMetricPoints = (taskId: string, incoming: any[], mode: 'replace' | 'a
 }
 
 const applyMonitorPayload = (taskId: string, data: any) => {
-  console.log('[applyMonitorPayload] ===== Start =====')
-  console.log('[applyMonitorPayload] taskId:', taskId)
-  console.log('[applyMonitorPayload] data:', JSON.stringify(data).slice(0, 300))
 
   if (!data || typeof data !== 'object') {
-    console.log('[applyMonitorPayload] Invalid data format')
     return
   }
 
@@ -2477,7 +2274,6 @@ const startTraining = async () => {
       
       currentBaseEpoch.value = completedEpochs // 记录本次续训的基数
       finalEpochs = completedEpochs + additionalEpochs
-      console.log(`[startTraining] Extended resume: completed ${completedEpochs} + additional ${additionalEpochs} = ${finalEpochs}`)
       
       // 确保 finalEpochs 至少比 completedEpochs 大
       if (finalEpochs <= completedEpochs) {
@@ -2487,7 +2283,6 @@ const startTraining = async () => {
       currentBaseEpoch.value = 0
     }
 
-    console.log('[startTraining] Resetting state...')
     closeMonitorStream() 
     stopGroupPolling() // Ensure any existing polling is stopped
     monitorTaskId.value = ''
@@ -2516,8 +2311,6 @@ const startTraining = async () => {
     await nextTick()
     monitorTaskId.value = 'all' // Reset to 'all' after clearing
     
-    console.log('[startTraining] State reset complete. groupMetrics:', groupMetrics.value)
-
     const payload = {
       images,
       coco_data: cocoData,
@@ -2691,7 +2484,6 @@ const stopGroup = async () => {
 
 const resumeTask = async (taskId?: string) => {
   const tid = taskId || monitorTaskId.value
-  console.log('[resumeTask] Target taskId:', tid, 'Type:', typeof tid)
   if (!tid || tid === 'all' || isResumingTask.value) return
   isResumingTask.value = true
   try {
@@ -3053,7 +2845,6 @@ watch(
 )
 
 const handleAugment = async () => {
-  console.log('handleAugment called', { baseImageUrl: !!baseImageUrl.value, isAugmenting: isAugmenting.value })
   if (!baseImageUrl.value || isAugmenting.value) return
 
   isAugmenting.value = true
@@ -3257,7 +3048,6 @@ onMounted(async () => {
     if (qImagePath) {
       // 直接加载传入的图片路径
       const url = await window.electronAPI.loadImage(qImagePath)
-      console.log('[Training] Loading specific image:', qImagePath, 'URL exists:', !!url)
       if (url) {
         baseImageUrl.value = url
         const img = new Image()
@@ -3275,7 +3065,6 @@ onMounted(async () => {
     } else {
       // 获取产品的所有图片，取第一张
       const files = await window.electronAPI.getProductImages(productId.value)
-      console.log('[Training] Product images:', files)
       if (files && files.length > 0) {
         const targetImagePath = files[0]
         const url = await window.electronAPI.loadImage(targetImagePath)
@@ -3299,10 +3088,8 @@ onMounted(async () => {
     // Load product labels for COCO category_id mapping
     const products = await window.electronAPI.getProducts()
     const product = products.find(p => p.id === productId.value)
-    console.log('[Training] Loading labels for product:', productId.value, 'Product found:', !!product, 'Scheme:', product?.scheme ? 'exists' : 'none')
     if (product?.scheme) {
       const config = JSON.parse(product.scheme.config)
-      console.log('[Training] Labels config:', config.labels)
       labelConfigs.value = config.labels || []
     }
 
@@ -3340,7 +3127,6 @@ watch(() => route.query, async (newQuery) => {
   }
   
   if (qImagePath && window.electronAPI) {
-    console.log('[Training] Route query changed, loading image:', qImagePath)
     const url = await window.electronAPI.loadImage(qImagePath)
     if (url) {
       baseImageUrl.value = url
@@ -3531,14 +3317,6 @@ onBeforeUnmount(() => {
                      <div class="h-px bg-border/50 flex-1"></div>
                      <button
                        v-if="group.models.length > 0"
-                       class="p-1.5 hover:bg-primary/10 hover:text-primary rounded-lg transition-colors"
-                       title="模型转换"
-                       @click.stop="openGroupConvertDialog(group)"
-                     >
-                       <Zap class="w-3 h-3" />
-                     </button>
-                     <button
-                       v-if="group.models.length > 0"
                        class="p-1.5 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-colors"
                        :title="t('training.monitor.deleteAllTask')"
                        @click.stop="confirmDeleteModel(group.models[0], $event, 'task')"
@@ -3572,9 +3350,6 @@ onBeforeUnmount(() => {
                                 <span v-if="model.files && model.files.find(f => f.name.endsWith('.pdparams'))" class="text-muted-foreground text-xs ml-1">
                                   {{ model.files.find(f => f.name.endsWith('.pdparams')).name.replace('best_model/', '') }}
                                 </span>
-                                <span v-if="model.has_onnx" class="bg-blue-100 text-blue-700 text-[9px] px-1 py-0 rounded border border-blue-200 font-bold ml-1">
-                                  {{ t('training.monitor.converted') }}
-                                </span>
                               </div>
                             </div>
                             <div class="relative flex items-center gap-1">
@@ -3607,60 +3382,6 @@ onBeforeUnmount(() => {
                               </button>
                             </div>
                           </div>
-                       </div>
-                    </div>
-
-                    <!-- 转换产物 -->
-                    <div v-if="group.models.some(m => m.has_onnx)" class="space-y-2 mt-4 pt-3 border-t border-dashed">
-                       <div class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                         <Zap class="w-3 h-3" /> 转换产物
-                       </div>
-                       <div class="grid grid-cols-1 gap-1.5">
-                         <div v-for="(model, modelIndex) in group.models.filter(m => m.has_onnx)" :key="`${model.task_uuid || model.task_id}-${model.label}-onnx`" 
-                           class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all group/file relative"
-                           :class="[getLabelColorClass(model.label, modelIndex).bg, getLabelColorClass(model.label, modelIndex).hover, getLabelColorClass(model.label, modelIndex).border]"
-                         >
-                           <div class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                             :class="[getLabelColorClass(model.label, modelIndex).iconBg, getLabelColorClass(model.label, modelIndex).iconBorder]"
-                           >
-                             <Award class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
-                           </div>
-                           <div class="flex-1 min-w-0">
-                             <div class="text-sm font-medium text-foreground truncate" :title="model.label + ' - model.onnx'">
-                               <span>{{ model.label }}</span>
-                               <span class="text-muted-foreground text-xs ml-1">model.onnx</span>
-                             </div>
-                           </div>
-                           <div class="relative flex items-center gap-1">
-                             <a
-                               v-if="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx` && model.files && model.files.find(f => f.name.endsWith('.onnx'))"
-                               :href="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + (model.files.find(f => f.name.endsWith('.onnx'))?.url || '')"
-                               target="_blank"
-                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-primary/10"
-                               :class="getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10')"
-                               :title="t('common.download')"
-                               @click="closeModelMenu"
-                             >
-                               <Download class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
-                             </a>
-                             <button
-                               v-if="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx`"
-                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-destructive/10"
-                               :class="getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10')"
-                               :title="t('training.monitor.deleteThisLabel')"
-                               @click.stop="closeModelMenu(); confirmDeleteModel(model, $event, 'label')"
-                             >
-                               <Trash2 class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
-                             </button>
-                             <button
-                               class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 hover:bg-muted"
-                               :class="[getLabelColorClass(model.label, modelIndex).iconBg.replace('/10', '/20').replace('/5', '/10'), { 'rotate-90': activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx` }]"
-                               @click.stop="activeModelMenuId === `${model.task_uuid || model.task_id}-${model.label}-onnx` ? closeModelMenu() : openModelMenu(`${model.task_uuid || model.task_id}-${model.label}-onnx`)"
-                             >
-                               <MoreVertical class="w-3.5 h-3.5" :class="getLabelColorClass(model.label, modelIndex).iconText" />
-                             </button>
-                           </div>
-                         </div>
                        </div>
                     </div>
 
@@ -4534,142 +4255,158 @@ onBeforeUnmount(() => {
               <!-- History Tab -->
               <div v-else-if="activeMonitorTab === 'history'" class="h-full flex flex-col animate-in slide-in-from-right-4 duration-300 overflow-y-auto custom-scrollbar p-4">
                 <div v-if="groupedRecords.length === 0" class="flex flex-col items-center justify-center h-32 text-muted-foreground">
-                  <History class="w-8 h-8 opacity-40 mb-2" />
-                  <span class="text-xs">{{ t('training.monitor.noRecords') }}</span>
+                  <History class="w-12 h-12 opacity-30 mb-3" />
+                  <span class="text-sm">{{ t('training.monitor.noRecords') }}</span>
                 </div>
 
                 <div class="space-y-3">
                   <div 
                     v-for="group in groupedRecords" 
                     :key="group.taskUuid" 
-                    class="group relative border rounded-xl bg-background hover:shadow-md transition-all cursor-pointer"
+                    class="group relative border border-border/60 rounded-2xl bg-gradient-to-br from-background to-muted/20 hover:from-muted/30 hover:to-muted/40 hover:border-primary/20 hover:shadow-lg hover:shadow-primary/5 transition-all duration-300 cursor-pointer"
                     @click="toggleGroupPopover(group)"
                   >
-                    <div class="flex items-center gap-3 p-3">
-                      <div class="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-lg border text-xs font-mono text-muted-foreground">
-                        <span class="font-bold text-foreground">{{ group.displayName }}</span>
+                    <div class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl" :class="getStatusClass(group.status).replace('bg-', 'bg-gradient-to-b from-').replace('500', '-400').replace('600', '-500')"></div>
+                    <div class="flex items-center gap-3 p-4 pl-5">
+                      <div class="flex items-center gap-2 flex-1 min-w-0">
+                        <Clock class="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span class="text-sm font-mono text-foreground truncate">{{ group.displayName }}</span>
+                        <span class="text-[10px] px-2.5 py-1 rounded-lg whitespace-nowrap font-medium shrink-0" :class="getStatusClass(group.status) + ' text-white'">
+                          {{ t('training.monitor.statusList.' + (normalizeStatus(group.status) || 'pending')) }}
+                        </span>
                       </div>
-                      <div class="h-px bg-border/50 flex-1"></div>
-                      <span class="text-[10px] px-2 py-1 rounded-full" :class="getStatusClass(group.status) + ' text-white'">
-                        {{ t('training.monitor.statusList.' + (normalizeStatus(group.status) || 'pending')) }}
-                      </span>
-                      <span class="text-[10px] text-muted-foreground">{{ group.records.length }} {{ t('training.monitor.labels') }}</span>
-                      <span class="text-[10px] text-muted-foreground">{{ group.createdAt ? new Date(group.createdAt).toLocaleString() : '-' }}</span>
                       <button
-                        class="p-1.5 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                        class="p-2 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-all opacity-0 group-hover:opacity-100"
                         @click="confirmDeleteRecordGroup(group, $event)"
                       >
                         <Trash2 class="w-4 h-4" />
                       </button>
-                      <ChevronDown class="w-4 h-4 text-muted-foreground transition-transform duration-300" :class="{ 'rotate-180': activePopoverGroup?.taskUuid === group.taskUuid }" />
+                      <ChevronDown class="w-5 h-5 text-muted-foreground transition-transform duration-300 group-hover:text-foreground" :class="{ 'rotate-180': activePopoverGroup?.taskUuid === group.taskUuid }" />
                     </div>
 
                     <div 
                       v-if="activePopoverGroup?.taskUuid === group.taskUuid" 
-                      class="absolute left-0 right-0 z-50 bg-popover border shadow-xl rounded-xl p-4 animate-in fade-in slide-in-from-top-2 duration-200"
+                      class="absolute left-0 right-0 z-50 bg-popover border border-border/80 shadow-2xl rounded-2xl p-5 animate-in fade-in slide-in-from-top-2 duration-200"
                       style="top: calc(100% + 8px);"
                       @click.stop
                     >
-                      <div class="absolute -top-1 left-8 w-4 h-4 bg-popover border-t border-l border-border rotate-45 z-20"></div>
+                      <div class="absolute -top-2 left-8 w-4 h-4 bg-popover border-t border-l border-border rotate-45 z-20"></div>
                       
-                      <div class="flex items-center justify-between mb-3">
-                        <span class="text-sm font-bold">{{ group.displayName }}</span>
-                        <button class="p-1 hover:bg-muted rounded-full transition-colors" @click.stop="activePopoverGroup = null">
+                      <div class="flex items-center justify-between mb-4 pb-3 border-b border-border/50">
+                        <div class="flex items-center gap-2">
+                          <History class="w-4 h-4 text-primary" />
+                          <span class="text-sm font-semibold">运行记录详情</span>
+                        </div>
+                        <button class="p-1.5 hover:bg-muted rounded-lg transition-colors" @click.stop="activePopoverGroup = null">
                           <X class="w-4 h-4 text-muted-foreground" />
                         </button>
                       </div>
                       
-                      <div v-if="group.records.length > 1" class="flex gap-1 mb-3 overflow-x-auto">
+                      <div v-if="group.records.length > 1" class="flex gap-2 mb-4 overflow-x-auto pb-2">
                         <button 
                           v-for="rec in group.records" 
                           :key="rec.id"
-                          class="px-3 py-1.5 text-xs rounded-lg transition-all shrink-0"
-                          :class="popoverRecord?.id === rec.id ? 'bg-primary text-primary-foreground' : 'bg-muted hover:bg-muted/80'"
+                          class="px-4 py-2 text-xs rounded-xl transition-all shrink-0 font-medium border"
+                          :class="popoverRecord?.id === rec.id ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 hover:bg-muted border-border'"
                           @click.stop="popoverRecord = rec"
                         >
-                          {{ rec.labelName }}
+                          <span class="flex items-center gap-1.5">
+                            <Box class="w-3 h-3" />
+                            {{ rec.labelName }}
+                          </span>
                         </button>
                       </div>
 
-                      <div v-if="popoverRecord && group.records.find((r: any) => r.id === popoverRecord.id)" class="border rounded-lg bg-muted/20 p-3">
-                        <div class="flex items-center gap-2 mb-3">
-                          <span class="text-sm font-bold">{{ popoverRecord.labelName }}</span>
-                          <span class="text-[10px] px-2 py-0.5 rounded-full" :class="getStatusClass(popoverRecord.status) + ' text-white'">
+                      <div v-if="popoverRecord && group.records.find((r: any) => r.id === popoverRecord.id)" class="border border-border/60 rounded-xl bg-muted/20 p-4">
+                        <div class="flex items-center justify-between mb-4">
+                          <div class="flex items-center gap-2">
+                            <Award class="w-4 h-4 text-primary" />
+                            <span class="text-sm font-semibold">{{ popoverRecord.labelName }}</span>
+                          </div>
+                          <span class="text-[10px] px-2.5 py-1 rounded-lg font-medium" :class="getStatusClass(popoverRecord.status) + ' text-white'">
                             {{ t('training.monitor.statusList.' + (normalizeStatus(popoverRecord.status) || 'pending')) }}
                           </span>
                         </div>
 
-                        <div class="flex gap-1 mb-3 border-b pb-2">
+                        <div class="flex gap-2 mb-4">
                           <button 
                             v-for="tab in ['params', 'metrics', 'logs']" 
                             :key="tab"
-                            class="px-3 py-1 text-xs rounded-lg transition-all"
-                            :class="recordDetailTab === tab ? 'bg-primary text-primary-foreground' : 'hover:bg-muted/50'"
+                            class="flex-1 px-3 py-2 text-xs rounded-lg transition-all font-medium border"
+                            :class="recordDetailTab === tab ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-muted/50 border-border bg-background'"
                             @click.stop="recordDetailTab = tab"
                           >
-                            {{ tab === 'params' ? t('training.monitor.tabs.overview') : tab === 'metrics' ? t('training.monitor.metrics') : t('training.monitor.tabs.logs') }}
+                            <span class="flex items-center justify-center gap-1.5">
+                              <component :is="tab === 'params' ? FileText : tab === 'metrics' ? Activity : Terminal" class="w-3.5 h-3.5" />
+                              {{ tab === 'params' ? t('training.monitor.tabs.overview') : tab === 'metrics' ? t('training.monitor.metrics') : t('training.monitor.tabs.logs') }}
+                            </span>
                           </button>
                         </div>
 
-                        <div v-if="recordDetailTab === 'params'" class="max-h-48 overflow-auto custom-scrollbar">
-                          <div class="grid grid-cols-2 gap-2">
-                            <div class="p-2 border rounded-lg bg-background">
-                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.modelName') }}</span>
-                              <div class="text-xs font-medium">{{ popoverRecord.modelName || 'STFPM' }}</div>
+                        <div v-if="recordDetailTab === 'params'" class="max-h-56 overflow-auto custom-scrollbar">
+                          <div class="grid grid-cols-2 gap-3">
+                            <div class="p-3 border border-border/60 rounded-xl bg-background/80">
+                              <span class="text-[10px] text-muted-foreground uppercase tracking-wider">{{ t('training.train.modelName') }}</span>
+                              <div class="text-sm font-semibold mt-1">{{ popoverRecord.modelName || 'STFPM' }}</div>
                             </div>
-                            <div class="p-2 border rounded-lg bg-background">
-                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.epochs') }}</span>
-                              <div class="text-xs font-medium">{{ popoverRecord.totalEpochs || '-' }}</div>
+                            <div class="p-3 border border-border/60 rounded-xl bg-background/80">
+                              <span class="text-[10px] text-muted-foreground uppercase tracking-wider">{{ t('training.train.epochs') }}</span>
+                              <div class="text-sm font-semibold mt-1">{{ popoverRecord.totalEpochs || '-' }}</div>
                             </div>
-                            <div class="p-2 border rounded-lg bg-background">
-                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.batchSize') }}</span>
-                              <div class="text-xs font-medium">{{ popoverRecord.batchSize || '-' }}</div>
+                            <div class="p-3 border border-border/60 rounded-xl bg-background/80">
+                              <span class="text-[10px] text-muted-foreground uppercase tracking-wider">{{ t('training.train.batchSize') }}</span>
+                              <div class="text-sm font-semibold mt-1">{{ popoverRecord.batchSize || '-' }}</div>
                             </div>
-                            <div class="p-2 border rounded-lg bg-background">
-                              <span class="text-[10px] text-muted-foreground">{{ t('training.train.learningRate') }}</span>
-                              <div class="text-xs font-medium">{{ popoverRecord.learningRate || '-' }}</div>
+                            <div class="p-3 border border-border/60 rounded-xl bg-background/80">
+                              <span class="text-[10px] text-muted-foreground uppercase tracking-wider">{{ t('training.train.learningRate') }}</span>
+                              <div class="text-sm font-semibold mt-1">{{ popoverRecord.learningRate || '-' }}</div>
                             </div>
                           </div>
 
-                          <div v-if="popoverRecord.startTime || popoverRecord.endTime" class="mt-2">
-                            <h4 class="text-[10px] font-medium text-muted-foreground mb-1">{{ t('training.monitor.timeInfo') }}</h4>
-                            <div class="grid grid-cols-2 gap-2">
-                              <div class="p-2 border rounded-lg bg-background">
+                          <div v-if="popoverRecord.startTime || popoverRecord.endTime" class="mt-3 pt-3 border-t border-border/50">
+                            <h4 class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                              <Clock class="w-3 h-3" /> {{ t('training.monitor.timeInfo') }}
+                            </h4>
+                            <div class="grid grid-cols-2 gap-3">
+                              <div class="p-3 border border-border/60 rounded-xl bg-background/80">
                                 <span class="text-[10px] text-muted-foreground">{{ t('training.monitor.startTime') }}</span>
-                                <div class="text-xs">{{ popoverRecord.startTime ? new Date(popoverRecord.startTime).toLocaleString() : '-' }}</div>
+                                <div class="text-xs font-medium mt-1">{{ popoverRecord.startTime ? new Date(popoverRecord.startTime).toLocaleString() : '-' }}</div>
                               </div>
-                              <div class="p-2 border rounded-lg bg-background">
+                              <div class="p-3 border border-border/60 rounded-xl bg-background/80">
                                 <span class="text-[10px] text-muted-foreground">{{ t('training.monitor.endTime') }}</span>
-                                <div class="text-xs">{{ popoverRecord.endTime ? new Date(popoverRecord.endTime).toLocaleString() : '-' }}</div>
+                                <div class="text-xs font-medium mt-1">{{ popoverRecord.endTime ? new Date(popoverRecord.endTime).toLocaleString() : '-' }}</div>
                               </div>
                             </div>
                           </div>
                         </div>
 
-                        <div v-else-if="recordDetailTab === 'metrics'" class="max-h-64 overflow-auto custom-scrollbar">
-                          <div v-if="getRecordMetricsForHover(popoverRecord).length > 0" class="border rounded-lg bg-background p-2">
-                            <div class="h-48">
+                        <div v-else-if="recordDetailTab === 'metrics'" class="max-h-72 overflow-auto custom-scrollbar">
+                          <div v-if="getRecordMetricsForHover(popoverRecord).length > 0" class="border border-border/60 rounded-xl bg-background/80 p-3">
+                            <div class="h-52">
                               <Line :data="getRecordChartData(popoverRecord)" :options="recordChartOptions" />
                             </div>
                           </div>
-                          <div v-else class="text-xs text-muted-foreground text-center py-4">
+                          <div v-else class="text-sm text-muted-foreground text-center py-8 flex flex-col items-center">
+                            <Activity class="w-8 h-8 opacity-30 mb-2" />
                             {{ t('training.monitor.noMetrics') }}
                           </div>
                         </div>
 
-                        <div v-else-if="recordDetailTab === 'logs'" class="max-h-48 overflow-auto custom-scrollbar">
-                          <div v-if="popoverRecord.logs && popoverRecord.logs.length > 0" class="border rounded-lg bg-slate-950 p-2">
-                            <div v-for="(log, idx) in popoverRecord.logs" :key="idx" class="font-mono text-[9px] text-slate-300 mb-1 last:mb-0 break-all">
+                        <div v-else-if="recordDetailTab === 'logs'" class="max-h-56 overflow-auto custom-scrollbar">
+                          <div v-if="popoverRecord.logs && popoverRecord.logs.length > 0" class="border border-border/60 rounded-xl bg-slate-950 p-3">
+                            <div v-for="(log, idx) in popoverRecord.logs" :key="idx" class="font-mono text-[10px] text-slate-300 mb-1.5 last:mb-0 break-all leading-relaxed">
                               {{ typeof log === 'string' ? log : JSON.stringify(log) }}
                             </div>
                           </div>
-                          <div v-else class="text-xs text-muted-foreground text-center py-4">
+                          <div v-else class="text-sm text-muted-foreground text-center py-8 flex flex-col items-center">
+                            <Terminal class="w-8 h-8 opacity-30 mb-2" />
                             {{ t('training.monitor.noLogs') }}
                           </div>
                         </div>
                       </div>
 
-                      <div v-else class="text-xs text-muted-foreground text-center py-4">
+                      <div v-else class="text-sm text-muted-foreground text-center py-8 flex flex-col items-center">
+                        <Box class="w-10 h-10 opacity-30 mb-2" />
                         {{ t('training.monitor.selectRecord') }}
                       </div>
                     </div>
@@ -4802,81 +4539,6 @@ onBeforeUnmount(() => {
         <div class="flex gap-3 pt-2">
           <UiButton variant="outline" class="flex-1" @click="showDeleteModelConfirm = false">{{ t('common.cancel') }}</UiButton>
           <UiButton variant="destructive" class="flex-1" @click="handleDeleteModel">{{ t('common.confirm') }}</UiButton>
-        </div>
-      </div>
-    </div>
-
-    <!-- Model Conversion Dialog -->
-    <div v-if="showConvertDialog" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="closeConvertDialog">
-      <div class="bg-background border rounded-xl shadow-2xl p-6 max-w-md w-full space-y-4 animate-in zoom-in-95 duration-200" @click.stop>
-        <div class="flex items-center gap-3 text-primary">
-          <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-            <Zap class="h-5 w-5" />
-          </div>
-          <h3 class="font-bold text-lg">模型转换</h3>
-        </div>
-
-        <!-- 单模型转换 -->
-        <div v-if="convertingModel" class="space-y-3">
-          <p class="text-sm text-muted-foreground">
-            将模型 <span class="font-medium text-foreground">{{ convertingModel?.label }}</span> 转换为 ONNX 格式
-          </p>
-          <div v-if="convertHasOnnx" class="p-3 bg-green-50 border border-green-200 rounded-lg">
-            <div class="flex items-center gap-2 text-green-700 text-sm">
-              <Award class="w-4 h-4" />
-              <span>该模型已转换为 ONNX 格式</span>
-            </div>
-          </div>
-          <div v-else-if="convertModelInfo" class="p-3 bg-muted/50 rounded-lg space-y-2">
-            <div class="text-xs text-muted-foreground">模型信息</div>
-            <div class="text-sm space-y-1">
-              <div class="flex justify-between">
-                <span class="text-muted-foreground">输入形状:</span>
-                <span class="font-medium">{{ convertModelInfo.input_shape }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-muted-foreground">输出形状:</span>
-                <span class="font-medium">{{ convertModelInfo.output_shape }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-muted-foreground">参数数量:</span>
-                <span class="font-medium">{{ convertModelInfo.param_count?.toLocaleString() }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 组批量转换 -->
-        <div v-else-if="convertingGroup" class="space-y-3">
-          <p class="text-sm text-muted-foreground">
-            将任务组 <span class="font-medium text-foreground">{{ convertingGroup?.displayName }}</span> 中的所有模型转换为 ONNX 格式
-          </p>
-          <div class="max-h-[300px] overflow-y-auto space-y-2">
-            <div v-for="model in convertingGroup?.models" :key="model.label" class="flex items-center justify-between p-2 rounded-lg border" :class="groupConvertStatus[model.label] ? 'bg-green-50 border-green-200' : 'bg-muted/30'">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium">{{ model.label }}</span>
-                <span v-if="groupConvertStatus[model.label]" class="bg-blue-100 text-blue-700 text-[9px] px-1 py-0 rounded border border-blue-200 font-bold">ONNX</span>
-              </div>
-              <span v-if="groupConvertStatus[model.label]" class="text-green-600 text-xs flex items-center gap-1">
-                <Award class="w-3 h-3" /> 已转换
-              </span>
-              <span v-else class="text-muted-foreground text-xs">待转换</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex gap-3 pt-2">
-          <UiButton variant="outline" class="flex-1" @click="closeConvertDialog">{{ t('common.cancel') }}</UiButton>
-          <UiButton
-            class="flex-1"
-            :disabled="isConverting || (convertingModel && convertHasOnnx) || (convertingGroup && convertingGroup.models.every(m => groupConvertStatus[m.label]))"
-            @click="handleModelConvert"
-          >
-            <span v-if="isConverting">转换中...</span>
-            <span v-else-if="convertingModel && convertHasOnnx">已转换</span>
-            <span v-else-if="convertingGroup && convertingGroup.models.every(m => groupConvertStatus[m.label])">全部已转换</span>
-            <span v-else>开始转换</span>
-          </UiButton>
         </div>
       </div>
     </div>

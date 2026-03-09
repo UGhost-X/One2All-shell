@@ -18,7 +18,8 @@
     "confirmDelete": "确认删除",
     "cancel": "取消",
     "confirm": "确认",
-    "download": "下载"
+    "download": "下载",
+    "close": "关闭"
   },
   "settings": {
     "title": "系统设置",
@@ -398,6 +399,65 @@
       "yaw": "偏航",
       "x": "X轴",
       "y": "Y轴"
+    }
+  },
+  "deploy": {
+    "title": "服务部署",
+    "selectProduct": "选择项目",
+    "refresh": "刷新",
+    "pleaseSelectProduct": "请先选择一个项目",
+    "deployableModels": "可部署模型",
+    "loadingModels": "加载中...",
+    "noModels": "暂无可部署的模型，请先完成训练",
+    "modelCount": "{count} 个模型",
+    "labels": "标签",
+    "port": "端口",
+    "status": {
+      "running": "运行中",
+      "stopped": "已停止",
+      "starting": "启动中",
+      "unhealthy": "异常",
+      "error": "错误"
+    },
+    "startService": "启动服务",
+    "stopService": "停止",
+    "deleteService": "删除",
+    "runningServices": "运行中的服务",
+    "noRunningServices": "暂无运行中的服务",
+    "taskUuid": "任务UUID",
+    "inferenceUrl": "推理地址",
+    "modelCountLabel": "模型数量",
+    "inferenceTest": "推理测试",
+    "selectService": "选择服务",
+    "uploadImage": "点击上传图片进行推理",
+    "startInference": "开始推理",
+    "inferring": "推理中...",
+    "inferenceResults": "推理结果",
+    "noResults": "暂无推理结果",
+    "targetDetected": "检测到 {count} 个目标",
+    "anomalyDetected": "检测到 {count} 个目标，异常 {anomaly} 个",
+    "inferenceComplete": "推理完成",
+    "inferenceFailed": "推理失败",
+    "unknown": "未知",
+    "anomaly": "异常",
+    "viewLogs": "日志",
+    "serviceLogs": "服务日志",
+    "logsDescription": "查看服务的运行日志",
+    "logLines": "日志行数",
+    "refreshLogs": "刷新",
+    "noLogs": "暂无日志",
+    "loadLogsFailed": "加载日志失败",
+    "messages": {
+      "loadModelsFailed": "加载可部署模型失败",
+      "startSuccess": "服务启动成功，端口: {port}",
+      "startFailed": "启动服务失败",
+      "stopSuccess": "服务已停止",
+      "stopFailed": "停止服务失败",
+      "deleteSuccess": "服务已删除",
+      "deleteFailed": "删除服务失败",
+      "selectServiceAndImage": "请先选择服务并上传图片",
+      "serviceInfoError": "服务信息不正确",
+      "serviceStarting": "服务正在启动中，请稍后再试"
     }
   }
 }

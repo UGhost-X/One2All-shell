@@ -18,7 +18,8 @@
     "confirmDelete": "Confirm Delete",
     "cancel": "Cancel",
     "confirm": "Confirm",
-    "download": "Download"
+    "download": "Download",
+    "close": "Close"
   },
   "settings": {
     "title": "Settings",
@@ -382,6 +383,65 @@
       "yaw": "Yaw",
       "x": "X-Axis",
       "y": "Y-Axis"
+    }
+  },
+  "deploy": {
+    "title": "Service Deployment",
+    "selectProduct": "Select Product",
+    "refresh": "Refresh",
+    "pleaseSelectProduct": "Please select a product first",
+    "deployableModels": "Deployable Models",
+    "loadingModels": "Loading...",
+    "noModels": "No deployable models available, please complete training first",
+    "modelCount": "{count} models",
+    "labels": "Labels",
+    "port": "Port",
+    "status": {
+      "running": "Running",
+      "stopped": "Stopped",
+      "starting": "Starting",
+      "unhealthy": "Unhealthy",
+      "error": "Error"
+    },
+    "startService": "Start Service",
+    "stopService": "Stop",
+    "deleteService": "Delete",
+    "runningServices": "Running Services",
+    "noRunningServices": "No running services",
+    "taskUuid": "Task UUID",
+    "inferenceUrl": "Inference URL",
+    "modelCountLabel": "Model Count",
+    "inferenceTest": "Inference Test",
+    "selectService": "Select Service",
+    "uploadImage": "Click to upload image for inference",
+    "startInference": "Start Inference",
+    "inferring": "Inferring...",
+    "inferenceResults": "Inference Results",
+    "noResults": "No inference results",
+    "targetDetected": "Detected {count} targets",
+    "anomalyDetected": "Detected {count} targets, {anomaly} anomalies",
+    "inferenceComplete": "Inference complete",
+    "inferenceFailed": "Inference failed",
+    "unknown": "Unknown",
+    "anomaly": "Anomaly",
+    "viewLogs": "Logs",
+    "serviceLogs": "Service Logs",
+    "logsDescription": "View service runtime logs",
+    "logLines": "Log Lines",
+    "refreshLogs": "Refresh",
+    "noLogs": "No logs available",
+    "loadLogsFailed": "Failed to load logs",
+    "messages": {
+      "loadModelsFailed": "Failed to load deployable models",
+      "startSuccess": "Service started successfully, port: {port}",
+      "startFailed": "Failed to start service",
+      "stopSuccess": "Service stopped",
+      "stopFailed": "Failed to stop service",
+      "deleteSuccess": "Service deleted",
+      "deleteFailed": "Failed to delete service",
+      "selectServiceAndImage": "Please select a service and upload an image first",
+      "serviceInfoError": "Service information is incorrect",
+      "serviceStarting": "Service is starting, please try again later"
     }
   }
 }

@@ -97,3 +97,15 @@ model TrainingRecord {
   @@index([taskUuid])
   @@index([status])
 }
+
+model AppSettings {
+  id            Int      @id @default(1)
+  dataPath      String
+  locale        String   @default("zh")
+  backendMode   String   @default("local")
+  backendIp     String   @default("localhost")
+  backendUrl    String   @default("http://localhost:8000")
+  backendPort   String   @default("8000")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}

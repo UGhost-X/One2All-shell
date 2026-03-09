@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveTrainingRecord: (data) => ipcRenderer.invoke('db:save-training-record', data),
   getTrainingRecords: (productId) => ipcRenderer.invoke('db:get-training-records', productId),
   getTrainingRecord: (taskId, labelName) => ipcRenderer.invoke('db:get-training-record', { taskId, labelName }),
+  getTrainingRecordsByTaskUuid: (taskUuid) => ipcRenderer.invoke('db:get-training-records-by-task-uuid', taskUuid),
   deleteTrainingRecord: (taskId, labelName) => ipcRenderer.invoke('db:delete-training-record', { taskId, labelName }),
 });
 

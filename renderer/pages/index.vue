@@ -25,7 +25,8 @@ import {
   Settings,
   Pencil,
   Wand2,
-  Loader2
+  Loader2,
+  Eye
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
@@ -60,7 +61,6 @@ const showToast = (message: string, type: 'info' | 'error' = 'info') => {
   }
 }
 
-const isPinned = ref(false)
 const isToolbarFixed = ref(true)
 const isToolbarHovered = ref(false)
 
@@ -323,7 +323,7 @@ const gainValue = ref(1.2)
 
 const predictionConfidence = ref<number | null>(null)
 const predictionResults = ref<Array<{ label: string; score: number }>>([])
-const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number] }>>([])
+const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }>>([])
 
 const inferenceServices = ref<Array<{ service_id: string; task_uuid: string; port: number; inference_url: string; labels: string[] }>>([])
 const selectedInferenceService = ref<string>('')
@@ -350,9 +350,13 @@ const fetchInitialData = async () => {
 
 const fetchInferenceServices = async () => {
   try {
-    const res = await fetch('/api/deploy/inference-services')
+    const projectId = selectedProductId.value || ''
+    const url = projectId 
+      ? `/api/deploy/http/services?project_id=${projectId}&include_health=true`
+      : '/api/deploy/http/services?include_health=true'
+    const res = await fetch(url)
     const data = await res.json()
-    inferenceServices.value = data.services || []
+    inferenceServices.value = (data.services || []).filter((s: any) => s.status === 'running')
   } catch (err) {
     console.error('Failed to fetch inference services:', err)
     inferenceServices.value = []
@@ -361,7 +365,6 @@ const fetchInferenceServices = async () => {
 
 onMounted(async () => {
   if (window.electronAPI) {
-    isPinned.value = await window.electronAPI.isAlwaysOnTop()
     await fetchInitialData()
     await fetchInferenceServices()
     
@@ -371,12 +374,6 @@ onMounted(async () => {
   }
   document.addEventListener('fullscreenchange', syncFullscreenState)
 })
-
-const togglePin = async () => {
-  if (window.electronAPI) {
-    isPinned.value = await window.electronAPI.toggleAlwaysOnTop()
-  }
-}
 
 const openProductModal = () => {
   newProductName.value = ''
@@ -530,6 +527,29 @@ const handleEditProduct = (product: any) => {
   })
 }
 
+const viewProductImage = async (product: any) => {
+  if (!product.lastImagePath) {
+    showToast('该项目尚未绑定图片', 'error')
+    return
+  }
+  
+  if (window.electronAPI?.loadImage) {
+    try {
+      const dataUrl = await window.electronAPI.loadImage(product.lastImagePath)
+      if (dataUrl) {
+        mainViewUrl.value = dataUrl
+        mainViewState.value = 'image'
+        clearResults()
+      } else {
+        showToast('无法加载图片', 'error')
+      }
+    } catch (err) {
+      console.error('Failed to load image:', err)
+      showToast('加载图片失败', 'error')
+    }
+  }
+}
+
 const handleProductDoubleClick = (product: any) => {
   if (!product.lastImagePath) {
     showToast('该项目尚未绑定图片，请先拍摄或导入图片', 'error')
@@ -591,7 +611,6 @@ const takeCapture = async () => {
         fileName,
         dataUrl
       })
-      console.log('Image saved to:', filePath)
       mainViewUrl.value = dataUrl
       mainViewState.value = 'image'
       
@@ -755,6 +774,38 @@ const triggerInferenceFileInput = () => {
   inferenceFileInput.value?.click()
 }
 
+const startInference = async () => {
+  await fetchInferenceServices()
+  
+  if (inferenceServices.value.length === 0) {
+    showToast('当前没有可用的推理服务，请先在部署页面启动服务', 'error')
+    return
+  }
+  
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*'
+  input.onchange = async (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(file)
+    })
+    
+    mainViewUrl.value = dataUrl
+    mainViewState.value = 'image'
+    
+    selectedInferenceService.value = inferenceServices.value[0]?.service_id || ''
+    await nextTick()
+    await runInference()
+  }
+  input.click()
+}
+
 const runInference = async () => {
   const imageToUse = inferenceImageUrl.value || mainViewUrl.value
   if (!selectedInferenceService.value || !imageToUse) {
@@ -766,13 +817,16 @@ const runInference = async () => {
   clearResults()
 
   try {
+    const formData = new FormData()
+    formData.append('service_id', selectedInferenceService.value)
+    
+    const response = await fetch(imageToUse)
+    const blob = await response.blob()
+    formData.append('file', blob, 'image.jpg')
+    
     const res = await fetch('/api/deploy/inference', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image: imageToUse,
-        service_id: selectedInferenceService.value
-      })
+      body: formData
     })
 
     const data = await res.json()
@@ -780,8 +834,27 @@ const runInference = async () => {
     if (data.status === 'success' && data.result) {
       const result = data.result
       
+      // 处理 /predict_roi 返回格式 - results 是数组
+      if (result.results && Array.isArray(result.results)) {
+        const roiResults = result.results
+        detectionResults.value = roiResults.map((r: any) => ({
+          label: r.category || '未知',
+          score: (r.anomaly_score || 0) * 100,
+          bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
+          isAnomaly: r.is_anomaly || false,
+          error: r.error || 0,
+          threshold: r.threshold || 0,
+          alignmentStrategy: r.alignment_strategy || 'ORB'
+        }))
+        const anomalyCount = roiResults.filter((r: any) => r.is_anomaly).length
+        if (detectionResults.value.length > 0) {
+          const maxScore = Math.max(...detectionResults.value.map(r => r.score))
+          predictionConfidence.value = maxScore
+        }
+        showToast(`检测到 ${detectionResults.value.length} 个目标，异常: ${anomalyCount} 个`, 'info')
+      }
       // 处理目标检测结果（包含bbox）
-      if (result.detections && Array.isArray(result.detections)) {
+      else if (result.detections && Array.isArray(result.detections)) {
         detectionResults.value = result.detections.map((d: any) => ({
           label: d.label || d.class || '未知',
           score: (d.score || d.confidence || d.probability || 0) * 100,
@@ -862,7 +935,12 @@ const drawDetectionBoxes = () => {
   // 绘制每个检测框
   detectionResults.value.forEach((det, index) => {
     const [x, y, w, h] = det.bbox
-    const color = `hsl(${(index * 60) % 360}, 70%, 50%)`
+    let color = `hsl(${(index * 60) % 360}, 70%, 50%)`
+    if (det.isAnomaly === true) {
+      color = 'hsl(0, 70%, 50%)'
+    } else if (det.isAnomaly === false) {
+      color = 'hsl(120, 70%, 50%)'
+    }
 
     // 绘制矩形框
     ctx.strokeStyle = color
@@ -870,7 +948,7 @@ const drawDetectionBoxes = () => {
     ctx.strokeRect(x, y, w, h)
 
     // 绘制标签背景
-    const label = `${det.label} ${det.score.toFixed(1)}%`
+    const label = `${det.label} ${det.score.toFixed(1)}%${det.isAnomaly !== undefined ? (det.isAnomaly ? ' 异常' : ' 正常') : ''}`
     ctx.font = 'bold 16px sans-serif'
     const textMetrics = ctx.measureText(label)
     const textWidth = textMetrics.width
@@ -912,8 +990,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex flex-col h-screen bg-background text-foreground overflow-hidden">
-    <header class="h-14 border-b flex items-center px-6 bg-card shrink-0 z-20 shadow-sm">
+  <div class="flex flex-col h-screen w-screen bg-background text-foreground">
+    <header class="h-14 border-b flex items-center px-6 bg-card shrink-0 z-20 shadow-sm w-full">
       <div class="flex items-center gap-2">
         <div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-primary-foreground">
           <Settings2 class="h-5 w-5" />
@@ -922,38 +1000,16 @@ onBeforeUnmount(() => {
       </div>
       
       <div class="ml-auto flex items-center gap-3">
-        <UiButton 
-          variant="ghost" 
-          size="icon" 
-          @click="togglePin"
-          :title="isPinned ? t('common.unpin') : t('common.pin')"
-          :class="{ 'text-primary bg-primary/10': isPinned }"
-        >
-          <component :is="isPinned ? PinOff : Pin" class="h-4 w-4" />
-        </UiButton>
-        
         <NuxtLink to="/settings">
           <UiButton variant="ghost" size="icon" :title="t('common.settings')">
             <Settings class="h-4 w-4" />
           </UiButton>
         </NuxtLink>
-        
-        <Separator orientation="vertical" class="h-6 mx-1" />
-        
-        <NuxtLink 
-          v-if="selectedProductId"
-          :to="{ path: '/annotation', query: { productId: selectedProductId } }"
-        >
-          <UiButton variant="default" size="sm" class="h-8">
-            {{ t('common.dataAnnotation') }}
-          </UiButton>
-        </NuxtLink>
       </div>
     </header>
 
-    <div class="flex-1 grid grid-cols-3 overflow-hidden">
-      <!-- Main Content Area (Left) -->
-      <main class="col-span-2 min-w-0 min-h-0 bg-muted/20 relative overflow-hidden flex flex-col">
+    <div class="flex-1 grid grid-cols-3 overflow-hidden w-full min-w-0">
+      <main class="col-span-2 bg-muted/20 relative  flex flex-col h-full">
         <div v-if="mainViewState === 'empty'" class="flex-1 p-8 flex items-center justify-center">
           <div class="text-center space-y-4 max-w-md">
             <div class="w-20 h-20 bg-muted rounded-full flex items-center justify-center mx-auto opacity-50">
@@ -1094,8 +1150,7 @@ onBeforeUnmount(() => {
         </div>
       </main>
 
-      <!-- Sidebar (Right) -->
-      <aside class="col-span-1 border-l bg-card flex flex-col min-w-0 overflow-hidden">
+      <aside class="col-span-1 bg-card flex flex-col h-full">
         <Tabs v-model="activeTab" class="flex flex-col h-full">
           <!-- Tabs Header -->
           <div class="border-b bg-muted/30 shrink-0">
@@ -1119,229 +1174,244 @@ onBeforeUnmount(() => {
 
           <!-- Dynamic Settings Area -->
           <section class="flex-[2] border-b flex flex-col min-h-0 overflow-hidden">
-            <TabsContent value="image" class="flex-1 overflow-auto p-4 space-y-5">
-            <!-- Exposure & Gain -->
-            <div class="space-y-4">
-              <div class="space-y-2">
-                <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
-                  <span>{{ t('dashboard.exposure') }}</span>
-                  <div class="flex items-center gap-0.5 text-primary">
-                    <Input
-                      type="number"
-                      :model-value="String(exposureValue)"
-                      min="0"
-                      max="200"
-                      class="h-7 w-16 px-2 py-1 text-xs text-right font-mono"
-                      @update:modelValue="handleExposureInput"
-                    />
-                    <span class="font-mono lowercase">ms</span>
+              <TabsContent value="image" class="flex-1 overflow-auto p-4 space-y-5">
+              <!-- Exposure & Gain -->
+              <div class="space-y-4">
+                <div class="space-y-2">
+                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
+                    <span>{{ t('dashboard.exposure') }}</span>
+                    <div class="flex items-center gap-0.5 text-primary">
+                      <Input
+                        type="number"
+                        :model-value="String(exposureValue)"
+                        min="0"
+                        max="200"
+                        class="h-7 w-16 px-2 py-1 text-xs text-right font-mono"
+                        @update:modelValue="handleExposureInput"
+                      />
+                      <span class="font-mono lowercase">ms</span>
+                    </div>
                   </div>
+                  <Slider v-model="exposureSliderValue" :max="200" :step="1" />
                 </div>
-                <Slider v-model="exposureSliderValue" :max="200" :step="1" />
-              </div>
-              <div class="space-y-2">
-                <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
-                  <span>{{ t('dashboard.gain') }}</span>
-                  <div class="flex items-center gap-0.5 text-primary">
-                    <Input
-                      type="number"
-                      :model-value="String(gainValue)"
-                      step="0.1"
-                      min="0"
-                      max="4"
-                      class="h-7 w-16 px-2 py-1 text-xs text-right font-mono"
-                      @update:modelValue="handleGainInput"
-                    />
-                    <span class="font-mono lowercase">x</span>
+                <div class="space-y-2">
+                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
+                    <span>{{ t('dashboard.gain') }}</span>
+                    <div class="flex items-center gap-0.5 text-primary">
+                      <Input
+                        type="number"
+                        :model-value="String(gainValue)"
+                        step="0.1"
+                        min="0"
+                        max="4"
+                        class="h-7 w-16 px-2 py-1 text-xs text-right font-mono"
+                        @update:modelValue="handleGainInput"
+                      />
+                      <span class="font-mono lowercase">x</span>
+                    </div>
                   </div>
-                </div>
-                <Slider v-model="gainSliderValue" :max="4" :step="0.1" />
-              </div>
-            </div>
-
-            <!-- Image Actions Grid -->
-            <div class="grid grid-cols-2 gap-2 pt-2">
-              <UiButton 
-                variant="outline" 
-                size="sm" 
-                class="h-14 flex flex-col gap-1 text-[10px] font-bold"
-                :class="{ 'bg-primary/10 border-primary text-primary': mainViewState === 'live' }"
-                @click="startLive"
-              >
-                <Video class="h-4 w-4" :class="mainViewState === 'live' ? 'text-primary' : 'text-primary'" />
-                {{ t('dashboard.live') }}
-              </UiButton>
-              <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold" @click="takeCapture">
-                <CameraIcon class="h-4 w-4 text-primary" />
-                {{ t('dashboard.capture') }}
-              </UiButton>
-              <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2" @click="importImage">
-                <Upload class="h-4 w-4 text-primary" />
-                {{ t('dashboard.import') }}
-              </UiButton>
-              <UiButton variant="default" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2 bg-primary/90 hover:bg-primary" @click="openInferenceModal">
-                <Wand2 class="h-4 w-4" />
-                {{ t('dashboard.inference') }}
-              </UiButton>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="camera" class="flex-1 overflow-auto p-4 space-y-4">
-            <!-- Camera List -->
-            <div v-for="cam in cameras" :key="cam.id" class="p-3 rounded-lg border bg-muted/10 space-y-3 relative group">
-              <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                  <div :class="['w-2 h-2 rounded-full', cam.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500']"></div>
-                  <span class="text-xs font-bold">{{ cam.name }}</span>
-                </div>
-                <div class="flex items-center gap-1">
-                  <UiButton variant="ghost" size="icon" class="h-6 w-6" @click="toggleCameraEnabled(cam)">
-                    <component :is="cam.isEnabled ? Power : PowerOff" :class="['h-3 w-3', cam.isEnabled ? 'text-green-600' : 'text-red-500']" />
-                  </UiButton>
-                  <UiButton variant="ghost" size="icon" class="h-6 w-6 text-destructive hover:bg-destructive/10" @click="handleRemoveCamera(cam.id)">
-                    <Trash2 class="h-3 w-3" />
-                  </UiButton>
+                  <Slider v-model="gainSliderValue" :max="4" :step="0.1" />
                 </div>
               </div>
-              <div class="grid grid-cols-2 gap-y-2 text-[10px]">
-                <div class="text-muted-foreground uppercase font-bold tracking-tight">{{ t('dashboard.cameraStatus') }}</div>
-                <div class="text-right font-mono">{{ cam.status }}</div>
-                <div class="text-muted-foreground uppercase font-bold tracking-tight">IP</div>
-                <div class="text-right font-mono">{{ cam.ip }}</div>
-              </div>
-            </div>
 
-            <UiButton variant="outline" class="w-full h-10 border-dashed gap-2 text-xs font-bold" @click="handleAddCamera">
-              <Plus class="h-3.5 w-3.5" />
-              {{ t('dashboard.add') }}
-            </UiButton>
-          </TabsContent>
-        </section>
-
-        <!-- Product List -->
-        <section class="flex-1 border-b flex flex-col min-h-0 overflow-hidden">
-          <div class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0">
-            <div class="flex items-center gap-2">
-              <List class="h-4 w-4 text-primary" />
-              <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.productList') }}</span>
-            </div>
-            <UiButton variant="ghost" size="icon" class="h-6 w-6 text-primary hover:bg-primary/10" @click="openProductModal">
-              <Plus class="h-3.5 w-3.5" />
-            </UiButton>
-          </div>
-          <div class="flex-1 overflow-auto p-2">
-            <div class="space-y-1">
-              <div 
-                v-for="product in products" 
-                :key="product.id" 
-                class="group p-2 text-xs rounded cursor-pointer flex items-center gap-3 transition-all border border-transparent"
-                :class="selectedProductId === product.id ? 'bg-primary/10 border-primary/20 shadow-sm' : 'hover:bg-muted'"
-                @click="handleSelectProduct(product.id)"
-                @dblclick="handleProductDoubleClick(product)"
-              >
-                <div 
-                  class="w-8 h-8 rounded shrink-0 flex items-center justify-center font-bold text-[10px] transition-colors"
-                  :class="selectedProductId === product.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground/40'"
+              <!-- Image Actions Grid -->
+              <div class="grid grid-cols-2 gap-2 pt-2">
+                <UiButton 
+                  variant="outline" 
+                  size="sm" 
+                  class="h-14 flex flex-col gap-1 text-[10px] font-bold"
+                  :class="{ 'bg-primary/10 border-primary text-primary': mainViewState === 'live' }"
+                  @click="startLive"
                 >
-                  #{{ product.id }}
+                  <Video class="h-4 w-4" :class="mainViewState === 'live' ? 'text-primary' : 'text-primary'" />
+                  {{ t('dashboard.live') }}
+                </UiButton>
+                <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold" @click="takeCapture">
+                  <CameraIcon class="h-4 w-4 text-primary" />
+                  {{ t('dashboard.capture') }}
+                </UiButton>
+                <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2" @click="importImage">
+                  <Upload class="h-4 w-4 text-primary" />
+                  {{ t('dashboard.import') }}
+                </UiButton>
+                <UiButton variant="default" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2 bg-primary/90 hover:bg-primary" @click="startInference">
+                  <Wand2 class="h-4 w-4" />
+                  {{ t('dashboard.inference') }}
+                </UiButton>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="camera" class="flex-1 overflow-auto p-4 space-y-4">
+              <!-- Camera List -->
+              <div v-for="cam in cameras" :key="cam.id" class="p-3 rounded-lg border bg-muted/10 space-y-3 relative group">
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <div :class="['w-2 h-2 rounded-full', cam.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500']"></div>
+                    <span class="text-xs font-bold">{{ cam.name }}</span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <UiButton variant="ghost" size="icon" class="h-6 w-6" @click="toggleCameraEnabled(cam)">
+                      <component :is="cam.isEnabled ? Power : PowerOff" :class="['h-3 w-3', cam.isEnabled ? 'text-green-600' : 'text-red-500']" />
+                    </UiButton>
+                    <UiButton variant="ghost" size="icon" class="h-6 w-6 text-destructive hover:bg-destructive/10" @click="handleRemoveCamera(cam.id)">
+                      <Trash2 class="h-3 w-3" />
+                    </UiButton>
+                  </div>
                 </div>
-                <div class="flex-1 min-w-0">
-                  <div class="font-bold truncate" :class="{ 'text-primary': selectedProductId === product.id }">{{ product.name }}</div>
-                  <div class="text-[10px] text-muted-foreground truncate">{{ product.model }}</div>
+                <div class="grid grid-cols-2 gap-y-2 text-[10px]">
+                  <div class="text-muted-foreground uppercase font-bold tracking-tight">{{ t('dashboard.cameraStatus') }}</div>
+                  <div class="text-right font-mono">{{ cam.status }}</div>
+                  <div class="text-muted-foreground uppercase font-bold tracking-tight">IP</div>
+                  <div class="text-right font-mono">{{ cam.ip }}</div>
                 </div>
-                <div class="flex items-center gap-1">
-                  <div v-if="selectedProductId === product.id" class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse mr-1"></div>
-                  <UiButton 
-                    variant="ghost" 
-                    size="icon" 
-                    class="h-6 w-6 text-primary hover:bg-primary/10"
-                    @click.stop="handleEditProduct(product)"
+              </div>
+
+              <UiButton variant="outline" class="w-full h-10 border-dashed gap-2 text-xs font-bold" @click="handleAddCamera">
+                <Plus class="h-3.5 w-3.5" />
+                {{ t('dashboard.add') }}
+              </UiButton>
+            </TabsContent>
+          </section>
+
+          <!-- Product List -->
+          <section class="flex-1 border-b flex flex-col min-h-0">
+            <div class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0">
+              <div class="flex items-center gap-2">
+                <List class="h-4 w-4 text-primary" />
+                <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.productList') }}</span>
+              </div>
+              <UiButton variant="ghost" size="icon" class="h-6 w-6 text-primary hover:bg-primary/10" @click="openProductModal">
+                <Plus class="h-3.5 w-3.5" />
+              </UiButton>
+            </div>
+            <div class="flex-1 overflow-y-auto p-2">
+              <div class="space-y-1">
+                <div 
+                  v-for="product in products" 
+                  :key="product.id" 
+                  class="group p-2 text-xs rounded cursor-pointer flex items-center gap-3 transition-all border border-transparent"
+                  :class="selectedProductId === product.id ? 'bg-primary/10 border-primary/20 shadow-sm' : 'hover:bg-muted'"
+                  @click="handleSelectProduct(product.id)"
+                  @dblclick="handleProductDoubleClick(product)"
+                >
+                  <div 
+                    class="w-8 h-8 rounded shrink-0 flex items-center justify-center font-bold text-[10px] transition-colors"
+                    :class="selectedProductId === product.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground/40'"
                   >
-                    <Pencil class="h-3 w-3" />
-                  </UiButton>
-                  <UiButton 
-                    variant="ghost" 
-                    size="icon" 
-                    class="h-6 w-6 text-destructive hover:bg-destructive/10"
-                    @click.stop="openDeleteModal(product)"
-                  >
-                    <Trash2 class="h-3 w-3" />
-                  </UiButton>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Prediction Results -->
-        <section class="flex-[1.5] flex flex-col min-h-0 overflow-hidden">
-          <div class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0">
-            <div class="flex items-center gap-2">
-              <BarChart3 class="h-4 w-4 text-primary" />
-              <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.predictionResults') }}</span>
-            </div>
-            <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click="clearResults">
-              <RotateCcw class="h-3 w-3" />
-              {{ t('dashboard.clear') }}
-            </UiButton>
-          </div>
-          <div class="flex-1 overflow-auto p-4">
-            <!-- 目标检测结果 -->
-            <div v-if="detectionResults.length > 0" class="space-y-4">
-              <div class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
-                <div>
-                  <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">目标检测</div>
-                  <div class="text-2xl font-bold tracking-tighter">{{ detectionResults.length }} 个目标</div>
-                </div>
-                <div class="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin-slow"></div>
-              </div>
-
-              <div class="space-y-3">
-                <div v-for="(item, index) in detectionResults" :key="index" class="space-y-1.5">
-                  <div class="flex justify-between text-[10px] font-bold">
-                    <span class="text-muted-foreground uppercase tracking-tight">{{ item.label }}</span>
-                    <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
+                    #{{ product.id }}
                   </div>
-                  <Progress :model-value="item.score" class="h-1.5" />
-                  <div class="text-[9px] text-muted-foreground/60">
-                    位置: [{{ item.bbox.map(v => Math.round(v)).join(', ') }}]
+                  <div class="flex-1 min-w-0">
+                    <div class="font-bold truncate" :class="{ 'text-primary': selectedProductId === product.id }">{{ product.name }}</div>
+                    <div class="text-[10px] text-muted-foreground truncate">{{ product.model }}</div>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <div v-if="selectedProductId === product.id" class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse mr-1"></div>
+                    <UiButton 
+                      variant="ghost" 
+                      size="icon" 
+                      class="h-6 w-6 text-primary hover:bg-primary/10"
+                      @click.stop="viewProductImage(product)"
+                      :title="'查看图片'"
+                    >
+                      <Eye class="h-3 w-3" />
+                    </UiButton>
+                    <UiButton 
+                      variant="ghost" 
+                      size="icon" 
+                      class="h-6 w-6 text-primary hover:bg-primary/10"
+                      @click.stop="handleEditProduct(product)"
+                    >
+                      <Pencil class="h-3 w-3" />
+                    </UiButton>
+                    <UiButton 
+                      variant="ghost" 
+                      size="icon" 
+                      class="h-6 w-6 text-destructive hover:bg-destructive/10"
+                      @click.stop="openDeleteModal(product)"
+                    >
+                      <Trash2 class="h-3 w-3" />
+                    </UiButton>
                   </div>
                 </div>
               </div>
             </div>
+          </section>
 
-            <!-- 分类结果 -->
-            <div v-else-if="predictionResults.length > 0" class="space-y-4">
-              <div v-if="predictionConfidence !== null" class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
-                <div>
-                  <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">置信度评分</div>
-                  <div class="text-2xl font-bold tracking-tighter">{{ predictionConfidence.toFixed(1) }}%</div>
-                </div>
-                <div class="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin-slow"></div>
+          <!-- Prediction Results -->
+          <section class="flex-[1.5] flex flex-col min-h-0">
+            <div class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0">
+              <div class="flex items-center gap-2">
+                <BarChart3 class="h-4 w-4 text-primary" />
+                <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.predictionResults') }}</span>
               </div>
-
-              <div class="space-y-3">
-                <div v-for="item in predictionResults" :key="item.label" class="space-y-1.5">
-                  <div class="flex justify-between text-[10px] font-bold">
-                    <span class="text-muted-foreground uppercase tracking-tight">{{ item.label }}</span>
-                    <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
+              <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click="clearResults">
+                <RotateCcw class="h-3 w-3" />
+                {{ t('dashboard.clear') }}
+              </UiButton>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4">
+              <!-- 目标检测结果 -->
+              <div v-if="detectionResults.length > 0" class="space-y-4">
+                <div class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
+                  <div>
+                    <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">目标检测</div>
+                    <div class="text-2xl font-bold tracking-tighter">{{ detectionResults.length }} 个目标</div>
                   </div>
-                  <Progress :model-value="item.score" class="h-1.5" />
+                  <div class="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin-slow"></div>
+                </div>
+
+                <div class="space-y-3">
+                  <div v-for="(item, index) in detectionResults" :key="index" class="space-y-1.5">
+                    <div class="flex justify-between text-[10px] font-bold">
+                      <span class="text-muted-foreground uppercase tracking-tight">
+                        {{ item.label }}
+                        <span v-if="item.isAnomaly !== undefined" :class="item.isAnomaly ? 'text-red-500' : 'text-green-500'">
+                          ({{ item.isAnomaly ? '异常' : '正常' }})
+                        </span>
+                      </span>
+                      <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
+                    </div>
+                    <Progress :model-value="item.score" class="h-1.5" />
+                    <div class="text-[9px] text-muted-foreground/60">
+                      位置: [{{ item.bbox.map(v => Math.round(v)).join(', ') }}]
+                      <span v-if="item.error"> | 误差: {{ item.error.toFixed(3) }}</span>
+                      <span v-if="item.alignmentStrategy"> | {{ item.alignmentStrategy }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div v-else class="h-full flex flex-col items-center justify-center text-muted-foreground/40 space-y-2 py-8">
-              <BarChart3 class="h-8 w-8" />
-              <p class="text-[10px] font-bold uppercase tracking-wider">暂无预测数据</p>
+              <!-- 分类结果 -->
+              <div v-else-if="predictionResults.length > 0" class="space-y-4">
+                <div v-if="predictionConfidence !== null" class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
+                  <div>
+                    <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">置信度评分</div>
+                    <div class="text-2xl font-bold tracking-tighter">{{ predictionConfidence.toFixed(1) }}%</div>
+                  </div>
+                  <div class="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin-slow"></div>
+                </div>
+
+                <div class="space-y-3">
+                  <div v-for="item in predictionResults" :key="item.label" class="space-y-1.5">
+                    <div class="flex justify-between text-[10px] font-bold">
+                      <span class="text-muted-foreground uppercase tracking-tight">{{ item.label }}</span>
+                      <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
+                    </div>
+                    <Progress :model-value="item.score" class="h-1.5" />
+                  </div>
+                </div>
+              </div>
+
+              <div v-else class="h-full flex flex-col items-center justify-center text-muted-foreground/40 space-y-2 py-8">
+                <BarChart3 class="h-8 w-8" />
+                <p class="text-[10px] font-bold uppercase tracking-wider">暂无预测数据</p>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
         </Tabs>
       </aside>
     </div>
 
-    <!-- Product Modal -->
     <div v-if="showProductModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
         <UiCardHeader class="space-y-2">
@@ -1367,7 +1437,6 @@ onBeforeUnmount(() => {
       </UiCard>
     </div>
 
-    <!-- Delete Confirmation Modal -->
     <div v-if="showDeleteModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200 border-destructive/20">
         <UiCardHeader class="space-y-2">
@@ -1388,7 +1457,6 @@ onBeforeUnmount(() => {
 
     <input ref="importFileInput" type="file" accept="image/*" class="hidden" @change="handleImportFileChange" />
 
-    <!-- Inference Modal -->
     <div v-if="showInferenceModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <UiCard class="w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
         <UiCardHeader class="space-y-2">

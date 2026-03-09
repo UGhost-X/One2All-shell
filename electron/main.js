@@ -55,8 +55,71 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
+
+  let defaultDataPath = path.join(app.getPath('documents'), 'One2All', 'Data');
+
+  async function loadSettingsFromDb() {
+    try {
+      let settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
+      if (!settings) {
+        settings = await prisma.appSettings.create({
+          data: {
+            id: 1,
+            dataPath: defaultDataPath,
+            locale: 'zh',
+            backendMode: 'local',
+            backendIp: 'localhost',
+            backendUrl: 'http://localhost:8000',
+            backendPort: '8000'
+          }
+        });
+      }
+      return {
+        dataPath: settings.dataPath,
+        locale: settings.locale,
+        backendMode: settings.backendMode,
+        backendIp: settings.backendIp,
+        backendUrl: settings.backendUrl,
+        backendPort: settings.backendPort
+      };
+    } catch (err) {
+      console.error('Failed to load settings from database:', err);
+      return {
+        dataPath: defaultDataPath,
+        locale: 'zh',
+        backendMode: 'local',
+        backendIp: 'localhost',
+        backendUrl: 'http://localhost:8000',
+        backendPort: '8000'
+      };
+    }
+  }
+
+  let appSettings = await loadSettingsFromDb();
+
+  ipcMain.handle('settings:get', () => appSettings);
+  ipcMain.handle('settings:save', async (event, newSettings) => {
+    try {
+      const updated = await prisma.appSettings.update({
+        where: { id: 1 },
+        data: newSettings
+      });
+      appSettings = {
+        dataPath: updated.dataPath,
+        locale: updated.locale,
+        backendMode: updated.backendMode,
+        backendIp: updated.backendIp,
+        backendUrl: updated.backendUrl,
+        backendPort: updated.backendPort
+      };
+      return true;
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+      return false;
+    }
+  });
 
   // IPC 处理器
   ipcMain.handle('toggle-always-on-top', () => {
@@ -211,27 +274,6 @@ app.whenReady().then(() => {
       }
     }
     return null;
-  });
-
-  // 存储路径管理
-  let appSettings = {
-    dataPath: path.join(app.getPath('documents'), 'One2All', 'Data')
-  };
-
-  const settingsPath = path.join(app.getPath('userData'), 'settings.json');
-  try {
-    if (fs.existsSync(settingsPath)) {
-      appSettings = { ...appSettings, ...JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) };
-    }
-  } catch (err) {
-    console.error('Failed to load settings:', err);
-  }
-
-  ipcMain.handle('settings:get', () => appSettings);
-  ipcMain.handle('settings:save', (event, newSettings) => {
-    appSettings = { ...appSettings, ...newSettings };
-    fs.writeFileSync(settingsPath, JSON.stringify(appSettings), 'utf-8');
-    return true;
   });
 
   ipcMain.handle('dialog:select-directory', async () => {
@@ -467,7 +509,6 @@ app.whenReady().then(() => {
               realCandidatePath = fs.realpathSync.native(candidatePath);
             } catch {}
 
-            console.log('Deleting physical data at:', realCandidatePath);
 
             let lastErr = null;
             for (let attempt = 0; attempt < 8; attempt++) {
@@ -634,6 +675,19 @@ app.whenReady().then(() => {
       return record;
     } catch (err) {
       console.error('Failed to get training record:', err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('db:get-training-records-by-task-uuid', async (event, taskUuid) => {
+    try {
+      const records = await prisma.trainingRecord.findMany({
+        where: { taskUuid },
+        orderBy: { createdAt: 'desc' }
+      });
+      return records;
+    } catch (err) {
+      console.error('Failed to get training records by taskUuid:', err);
       throw err;
     }
   });

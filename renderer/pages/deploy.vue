@@ -3,7 +3,8 @@ import { computed, ref, onMounted, onUnmounted, inject, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { Play, Square, Trash2, RefreshCw, Server, Box, Loader2, Zap, FolderOpen, CheckCircle, XCircle, Clock, ImageIcon, BarChart3 } from 'lucide-vue-next'
+import { Play, Square, Trash2, RefreshCw, Server, Box, Loader2, Zap, FolderOpen, CheckCircle, XCircle, Clock, ImageIcon, BarChart3, FileText, X } from 'lucide-vue-next'
+import Switch from '@/components/ui/switch/Switch.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
 import UiButton from '@/components/ui/button/Button.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
@@ -38,6 +39,8 @@ const loadSettings = async () => {
     if (settings?.backendMode === 'remote' && settings?.backendUrl) {
       const url = new URL(settings.backendUrl)
       apiBase.value = url.hostname
+    } else if (settings?.backendIp) {
+      apiBase.value = settings.backendIp
     } else {
       apiBase.value = 'localhost'
     }
@@ -77,8 +80,8 @@ interface DeployService {
   health?: ServiceHealth
 }
 
-const selectedDevice = ref<'GPU' | 'CPU'>('GPU')
-const deviceOpen = ref(false)
+const selectedDevice = ref<Record<string, 'GPU' | 'CPU'>>({})
+const deviceOpen = ref<Record<string, boolean>>({})
 
 const deployableModels = ref<DeployableModel[]>([])
 const services = ref<DeployService[]>([])
@@ -101,6 +104,133 @@ const inferenceResult = ref<any>(null)
 const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }>>([])
 const classificationResults = ref<Array<{ label: string; score: number }>>([])
 const inferenceServiceOpen = ref(false)
+
+// 日志查看相关
+const showLogModal = ref(false)
+const logServiceId = ref('')
+const logContent = ref('')
+const isLoadingLogs = ref(false)
+const logLines = ref('100')
+
+// 服务日志展示相关
+const serviceLogs = ref<Record<string, { content: string; loading: boolean; nextLine: number }>>({})
+const isLoadingAllLogs = ref(false)
+const autoRefreshLogs = ref(true)
+const logsRefreshInterval = ref<number | null>(null)
+const activeLogPolling = ref<string[]>([])
+
+const loadServiceLog = async (serviceId: string, incremental = false) => {
+  if (!serviceId) return
+  const current = serviceLogs.value[serviceId]
+  const currentContent = current?.content || ''
+
+  const fromLine = incremental ? (current?.nextLine || 0) : -1
+
+  if (!incremental) {
+    serviceLogs.value[serviceId] = { content: currentContent, loading: true, nextLine: fromLine }
+  }
+
+  try {
+    const res = await fetch(`/api/deploy/http/service/${serviceId}/logs?lines=${logLines.value}&from_line=${fromLine}`)
+    if (res.ok) {
+      const data = await res.json()
+      const newLogs = data.logs || ''
+      const nextLine = data.next_line || 0
+
+      if (incremental) {
+        if (newLogs) {
+          const separator = currentContent && !currentContent.endsWith('\n') ? '\n' : ''
+          serviceLogs.value[serviceId] = {
+            content: currentContent + separator + newLogs,
+            loading: false,
+            nextLine: nextLine
+          }
+        } else {
+          serviceLogs.value[serviceId] = {
+            content: currentContent,
+            loading: false,
+            nextLine: nextLine
+          }
+        }
+      } else {
+        serviceLogs.value[serviceId] = {
+          content: newLogs,
+          loading: false,
+          nextLine: nextLine
+        }
+      }
+    } else {
+      if (!incremental) {
+        serviceLogs.value[serviceId] = { content: t('deploy.loadLogsFailed'), loading: false, nextLine: 0 }
+      }
+    }
+  } catch (err: any) {
+    console.error('Failed to load service logs:', err)
+    if (!incremental) {
+      serviceLogs.value[serviceId] = { content: t('deploy.loadLogsFailed'), loading: false, nextLine: 0 }
+    }
+  }
+}
+
+const loadAllServiceLogs = async (incremental = false) => {
+  if (services.value.length === 0) return
+  isLoadingAllLogs.value = true
+  await Promise.all(services.value.map(s => loadServiceLog(s.service_id, incremental)))
+  isLoadingAllLogs.value = false
+}
+
+const refreshAllLogs = () => {
+  loadAllServiceLogs(false)
+}
+
+const startLogsAutoRefresh = () => {
+  if (logsRefreshInterval.value) return
+  logsRefreshInterval.value = window.setInterval(() => {
+    if (activeLogPolling.value.length === 0) {
+      stopLogsAutoRefresh()
+      return
+    }
+    const activeServices = [...activeLogPolling.value]
+    activeServices.forEach(serviceId => {
+      const service = services.value.find(s => s.service_id === serviceId)
+      if (service && service.status !== 'stopped') {
+        loadServiceLog(serviceId, true)
+      } else {
+        removeServiceLogPolling(serviceId)
+      }
+    })
+  }, 3000)
+}
+const addServiceLogPolling = (serviceId: string) => {
+  if (!activeLogPolling.value.includes(serviceId)) {
+    activeLogPolling.value.push(serviceId)
+  }
+  if (autoRefreshLogs.value) {
+    startLogsAutoRefresh()
+  }
+}
+
+const removeServiceLogPolling = (serviceId: string) => {
+  const index = activeLogPolling.value.indexOf(serviceId)
+  if (index > -1) {
+    activeLogPolling.value.splice(index, 1)
+  }
+}
+
+const stopLogsAutoRefresh = () => {
+  if (logsRefreshInterval.value) {
+    clearInterval(logsRefreshInterval.value)
+    logsRefreshInterval.value = null
+  }
+}
+
+watch(autoRefreshLogs, (enabled) => {
+  if (enabled) {
+    startLogsAutoRefresh()
+  } else {
+    stopLogsAutoRefresh()
+  }
+})
 
 // 在图片上绘制检测框
 const drawDetectionBoxes = (imageUrl: string, detections: Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }>) => {
@@ -125,7 +255,7 @@ const drawDetectionBoxes = (imageUrl: string, detections: Array<{ label: string;
         ctx.lineWidth = Math.max(2, img.width / 200)
         ctx.strokeRect(x, y, width, height)
 
-        const anomalyText = det.isAnomaly ? '[异常] ' : ''
+        const anomalyText = det.isAnomaly ? `[${t('deploy.anomaly')}] ` : ''
         const labelText = `${anomalyText}${det.label} ${(det.score).toFixed(1)}%`
         ctx.font = `bold ${Math.max(12, img.width / 50)}px sans-serif`
         const textMetrics = ctx.measureText(labelText)
@@ -176,24 +306,32 @@ const onProductChange = (id: string) => {
 }
 
 const loadDeployableModels = async () => {
-  console.log('[Deploy] loadDeployableModels called, productId:', productId.value)
   if (!productId.value) {
-    console.log('[Deploy] No productId, skipping')
     deployableModels.value = []
     return
   }
   isLoadingModels.value = true
   try {
     const url = `/api/deploy/models/${productId.value}`
-    console.log('[Deploy] Fetching:', url)
     const res = await fetch(url)
-    console.log('[Deploy] Response status:', res.status)
     const data = await res.json()
-    console.log('[Deploy] Response data:', data)
-    deployableModels.value = data.models || []
+    const models = data.models || []
+    
+    for (const model of models) {
+      try {
+        const records = await window.electronAPI.getTrainingRecordsByTaskUuid(model.task_uuid)
+        if (records && records.length > 0) {
+          model.created_at = records[0].createdAt
+        }
+      } catch (e) {
+        console.warn('[Deploy] Failed to get training record for', model.task_uuid, e)
+      }
+    }
+    
+    deployableModels.value = models
   } catch (err) {
     console.error('Failed to load deployable models:', err)
-    toast?.error('加载可部署模型失败')
+    toast?.error(t('deploy.messages.loadModelsFailed'))
   } finally {
     isLoadingModels.value = false
   }
@@ -208,7 +346,27 @@ const loadServices = async () => {
   try {
     const res = await fetch(`/api/deploy/http/services?project_id=${productId.value}&include_health=true`)
     const data = await res.json()
+    const previousServiceIds = new Set(services.value.map(s => s.service_id))
     services.value = data.services || []
+    const currentServiceIds = new Set(services.value.map(s => s.service_id))
+
+    const pollingList = activeLogPolling.value.slice()
+    pollingList.forEach((id: string) => {
+      const service = services.value.find(s => s.service_id === id)
+      if (!service || service.status === 'stopped') {
+        removeServiceLogPolling(id)
+        delete serviceLogs.value[id]
+      }
+    })
+
+    await loadAllServiceLogs()
+
+    // 只将新出现的服务添加到日志轮询
+    services.value.forEach(s => {
+      if (!previousServiceIds.has(s.service_id)) {
+        addServiceLogPolling(s.service_id)
+      }
+    })
   } catch (err) {
     console.error('Failed to load services:', err)
   } finally {
@@ -227,20 +385,21 @@ const startService = async (taskUuid: string, labels?: string[]) => {
         project_id: String(productId.value),
         task_uuid: taskUuid,
         labels: labels,
-        device: selectedDevice.value
+        device: selectedDevice.value[taskUuid] || 'GPU'
       })
     })
     const data = await res.json()
 
     if (data.status === 'success') {
-      toast?.success(`服务启动成功，端口: ${data.port}`)
-      loadServices()
+      toast?.success(t('deploy.messages.startSuccess', { port: data.port }))
+      await loadServices()
+      startServicesPolling()
     } else {
-      toast?.error(data.message || '启动服务失败')
+      toast?.error(data.message || t('deploy.messages.startFailed'))
     }
   } catch (err: any) {
     console.error('Failed to start service:', err)
-    toast?.error(err.message || '启动服务失败')
+    toast?.error(err.message || t('deploy.messages.startFailed'))
   } finally {
     startingUuid.value = null
   }
@@ -249,26 +408,30 @@ const startService = async (taskUuid: string, labels?: string[]) => {
 const stopService = async (serviceId: string) => {
   stoppingId.value = serviceId
   try {
-    const res = await fetch(`/api/deploy/stop/${serviceId}`, {
-      method: 'POST'
-    })
+    const res = await fetch(`/api/deploy/stop/${serviceId}`, { method: 'POST' })
     const data = await res.json()
     if (data.success) {
-      toast?.success('服务已停止')
+      toast?.success(t('deploy.messages.stopSuccess'))
+      
+      const serviceIndex = services.value.findIndex(s => s.service_id === serviceId)
+      if (serviceIndex > -1) {
+        services.value[serviceIndex].status = 'stopped'
+      }
+      
+      removeServiceLogPolling(serviceId)
+      delete serviceLogs.value[serviceId]
+      
       await loadServices()
-      // 停止后检查是否还有需要轮询的服务
-      const hasServicesToCheck = services.value.some(s => 
+      
+      const hasServicesToCheck = services.value.some(s =>
         s.status !== 'running' && s.status !== 'stopped'
       )
-      if (!hasServicesToCheck) {
-        stopServicesPolling()
-      }
+      if (!hasServicesToCheck) stopServicesPolling()
     } else {
-      toast?.error(data.message || '停止服务失败')
+      toast?.error(data.message || t('deploy.messages.stopFailed'))
     }
   } catch (err) {
-    console.error('Failed to stop service:', err)
-    toast?.error('停止服务失败')
+    toast?.error(t('deploy.messages.stopFailed'))
   } finally {
     stoppingId.value = null
   }
@@ -282,21 +445,23 @@ const deleteService = async (serviceId: string) => {
     })
     const data = await res.json()
     if (data.status === 'success') {
-      toast?.success('服务已删除')
+      toast?.success(t('deploy.messages.deleteSuccess'))
       await loadServices()
+      removeServiceLogPolling(serviceId)
+      delete serviceLogs.value[serviceId]
       // 删除后检查是否还有需要轮询的服务
-      const hasServicesToCheck = services.value.some(s => 
+      const hasServicesToCheck = services.value.some(s =>
         s.status !== 'running' && s.status !== 'stopped'
       )
       if (!hasServicesToCheck) {
         stopServicesPolling()
       }
     } else {
-      toast?.error(data.message || '删除服务失败')
+      toast?.error(data.message || t('deploy.messages.deleteFailed'))
     }
   } catch (err) {
     console.error('Failed to delete service:', err)
-    toast?.error('删除服务失败')
+    toast?.error(t('deploy.messages.deleteFailed'))
   } finally {
     deletingId.value = null
   }
@@ -304,6 +469,45 @@ const deleteService = async (serviceId: string) => {
 
 const getServiceForUuid = (taskUuid: string) => {
   return services.value.find(s => s.task_uuid === taskUuid)
+}
+
+// 日志查看函数
+const openLogModal = (serviceId: string) => {
+  logServiceId.value = serviceId
+  logContent.value = ''
+  logLines.value = '100'
+  showLogModal.value = true
+  loadServiceLogs()
+}
+
+const closeLogModal = () => {
+  showLogModal.value = false
+  logServiceId.value = ''
+  logContent.value = ''
+}
+
+const loadServiceLogs = async () => {
+  if (!logServiceId.value) return
+  isLoadingLogs.value = true
+  try {
+    const res = await fetch(`/api/deploy/http/service/${logServiceId.value}/logs?lines=${logLines.value}`)
+    if (res.ok) {
+      const data = await res.json()
+      logContent.value = data.logs || ''
+    } else {
+      const error = await res.json().catch(() => ({}))
+      toast?.error(error.message || '获取日志失败')
+    }
+  } catch (err: any) {
+    console.error('Failed to load service logs:', err)
+    toast?.error(err.message || '获取日志失败')
+  } finally {
+    isLoadingLogs.value = false
+  }
+}
+
+const refreshLogs = () => {
+  loadServiceLogs()
 }
 
 // 推理测试函数
@@ -333,20 +537,18 @@ const handleInferenceFileChange = async (e: Event) => {
 
 const runInference = async () => {
   if (!selectedInferenceService.value || !inferenceImageUrl.value) {
-    toast?.error('请先选择服务并上传图片')
+    toast?.error(t('deploy.messages.selectServiceAndImage'))
     return
   }
 
   const selectedService = services.value.find(s => s.service_id === selectedInferenceService.value)
-  console.log('[Inference] Selected service:', selectedService)
-  console.log('[Inference] All services:', services.value)
-  if (!selectedService || !selectedService.http_url) {
-    toast?.error('服务信息不正确')
+
+  if (!selectedService || !selectedService.inference_url) {
+    toast?.error(t('deploy.messages.serviceInfoError'))
     return
   }
-
   if (selectedService.status === 'starting') {
-    toast?.error('服务正在启动中，请稍后再试')
+    toast?.error(t('deploy.messages.serviceStarting'))
     return
   }
 
@@ -366,8 +568,6 @@ const runInference = async () => {
     })
 
     const data = await res.json()
-    console.log('[Inference] Response:', data)
-    console.log('[Inference] Results:', data.result?.results)
 
     if (res.ok) {
       inferenceResult.value = data
@@ -375,9 +575,8 @@ const runInference = async () => {
       // 处理 /predict_roi 返回格式 - results 是数组，每个元素是一个标注框的检测结果
       if (data.result?.results && Array.isArray(data.result.results)) {
         const roiResults = data.result.results
-        console.log('[Inference] ROI results count:', roiResults.length)
         detectionResults.value = roiResults.map((r: any) => ({
-          label: r.category || '未知',
+          label: r.category || t('deploy.unknown'),
           score: (r.anomaly_score || 0) * 100,
           bbox: r.bbox || r.bbox_clipped || [0, 0, 0, 0],
           isAnomaly: r.is_anomaly || false,
@@ -386,7 +585,7 @@ const runInference = async () => {
           alignmentStrategy: r.alignment_strategy || 'ORB'
         }))
         const anomalyCount = roiResults.filter((r: any) => r.is_anomaly).length
-        toast?.success(`检测到 ${detectionResults.value.length} 个目标，异常 ${anomalyCount} 个`)
+        toast?.success(t('deploy.anomalyDetected', { count: detectionResults.value.length, anomaly: anomalyCount }))
         if (inferenceImageUrl.value && detectionResults.value.length > 0) {
           setTimeout(() => {
             drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
@@ -396,11 +595,11 @@ const runInference = async () => {
       // 处理目标检测结果（兼容旧格式）
       else if (data.detections && Array.isArray(data.detections)) {
         detectionResults.value = data.detections.map((d: any) => ({
-          label: d.label || d.class || '未知',
+          label: d.label || d.class || t('deploy.unknown'),
           score: (d.score || d.confidence || d.probability || 0) * 100,
           bbox: d.bbox || d.box || [0, 0, 0, 0]
         }))
-        toast?.success(`检测到 ${detectionResults.value.length} 个目标`)
+        toast?.success(t('deploy.targetDetected', { count: detectionResults.value.length }))
         if (inferenceImageUrl.value && detectionResults.value.length > 0) {
           setTimeout(() => {
             drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
@@ -410,25 +609,25 @@ const runInference = async () => {
       // 处理分类结果
       else if (data.classifications && Array.isArray(data.classifications)) {
         classificationResults.value = data.classifications.map((c: any) => ({
-          label: c.label || c.class || '未知',
+          label: c.label || c.class || t('deploy.unknown'),
           score: (c.score || c.confidence || c.probability || 0) * 100
         }))
-        toast?.success('推理完成')
+        toast?.success(t('deploy.inferenceComplete'))
       }
       else if (data.predictions && Array.isArray(data.predictions)) {
         classificationResults.value = data.predictions.map((p: any) => ({
-          label: p.label || p.name || '未知',
+          label: p.label || p.name || t('deploy.unknown'),
           score: (p.score || p.confidence || p.probability || 0) * 100
         }))
-        toast?.success('推理完成')
+        toast?.success(t('deploy.inferenceComplete'))
       }
       else if (data.result?.detections) {
         detectionResults.value = data.result.detections.map((d: any) => ({
-          label: d.label || d.class || '未知',
+          label: d.label || d.class || t('deploy.unknown'),
           score: (d.score || d.confidence || d.probability || 0) * 100,
           bbox: d.bbox || d.box || [0, 0, 0, 0]
         }))
-        toast?.success(`检测到 ${detectionResults.value.length} 个目标`)
+        toast?.success(t('deploy.targetDetected', { count: detectionResults.value.length }))
         if (inferenceImageUrl.value && detectionResults.value.length > 0) {
           setTimeout(() => {
             drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
@@ -436,14 +635,14 @@ const runInference = async () => {
         }
       }
       else {
-        toast?.success('推理完成')
+        toast?.success(t('deploy.inferenceComplete'))
       }
     } else {
-      toast?.error(data.message || '推理失败')
+      toast?.error(data.message || t('deploy.inferenceFailed'))
     }
   } catch (err: any) {
     console.error('Inference error:', err)
-    toast?.error(err.message || '推理请求失败')
+    toast?.error(err.message || t('deploy.inferenceFailed'))
   } finally {
     isInferring.value = false
   }
@@ -456,11 +655,11 @@ const hasOnnxModel = (model: DeployableModel) => {
 
 const getStatusBadge = (status: string) => {
   const s = status?.toLowerCase() || ''
-  if (s === 'running' || s === 'active') return { variant: 'default', label: '运行中', icon: CheckCircle }
-  if (s === 'stopped' || s === 'inactive') return { variant: 'secondary', label: '已停止', icon: Square }
-  if (s === 'starting') return { variant: 'outline', label: '启动中', icon: Loader2 }
-  if (s === 'unhealthy') return { variant: 'destructive', label: '异常', icon: XCircle }
-  if (s === 'error' || s === 'failed') return { variant: 'destructive', label: '错误', icon: XCircle }
+  if (s === 'running' || s === 'active') return { variant: 'default', label: t('deploy.status.running'), icon: CheckCircle }
+  if (s === 'stopped' || s === 'inactive') return { variant: 'secondary', label: t('deploy.status.stopped'), icon: Square }
+  if (s === 'starting') return { variant: 'outline', label: t('deploy.status.starting'), icon: Loader2 }
+  if (s === 'unhealthy') return { variant: 'destructive', label: t('deploy.status.unhealthy'), icon: XCircle }
+  if (s === 'error' || s === 'failed') return { variant: 'destructive', label: t('deploy.status.error'), icon: XCircle }
   return { variant: 'outline', label: status, icon: null }
 }
 
@@ -558,11 +757,15 @@ onMounted(async () => {
     await loadDeployableModels()
     await loadServices()
     startServicesPolling()
+    if (autoRefreshLogs.value) {
+      startLogsAutoRefresh()
+    }
   }
 })
 
 onUnmounted(() => {
   stopServicesPolling()
+  stopLogsAutoRefresh()
 })
 </script>
 
@@ -577,27 +780,9 @@ onUnmounted(() => {
             <h1 class="text-xl font-bold">{{ t('common.serviceDeployment') }}</h1>
           </div>
           <div class="flex items-center gap-3">
-            <UiSelect 
-              v-model:open="isProductSelectOpen"
-              :model-value="productId ? String(productId) : ''" 
-              @update:model-value="onProductChange"
-            >
-              <UiSelectTrigger class="w-[200px]">
-                <UiSelectValue placeholder="选择项目" />
-              </UiSelectTrigger>
-              <UiSelectContent>
-                <UiSelectItem 
-                  v-for="product in products" 
-                  :key="product.id" 
-                  :value="String(product.id)"
-                >
-                  {{ product.name }}
-                </UiSelectItem>
-              </UiSelectContent>
-            </UiSelect>
             <UiButton variant="outline" size="sm" @click="loadDeployableModels(); loadServices()" :disabled="!productId">
               <RefreshCw class="h-4 w-4 mr-2" />
-              刷新
+              {{ t('deploy.refresh') }}
             </UiButton>
           </div>
         </div>
@@ -606,52 +791,35 @@ onUnmounted(() => {
 
         <div v-if="!productId" class="text-center py-16">
           <FolderOpen class="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-          <p class="text-muted-foreground">请先选择一个项目</p>
+          <p class="text-muted-foreground">{{ t('deploy.pleaseSelectProduct') }}</p>
         </div>
 
         <template v-else>
           <div class="space-y-4">
             <h2 class="text-lg font-semibold flex items-center gap-2">
               <Box class="h-5 w-5" />
-              可部署模型
+              {{ t('deploy.deployableModels') }}
             </h2>
-            
+
             <div v-if="isLoadingModels" class="flex items-center justify-center py-8">
               <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-            
+
             <div v-else-if="deployableModels.length === 0" class="text-center py-8 text-muted-foreground">
-              暂无可部署的模型，请先完成训练
+              {{ t('deploy.noModels') }}
             </div>
             
-            <div v-else class="grid gap-4">
+            <div v-else class="grid gap-2">
               <div 
                 v-for="model in deployableModels" 
                 :key="model.task_uuid"
-                class="border rounded-lg p-4 bg-card hover:bg-accent/50 transition-colors"
+                class="border rounded-md p-2 bg-card hover:bg-accent/50 transition-colors"
               >
-                <div class="flex items-start justify-between">
-                  <div class="space-y-2">
-                    <div class="flex items-center gap-2">
-                      <span class="font-mono text-sm bg-muted px-2 py-1 rounded">{{ model.task_uuid }}</span>
-                      <Badge variant="outline">{{ model.labels?.length || 0 }} 个模型</Badge>
-                    </div>
-                    <div class="flex flex-wrap gap-1">
-                      <Badge v-for="label in model.labels" :key="label" variant="secondary" class="text-xs">
-                        {{ label }}
-                        <span v-if="model.onnx_status?.[label]" class="ml-1 text-[10px] text-green-500">✓ ONNX</span>
-                        <span v-else class="ml-1 text-[10px] text-orange-500">⚠ 未转换</span>
-                      </Badge>
-                    </div>
-                    <p class="text-xs text-muted-foreground" v-if="model.created_at">
-                      <Clock class="h-3 w-3 inline mr-1" />
-                      {{ formatDate(model.created_at) }}
-                    </p>
-                  </div>
-                  
-                  <div class="flex items-center gap-2">
+                <div class="flex items-center justify-between gap-4">
+                  <div class="flex items-center gap-3 min-w-0 flex-1">
+                    <span class="font-mono text-xs bg-muted px-1.5 py-0.5 rounded truncate">{{ model.created_at ? formatDate(model.created_at) + '@' + model.task_uuid : model.task_uuid }}</span>
                     <template v-if="getServiceForUuid(model.task_uuid)">
-                      <Badge :variant="getStatusBadge(getServiceForUuid(model.task_uuid).status).variant">
+                      <Badge :variant="getStatusBadge(getServiceForUuid(model.task_uuid).status).variant" class="text-xs">
                         <component 
                           :is="getStatusBadge(getServiceForUuid(model.task_uuid).status).icon" 
                           class="h-3 w-3 mr-1"
@@ -659,54 +827,69 @@ onUnmounted(() => {
                         />
                         {{ getStatusBadge(getServiceForUuid(model.task_uuid).status).label }}
                       </Badge>
-                      <span class="text-sm text-muted-foreground">
-                        端口: {{ getServiceForUuid(model.task_uuid).port }}
+                    </template>
+                  </div>
+                  
+                  <div class="flex items-center gap-2 shrink-0">
+                    <template v-if="getServiceForUuid(model.task_uuid)">
+                      <span class="text-xs text-muted-foreground">
+                        {{ t('deploy.port') }}: {{ getServiceForUuid(model.task_uuid).port }}
                       </span>
+                      <UiButton
+                        size="sm"
+                        variant="outline"
+                        class="h-7 text-xs px-2"
+                        @click="openLogModal(getServiceForUuid(model.task_uuid).service_id)"
+                      >
+                        <FileText class="h-3 w-3 mr-1" />
+                        {{ t('deploy.viewLogs') }}
+                      </UiButton>
                     </template>
                     
                     <template v-if="!getServiceForUuid(model.task_uuid)">
-                      <div class="flex items-center gap-2 mb-2">
-                        <UiSelect v-model="selectedDevice" :open="deviceOpen" @update:open="deviceOpen = $event">
-                          <UiSelectTrigger class="w-20 h-8">
-                            <UiSelectValue placeholder="设备" />
-                          </UiSelectTrigger>
-                          <UiSelectContent>
-                            <UiSelectItem value="GPU">GPU</UiSelectItem>
-                            <UiSelectItem value="CPU">CPU</UiSelectItem>
-                          </UiSelectContent>
-                        </UiSelect>
-                      </div>
-                      <UiButton 
-                        size="sm" 
+                      <UiSelect :model-value="selectedDevice[model.task_uuid] || 'GPU'" :open="deviceOpen[model.task_uuid]" @update:open="deviceOpen[model.task_uuid] = $event" @update:model-value="selectedDevice[model.task_uuid] = $event">
+                        <UiSelectTrigger class="w-20 h-7 text-xs">
+                          <UiSelectValue />
+                        </UiSelectTrigger>
+                        <UiSelectContent class="min-w-0 w-20">
+                          <UiSelectItem value="GPU">GPU</UiSelectItem>
+                          <UiSelectItem value="CPU">CPU</UiSelectItem>
+                        </UiSelectContent>
+                      </UiSelect>
+                      <UiButton
+                        size="sm"
+                        class="h-7 text-xs px-2"
                         @click="startService(model.task_uuid, model.labels)"
                         :disabled="startingUuid === model.task_uuid"
                       >
-                        <Loader2 v-if="startingUuid === model.task_uuid" class="h-4 w-4 mr-2 animate-spin" />
-                        <Play v-else class="h-4 w-4 mr-2" />
-                        启动服务
+                        <Loader2 v-if="startingUuid === model.task_uuid" class="h-3 w-3 mr-1 animate-spin" />
+                        <Play v-else class="h-3 w-3 mr-1" />
+                        {{ t('deploy.startService') }}
                       </UiButton>
                     </template>
                     
                     <template v-else>
-                      <UiButton 
-                        size="sm" 
+                      <UiButton
+                        size="sm"
                         variant="outline"
+                        class="h-7 text-xs px-2"
                         @click="stopService(getServiceForUuid(model.task_uuid).service_id)"
                         :disabled="stoppingId === getServiceForUuid(model.task_uuid).service_id"
                       >
-                        <Loader2 v-if="stoppingId === getServiceForUuid(model.task_uuid).service_id" class="h-4 w-4 mr-2 animate-spin" />
-                        <Square v-else class="h-4 w-4 mr-2" />
-                        停止
+                        <Loader2 v-if="stoppingId === getServiceForUuid(model.task_uuid).service_id" class="h-3 w-3 mr-1 animate-spin" />
+                        <Square v-else class="h-3 w-3 mr-1" />
+                        {{ t('deploy.stopService') }}
                       </UiButton>
-                      <UiButton 
-                        size="sm" 
+                      <UiButton
+                        size="sm"
                         variant="destructive"
+                        class="h-7 text-xs px-2"
                         @click="deleteService(getServiceForUuid(model.task_uuid).service_id)"
                         :disabled="deletingId === getServiceForUuid(model.task_uuid).service_id"
                       >
-                        <Loader2 v-if="deletingId === getServiceForUuid(model.task_uuid).service_id" class="h-4 w-4 mr-2 animate-spin" />
-                        <Trash2 v-else class="h-4 w-4 mr-2" />
-                        删除
+                        <Loader2 v-if="deletingId === getServiceForUuid(model.task_uuid).service_id" class="h-3 w-3 mr-1 animate-spin" />
+                        <Trash2 v-else class="h-3 w-3 mr-1" />
+                        {{ t('deploy.deleteService') }}
                       </UiButton>
                     </template>
                   </div>
@@ -718,74 +901,65 @@ onUnmounted(() => {
           <Separator />
 
           <div class="space-y-4">
-            <h2 class="text-lg font-semibold flex items-center gap-2">
-              <Server class="h-5 w-5" />
-              运行中的服务
-            </h2>
-            
+            <div class="flex items-center justify-between">
+              <h2 class="text-lg font-semibold flex items-center gap-2">
+                <FileText class="h-5 w-5" />
+                {{ t('deploy.serviceLogs') }}
+              </h2>
+              <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                  <Switch v-model="autoRefreshLogs" />
+                  <span class="text-sm text-muted-foreground">自动刷新</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm text-muted-foreground">{{ t('deploy.logLines') }}:</span>
+                  <UiSelect v-model="logLines" @update:model-value="refreshAllLogs">
+                    <UiSelectTrigger class="w-[100px]">
+                      <UiSelectValue />
+                    </UiSelectTrigger>
+                    <UiSelectContent>
+                      <UiSelectItem :value="50">50</UiSelectItem>
+                      <UiSelectItem :value="100">100</UiSelectItem>
+                      <UiSelectItem :value="200">200</UiSelectItem>
+                      <UiSelectItem :value="500">500</UiSelectItem>
+                      <UiSelectItem :value="1000">1000</UiSelectItem>
+                    </UiSelectContent>
+                  </UiSelect>
+                </div>
+                <UiButton variant="outline" size="sm" @click="refreshAllLogs" :disabled="isLoadingAllLogs">
+                  <RefreshCw class="h-4 w-4 mr-2" :class="{ 'animate-spin': isLoadingAllLogs }" />
+                  {{ t('deploy.refreshLogs') }}
+                </UiButton>
+              </div>
+            </div>
+
             <div v-if="isLoadingServices" class="flex items-center justify-center py-8">
               <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-            
+
             <div v-else-if="services.length === 0" class="text-center py-8 text-muted-foreground">
-              暂无运行中的服务
+              {{ t('deploy.noRunningServices') }}
             </div>
             
             <div v-else class="grid gap-4">
               <div 
                 v-for="service in services" 
                 :key="service.service_id"
-                class="border rounded-lg p-4 bg-card"
+                class="border rounded-lg bg-card overflow-hidden"
               >
-                <div class="flex items-start justify-between">
-                  <div class="space-y-2">
-                    <div class="flex items-center gap-2">
-                      <Badge :variant="getStatusBadge(service.status).variant">
-                        <component 
-                          :is="getStatusBadge(service.status).icon" 
-                          class="h-3 w-3 mr-1"
-                          :class="{ 'animate-spin': service.status?.toLowerCase() === 'starting' }"
-                        />
-                        {{ getStatusBadge(service.status).label }}
-                      </Badge>
-                      <span class="font-mono text-sm">{{ service.service_id }}</span>
+                <div class="flex items-center gap-4 p-3 bg-muted/50 border-b text-sm">
+                  <span><span class="text-muted-foreground">服务ID:</span> <span class="font-mono">{{ service.service_id }}</span></span>
+                  <span><span class="text-muted-foreground">服务地址:</span> <code class="bg-muted px-1 rounded text-xs">{{ service.inference_url }}</code></span>
+                </div>
+                <div class="p-3">
+                  <div class="bg-muted/50 rounded border p-3 font-mono text-xs leading-relaxed h-48 overflow-auto">
+                    <div v-if="serviceLogs[service.service_id]?.loading" class="flex items-center justify-center h-full">
+                      <Loader2 class="h-5 w-5 animate-spin text-muted-foreground" />
                     </div>
-                    <div class="text-sm space-y-1">
-                      <p><span class="text-muted-foreground">任务UUID:</span> {{ service.task_uuid }}</p>
-                      <p><span class="text-muted-foreground">端口:</span> {{ service.port }}</p>
-                      <p><span class="text-muted-foreground">推理地址:</span> 
-                        <code class="bg-muted px-1 rounded text-xs">{{ service.inference_url }}</code>
-                      </p>
-                      <p><span class="text-muted-foreground">模型数量:</span> {{ service.model_count }}</p>
+                    <div v-else-if="serviceLogs[service.service_id]?.content" class="whitespace-pre-wrap break-all">{{ serviceLogs[service.service_id]?.content }}</div>
+                    <div v-else class="flex items-center justify-center h-full text-muted-foreground">
+                      {{ t('deploy.noLogs') }}
                     </div>
-                    <div class="flex flex-wrap gap-1">
-                      <Badge v-for="label in service.labels" :key="label" variant="secondary" class="text-xs">
-                        {{ label }}
-                      </Badge>
-                    </div>
-                  </div>
-                  
-                  <div class="flex items-center gap-2">
-                    <UiButton 
-                      size="sm" 
-                      variant="outline"
-                      @click="stopService(service.service_id)"
-                      :disabled="stoppingId === service.service_id"
-                    >
-                      <Loader2 v-if="stoppingId === service.service_id" class="h-4 w-4 mr-2 animate-spin" />
-                      <Square v-else class="h-4 w-4 mr-2" />
-                      停止
-                    </UiButton>
-                    <UiButton 
-                      size="sm" 
-                      variant="destructive"
-                      @click="deleteService(service.service_id)"
-                      :disabled="deletingId === service.service_id"
-                    >
-                      <Loader2 v-if="deletingId === service.service_id" class="h-4 w-4 mr-2 animate-spin" />
-                      <Trash2 v-else class="h-4 w-4 mr-2" />
-                      删除
-                    </UiButton>
                   </div>
                 </div>
               </div>
@@ -797,27 +971,26 @@ onUnmounted(() => {
           <!-- 推理测试区域 -->
           <div class="space-y-4">
             <h2 class="text-lg font-semibold flex items-center gap-2">
-              <Zap class="h-5 w-5" />
-              推理测试
+              {{ t('deploy.inferenceTest') }}
             </h2>
-            
+
             <div class="grid grid-cols-2 gap-4">
               <!-- 左侧：图片上传和推理 -->
               <div class="space-y-4">
                 <!-- 服务选择 -->
                 <div class="flex items-center gap-2">
-                  <span class="text-sm text-muted-foreground">选择服务:</span>
+                  <span class="text-sm text-muted-foreground">{{ t('deploy.selectService') }}:</span>
                   <UiSelect v-model="selectedInferenceService" :open="inferenceServiceOpen" @update:open="inferenceServiceOpen = $event">
                     <UiSelectTrigger class="w-[200px]">
-                      <UiSelectValue placeholder="选择推理服务" />
+                      <UiSelectValue :placeholder="t('deploy.selectService')" />
                     </UiSelectTrigger>
                     <UiSelectContent>
-                      <UiSelectItem 
-                        v-for="service in runningServices" 
-                        :key="service.service_id" 
+                      <UiSelectItem
+                        v-for="service in runningServices"
+                        :key="service.service_id"
                         :value="service.service_id"
                       >
-                        {{ service.service_id }} (端口: {{ service.port }})
+                        {{ service.service_id }} ({{ t('deploy.port') }}: {{ service.port }})
                       </UiSelectItem>
                     </UiSelectContent>
                   </UiSelect>
@@ -837,25 +1010,25 @@ onUnmounted(() => {
                   />
                   <div v-if="!inferenceImageUrl" class="space-y-2">
                     <ImageIcon class="h-10 w-10 mx-auto text-muted-foreground" />
-                    <p class="text-sm text-muted-foreground">点击上传图片进行推理</p>
+                    <p class="text-sm text-muted-foreground">{{ t('deploy.uploadImage') }}</p>
                   </div>
-                  <img 
+                  <img
                     v-else
-                    :src="inferenceImageUrl" 
+                    :src="inferenceImageUrl"
                     class="max-h-48 mx-auto rounded-lg object-contain"
-                    alt="待推理图片"
+                    :alt="t('deploy.inferenceTest')"
                   />
                 </div>
 
                 <!-- 推理按钮 -->
-                <UiButton 
+                <UiButton
                   class="w-full"
                   :disabled="!inferenceImageUrl || !selectedInferenceService || isInferring"
                   @click="runInference"
                 >
                   <Loader2 v-if="isInferring" class="h-4 w-4 mr-2 animate-spin" />
                   <Zap v-else class="h-4 w-4 mr-2" />
-                  {{ isInferring ? '推理中...' : '开始推理' }}
+                  {{ isInferring ? t('deploy.inferring') : t('deploy.startInference') }}
                 </UiButton>
               </div>
 
@@ -863,17 +1036,17 @@ onUnmounted(() => {
               <div class="border rounded-lg p-4 bg-card">
                 <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
                   <BarChart3 class="h-4 w-4" />
-                  推理结果
+                  {{ t('deploy.inferenceResults') }}
                 </h3>
-                
+
                 <div v-if="!inferenceResult && !isInferring" class="text-center py-8 text-muted-foreground">
                   <BarChart3 class="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p class="text-sm">暂无推理结果</p>
+                  <p class="text-sm">{{ t('deploy.noResults') }}</p>
                 </div>
 
                 <div v-else-if="isInferring" class="flex items-center justify-center py-8">
                   <Loader2 class="h-6 w-6 animate-spin text-primary" />
-                  <span class="ml-2 text-sm text-muted-foreground">推理中...</span>
+                  <span class="ml-2 text-sm text-muted-foreground">{{ t('deploy.inferring') }}</span>
                 </div>
 
                 <!-- 目标检测结果 -->
@@ -913,8 +1086,69 @@ onUnmounted(() => {
         </template>
       </div>
 
-
     </main>
+
+    <!-- 日志查看对话框 -->
+    <div v-if="showLogModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-4xl h-[80vh] shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col">
+        <UiCardHeader class="pb-4 shrink-0">
+          <div class="flex items-center justify-between">
+            <UiCardTitle class="text-lg flex items-center gap-2">
+              <FileText class="h-5 w-5 text-primary" />
+              {{ t('deploy.serviceLogs') }} - {{ logServiceId }}
+            </UiCardTitle>
+            <UiButton variant="ghost" size="icon" class="h-8 w-8" @click="closeLogModal">
+              <X class="h-4 w-4" />
+            </UiButton>
+          </div>
+          <UiCardDescription>
+            {{ t('deploy.logsDescription') }}
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardContent class="flex-1 overflow-hidden flex flex-col py-4">
+          <!-- 工具栏 -->
+          <div class="flex items-center gap-4 mb-4 shrink-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm text-muted-foreground">{{ t('deploy.logLines') }}:</span>
+              <UiSelect v-model="logLines" @update:model-value="loadServiceLogs">
+                <UiSelectTrigger class="w-[100px]">
+                  <UiSelectValue />
+                </UiSelectTrigger>
+                <UiSelectContent>
+                  <UiSelectItem :value="50">50</UiSelectItem>
+                  <UiSelectItem :value="100">100</UiSelectItem>
+                  <UiSelectItem :value="200">200</UiSelectItem>
+                  <UiSelectItem :value="500">500</UiSelectItem>
+                  <UiSelectItem :value="1000">1000</UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+            </div>
+            <UiButton variant="outline" size="sm" @click="refreshLogs" :disabled="isLoadingLogs">
+              <RefreshCw class="h-4 w-4 mr-2" :class="{ 'animate-spin': isLoadingLogs }" />
+              {{ t('deploy.refreshLogs') }}
+            </UiButton>
+          </div>
+
+          <!-- 日志内容 -->
+          <div class="flex-1 overflow-auto bg-muted/50 rounded-lg border p-4 font-mono text-xs leading-relaxed">
+            <div v-if="isLoadingLogs" class="flex items-center justify-center h-full">
+              <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+            <div v-else-if="logContent" class="whitespace-pre-wrap break-all">{{ logContent }}</div>
+            <div v-else class="flex items-center justify-center h-full text-muted-foreground">
+              {{ t('deploy.noLogs') }}
+            </div>
+          </div>
+        </UiCardContent>
+
+        <UiCardFooter class="pt-4 shrink-0">
+          <UiButton variant="outline" class="w-full" @click="closeLogModal">
+            {{ t('common.close') }}
+          </UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
   </div>
 </template>
 

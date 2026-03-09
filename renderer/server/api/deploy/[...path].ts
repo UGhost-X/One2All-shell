@@ -101,7 +101,6 @@ async function resolveModelPath(serverPath: string): Promise<string> {
     return localPath
   }
   
-  console.log(`[Deploy] resolveModelPath: serverPath=${serverPath}, normalizedPath=${normalizedPath}, localPath=${localPath}, exists=${fs.existsSync(localPath)}`)
   
   const tempDir = path.join(process.cwd(), 'temp_models')
   if (!fs.existsSync(tempDir)) {
@@ -114,13 +113,11 @@ async function resolveModelPath(serverPath: string): Promise<string> {
   if (!fs.existsSync(tempPath)) {
     try {
       const staticUrl = `${pythonApiBase}/static/${normalizedPath.replace(/ /g, '%20')}`
-      console.log(`[Deploy] Trying to download from: ${staticUrl}`)
       
       const response = await fetch(staticUrl)
       if (response.ok) {
         const buffer = await response.arrayBuffer()
         fs.writeFileSync(tempPath, Buffer.from(buffer))
-        console.log(`[Deploy] Downloaded model to: ${tempPath}`)
         return tempPath
       }
     } catch (downloadErr: any) {
@@ -197,22 +194,6 @@ export default defineEventHandler(async (event) => {
       }
 
       for (const [taskUuid, modelInfo] of modelMap) {
-        // 检查每个标签的 ONNX 转换状态
-        for (const label of modelInfo.labels) {
-          try {
-            const checkRes = await fetch(
-              `${pythonApiBase}/convert/onnx/model/${projectId}/${taskUuid}/${label}`
-            )
-            if (checkRes.ok) {
-              const checkData = await checkRes.json()
-              modelInfo.onnx_status[label] = checkData.has_onnx || false
-            } else {
-              modelInfo.onnx_status[label] = false
-            }
-          } catch {
-            modelInfo.onnx_status[label] = false
-          }
-        }
         models.push(modelInfo)
       }
 
@@ -392,6 +373,32 @@ export default defineEventHandler(async (event) => {
     service.status = 'stopped'
     runningServices.delete(serviceId)
 
+    try {
+      const servicesRes = await fetch(`${pythonApiBase}/deploy/http/services`)
+      if (servicesRes.ok) {
+        const servicesData = await servicesRes.json()
+        runningServices.clear()
+        for (const svc of servicesData.services || []) {
+          const host = getInferenceHost()
+          const serviceUrl = `http://${host}:${svc.port}`
+          runningServices.set(svc.service_id, {
+            service_id: svc.service_id,
+            task_uuid: svc.task_uuid || '',
+            project_id: svc.project_id || '',
+            port: svc.port || 0,
+            status: svc.status || 'running',
+            inference_url: serviceUrl,
+            labels: svc.labels || [],
+            model_count: svc.labels?.length || 1,
+            model_paths: {},
+            service_type: 'http'
+          })
+        }
+      }
+    } catch (refreshErr) {
+      console.warn('刷新服务列表失败:', refreshErr)
+    }
+
     return {
       status: 'success',
       message: '服务已停止'
@@ -435,9 +442,7 @@ export default defineEventHandler(async (event) => {
         const blob = new Blob([new Uint8Array(imageFile)], { type: originalType })
         inferenceFormData.append('file', blob, originalFilename)
         inferenceFormData.append('service_id', service_id)
-        
-        console.log(`[Deploy Inference] Blob size: ${blob.size}, Name: ${originalFilename}, Type: ${originalType}`)
-        
+          
         const inferenceRes = await fetch(`${inferenceUrl}/predict`, {
           method: 'POST',
           body: inferenceFormData
@@ -448,7 +453,6 @@ export default defineEventHandler(async (event) => {
       }
 
       const result = await inferenceRes.json()
-      console.log('[Deploy Inference] result:', JSON.stringify(result))
       const convertedResult = {
         results: result.results || [],
         processing_time: result.processing_time || 0,
@@ -512,7 +516,6 @@ export default defineEventHandler(async (event) => {
         const processedService = {
           ...svc,
           status: serviceStatus,
-          http_url: serviceUrl,
           inference_url: serviceUrl,
           created_at: svc.created_at ? new Date(svc.created_at * 1000).toISOString() : new Date().toISOString()
         }
@@ -524,14 +527,12 @@ export default defineEventHandler(async (event) => {
           port: svc.port || 0,
           status: serviceStatus,
           inference_url: serviceUrl,
-          http_url: serviceUrl,
           labels: svc.labels || [],
           model_count: svc.model_count || 1,
           created_at: processedService.created_at,
           model_paths: {},
           service_type: 'http',
           device: svc.device,
-          health: svc.health
         })
         
         return processedService
@@ -733,12 +734,54 @@ export default defineEventHandler(async (event) => {
         throw new Error(`后端服务返回 ${healthRes.status}`)
       }
       const healthData = await healthRes.json()
+      
+      // 同步健康状态到 runningServices
+      const service = runningServices.get(serviceId)
+      if (service && healthData.health) {
+        let newStatus = 'running'
+        if (!healthData.health.healthy) {
+          if (!healthData.health.process_alive) {
+            newStatus = 'stopped'
+          } else if (!healthData.health.port_listening) {
+            newStatus = 'starting'
+          } else if (!healthData.health.service_responsive) {
+            newStatus = 'unhealthy'
+          }
+        }
+        service.status = newStatus
+        runningServices.set(serviceId, service)
+      }
+      
       return healthData
     } catch (err: any) {
       console.warn(`Failed to fetch health for service ${serviceId}:`, err.message)
       throw createError({
         statusCode: 500,
         message: `获取服务健康状态失败：${err.message}`
+      })
+    }
+  }
+
+  // 单个服务日志获取
+  if (eventPath.startsWith('/api/deploy/http/service/') && eventPath.endsWith('/logs') && method === 'GET') {
+    const pathParts = eventPath.split('/')
+    const serviceId = pathParts[pathParts.length - 2]
+    const query = getQuery(event)
+    const lines = query.lines || '100'
+    const fromLine = query.from_line || '-1'
+    try {
+      const logsRes = await fetch(`${pythonApiBase}/deploy/http/service/${serviceId}/logs?lines=${lines}&from_line=${fromLine}`)
+
+      if (!logsRes.ok) {
+        throw new Error(`后端服务返回 ${logsRes.status}`)
+      }
+      const logsData = await logsRes.json()
+      return logsData
+    } catch (err: any) {
+      console.warn(`Failed to fetch logs for service ${serviceId}:`, err.message)
+      throw createError({
+        statusCode: 500,
+        message: `获取服务日志失败：${err.message}`
       })
     }
   }

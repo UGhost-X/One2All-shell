@@ -564,7 +564,6 @@ onActivated(() => {
 })
 
 watch(() => route.query, async (newQuery) => {
-  console.log('[Annotation] Route query changed:', newQuery)
   const qProductId = newQuery.productId
   const qImagePath = newQuery.imagePath
   const qProductName = newQuery.productName
@@ -1287,12 +1286,6 @@ const handleNextStep = async () => {
     const currentImg = images[currentImgIndex.value]
     if (!currentImg) return
     
-    console.log('[Annotation] Going to training with:', {
-      productId: productId.value,
-      productName: productName.value,
-      imagePath: currentImg.fullPath
-    })
-    
     router.push({
       path: '/training',
       query: {
@@ -1629,17 +1622,6 @@ watch(showLabelPanel, async () => {
 
         <!-- Bottom fixed buttons -->
         <div class="p-4 border-t bg-background mt-auto space-y-2">
-          <div v-if="currentImgIndex < images.length - 1" class="flex gap-2">
-            <UiButton 
-              variant="outline" 
-              class="flex-1 gap-2 h-10"
-              @click="goToNextImage"
-              :disabled="isSaving"
-            >
-              <ChevronRight class="h-4 w-4" />
-              {{ t('annotation.nextImage') || '下一张' }}
-            </UiButton>
-          </div>
           <UiButton 
             variant="default" 
             class="w-full gap-2 h-10 shadow-lg shadow-primary/20"
