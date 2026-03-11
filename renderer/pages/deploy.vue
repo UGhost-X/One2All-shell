@@ -111,6 +111,7 @@ const logServiceId = ref('')
 const logContent = ref('')
 const isLoadingLogs = ref(false)
 const logLines = ref('100')
+const logLinesOpen = ref(false)
 
 // 服务日志展示相关
 const serviceLogs = ref<Record<string, { content: string; loading: boolean; nextLine: number }>>({})
@@ -913,11 +914,11 @@ onUnmounted(() => {
                 </div>
                 <div class="flex items-center gap-2">
                   <span class="text-sm text-muted-foreground">{{ t('deploy.logLines') }}:</span>
-                  <UiSelect v-model="logLines" @update:model-value="refreshAllLogs">
-                    <UiSelectTrigger class="w-[100px]">
+                  <UiSelect v-model="logLines" v-model:open="logLinesOpen" @update:model-value="refreshAllLogs">
+                    <UiSelectTrigger class="w-[140px]">
                       <UiSelectValue />
                     </UiSelectTrigger>
-                    <UiSelectContent>
+                    <UiSelectContent class="w-[140px]">
                       <UiSelectItem :value="50">50</UiSelectItem>
                       <UiSelectItem :value="100">100</UiSelectItem>
                       <UiSelectItem :value="200">200</UiSelectItem>
@@ -952,7 +953,7 @@ onUnmounted(() => {
                   <span><span class="text-muted-foreground">服务地址:</span> <code class="bg-muted px-1 rounded text-xs">{{ service.inference_url }}</code></span>
                 </div>
                 <div class="p-3">
-                  <div class="bg-muted/50 rounded border p-3 font-mono text-xs leading-relaxed h-48 overflow-auto">
+                  <div class="bg-muted/50 rounded border p-3 font-mono text-xs leading-relaxed h-80 overflow-auto">
                     <div v-if="serviceLogs[service.service_id]?.loading" class="flex items-center justify-center h-full">
                       <Loader2 class="h-5 w-5 animate-spin text-muted-foreground" />
                     </div>
@@ -966,123 +967,6 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <Separator />
-
-          <!-- 推理测试区域 -->
-          <div class="space-y-4">
-            <h2 class="text-lg font-semibold flex items-center gap-2">
-              {{ t('deploy.inferenceTest') }}
-            </h2>
-
-            <div class="grid grid-cols-2 gap-4">
-              <!-- 左侧：图片上传和推理 -->
-              <div class="space-y-4">
-                <!-- 服务选择 -->
-                <div class="flex items-center gap-2">
-                  <span class="text-sm text-muted-foreground">{{ t('deploy.selectService') }}:</span>
-                  <UiSelect v-model="selectedInferenceService" :open="inferenceServiceOpen" @update:open="inferenceServiceOpen = $event">
-                    <UiSelectTrigger class="w-[200px]">
-                      <UiSelectValue :placeholder="t('deploy.selectService')" />
-                    </UiSelectTrigger>
-                    <UiSelectContent>
-                      <UiSelectItem
-                        v-for="service in runningServices"
-                        :key="service.service_id"
-                        :value="service.service_id"
-                      >
-                        {{ service.service_id }} ({{ t('deploy.port') }}: {{ service.port }})
-                      </UiSelectItem>
-                    </UiSelectContent>
-                  </UiSelect>
-                </div>
-
-                <!-- 图片上传区域 -->
-                <div 
-                  class="border-2 border-dashed border-muted-foreground/25 rounded-lg p-8 text-center hover:border-primary/50 hover:bg-muted/50 transition-colors cursor-pointer"
-                  @click="triggerInferenceFileInput"
-                >
-                  <input 
-                    ref="inferenceFileInput" 
-                    type="file" 
-                    accept="image/*" 
-                    class="hidden" 
-                    @change="handleInferenceFileChange"
-                  />
-                  <div v-if="!inferenceImageUrl" class="space-y-2">
-                    <ImageIcon class="h-10 w-10 mx-auto text-muted-foreground" />
-                    <p class="text-sm text-muted-foreground">{{ t('deploy.uploadImage') }}</p>
-                  </div>
-                  <img
-                    v-else
-                    :src="inferenceImageUrl"
-                    class="max-h-48 mx-auto rounded-lg object-contain"
-                    :alt="t('deploy.inferenceTest')"
-                  />
-                </div>
-
-                <!-- 推理按钮 -->
-                <UiButton
-                  class="w-full"
-                  :disabled="!inferenceImageUrl || !selectedInferenceService || isInferring"
-                  @click="runInference"
-                >
-                  <Loader2 v-if="isInferring" class="h-4 w-4 mr-2 animate-spin" />
-                  <Zap v-else class="h-4 w-4 mr-2" />
-                  {{ isInferring ? t('deploy.inferring') : t('deploy.startInference') }}
-                </UiButton>
-              </div>
-
-              <!-- 右侧：推理结果展示 -->
-              <div class="border rounded-lg p-4 bg-card">
-                <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
-                  <BarChart3 class="h-4 w-4" />
-                  {{ t('deploy.inferenceResults') }}
-                </h3>
-
-                <div v-if="!inferenceResult && !isInferring" class="text-center py-8 text-muted-foreground">
-                  <BarChart3 class="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p class="text-sm">{{ t('deploy.noResults') }}</p>
-                </div>
-
-                <div v-else-if="isInferring" class="flex items-center justify-center py-8">
-                  <Loader2 class="h-6 w-6 animate-spin text-primary" />
-                  <span class="ml-2 text-sm text-muted-foreground">{{ t('deploy.inferring') }}</span>
-                </div>
-
-                <!-- 目标检测结果 -->
-                <div v-else-if="detectionResults.length > 0" class="space-y-3">
-                  <div v-if="inferenceImageUrl" class="flex justify-center">
-                    <canvas 
-                      ref="inferenceCanvasResultRef"
-                      class="max-w-full rounded-lg border"
-                    />
-                  </div>
-                </div>
-
-                <!-- 分类结果 -->
-                <div v-else-if="classificationResults.length > 0" class="space-y-3">
-                  <div class="space-y-2 max-h-64 overflow-auto">
-                    <div 
-                      v-for="item in classificationResults" 
-                      :key="item.label"
-                      class="p-2 rounded bg-muted"
-                    >
-                      <div class="flex justify-between items-center text-sm">
-                        <span class="font-medium">{{ item.label }}</span>
-                        <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
-                      </div>
-                      <Progress :model-value="item.score" class="h-1.5 mt-1" />
-                    </div>
-                  </div>
-                </div>
-
-                <!-- 原始结果 -->
-                <div v-else-if="inferenceResult" class="space-y-2">
-                  <pre class="bg-muted p-2 rounded text-xs overflow-auto max-h-64">{{ JSON.stringify(inferenceResult, null, 2) }}</pre>
-                </div>
-              </div>
-            </div>
-          </div>
         </template>
       </div>
 
@@ -1111,11 +995,11 @@ onUnmounted(() => {
           <div class="flex items-center gap-4 mb-4 shrink-0">
             <div class="flex items-center gap-2">
               <span class="text-sm text-muted-foreground">{{ t('deploy.logLines') }}:</span>
-              <UiSelect v-model="logLines" @update:model-value="loadServiceLogs">
-                <UiSelectTrigger class="w-[100px]">
+              <UiSelect v-model="logLines" v-model:open="logLinesOpen" @update:model-value="loadServiceLogs">
+                <UiSelectTrigger class="w-[140px]">
                   <UiSelectValue />
                 </UiSelectTrigger>
-                <UiSelectContent>
+                <UiSelectContent class="w-[140px]">
                   <UiSelectItem :value="50">50</UiSelectItem>
                   <UiSelectItem :value="100">100</UiSelectItem>
                   <UiSelectItem :value="200">200</UiSelectItem>

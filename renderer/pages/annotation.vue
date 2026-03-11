@@ -405,11 +405,20 @@ let isFirstPointEnlarged = false
 let dashAnimationFrame: number | null = null
 let dashOffset = 0
 
+2// --- Viewport Navigation State ---
+let isPanning = false
+let panStartPoint: { x: number; y: number } | null = null
+let panStartPanX = 0
+let panStartPanY = 0
+let isSpacePressed = false
+let isUserClickingCanvas = false
+
 // --- Initialization ---
 let listenersBound = false
 const bindWindowListeners = () => {
   if (listenersBound) return
   window.addEventListener('keydown', handleKeyDown)
+  window.addEventListener('keyup', handleKeyUp)
   window.addEventListener('resize', handleResize)
   listenersBound = true
 }
@@ -417,6 +426,7 @@ const bindWindowListeners = () => {
 const unbindWindowListeners = () => {
   if (!listenersBound) return
   window.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('keyup', handleKeyUp)
   window.removeEventListener('resize', handleResize)
   listenersBound = false
 }
@@ -618,6 +628,27 @@ onUnmounted(() => {
 // --- Methods ---
 
 const handleKeyDown = (e: KeyboardEvent) => {
+  if (e.key === ' ') {
+    isSpacePressed = true
+    if (fCanvas.value) {
+      fCanvas.value.defaultCursor = 'grab'
+    }
+    return
+  }
+  
+  // Number keys 1-9 for label selection
+  if (/^[1-9]$/.test(e.key)) {
+    const num = parseInt(e.key)
+    const index = num - 1
+    if (index < labelConfigs.length) {
+      const newLabelId = labelConfigs[index].id
+      if (activeLabelId.value !== newLabelId) {
+        activeLabelId.value = newLabelId
+      }
+    }
+    return
+  }
+  
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (selectedId.value) {
       deleteAnnotation(selectedId.value)
@@ -630,6 +661,15 @@ const handleKeyDown = (e: KeyboardEvent) => {
     activeTool.value = 'polygon'
   } else if (e.key === 'Escape') {
     cancelDrawing()
+  }
+}
+
+const handleKeyUp = (e: KeyboardEvent) => {
+  if (e.key === ' ') {
+    isSpacePressed = false
+    if (fCanvas.value && !isPanning) {
+      fCanvas.value.defaultCursor = activeTool.value === 'select' ? 'default' : 'crosshair'
+    }
   }
 }
 
@@ -687,9 +727,41 @@ const syncCanvasToViewer = () => {
 const initCanvasEvents = () => {
   if (!fCanvas.value) return
 
+  // Mouse wheel zoom
+  fCanvas.value.on('mouse:wheel', (opt) => {
+    opt.e.preventDefault()
+    opt.e.stopPropagation()
+    
+    const delta = opt.e.deltaY
+    const zoomFactor = delta > 0 ? 0.9 : 1.1
+    const newZoom = Math.max(0.1, Math.min(10, viewerZoom.value * zoomFactor))
+    
+    viewerZoom.value = newZoom
+    syncCanvasToViewer()
+  })
+
+  const canvasEl = fCanvas.value.getElement()
+  canvasEl.addEventListener('contextmenu', (e: Event) => {
+    e.preventDefault()
+    activeLabelId.value = null
+    activeTool.value = 'select'
+  })
+
   fCanvas.value.on('mouse:down', (opt) => {
+    isUserClickingCanvas = true
+    
     const target = opt.target as any
     const targetId = target?.id ? String(target.id) : ''
+    
+    // Middle mouse button or Space key for panning
+    if (opt.e.button === 1 || (opt.e.button === 0 && isSpacePressed)) {
+      isPanning = true
+      panStartPoint = { x: opt.e.clientX, y: opt.e.clientY }
+      panStartPanX = viewerPanX.value
+      panStartPanY = viewerPanY.value
+      fCanvas.value!.defaultCursor = 'grabbing'
+      return
+    }
     
     if (targetId.startsWith('ann_') || (opt.transform)) {
       return
@@ -781,6 +853,17 @@ const initCanvasEvents = () => {
 
   fCanvas.value.on('mouse:move', (opt) => {
     if (!fCanvas.value) return
+    
+    // Handle panning
+    if (isPanning && panStartPoint) {
+      const dx = opt.e.clientX - panStartPoint.x
+      const dy = opt.e.clientY - panStartPoint.y
+      viewerPanX.value = panStartPanX + dx
+      viewerPanY.value = panStartPanY + dy
+      syncCanvasToViewer()
+      return
+    }
+    
     if (!isDrawing) return
     
     const pointer = fCanvas.value.getScenePoint(opt.e)
@@ -857,6 +940,17 @@ const initCanvasEvents = () => {
   })
 
   fCanvas.value.on('mouse:up', (opt) => {
+    // Reset user clicking flag
+    isUserClickingCanvas = false
+    
+    // Handle panning end
+    if (isPanning) {
+      isPanning = false
+      panStartPoint = null
+      fCanvas.value!.defaultCursor = activeTool.value === 'select' ? 'default' : 'crosshair'
+      return
+    }
+    
     if (activeTool.value === 'rect' && isDrawing) {
       if (tempObj && (tempObj.width > 2 || tempObj.height > 2)) {
         finishDrawing()
@@ -888,6 +982,12 @@ const initCanvasEvents = () => {
 
   fCanvas.value.on('selection:cleared', () => {
     selectedId.value = null
+    // Only clear label selection when user clicks on empty canvas (not when switching via keyboard)
+    if (isUserClickingCanvas) {
+      activeLabelId.value = null
+      activeTool.value = 'select'
+    }
+    isUserClickingCanvas = false
   })
 
   fCanvas.value.on('object:modified', (e) => {
@@ -978,7 +1078,7 @@ const finishDrawing = () => {
       height: tempObj.height,
       fill: `${color}1A`,
       stroke: color,
-      strokeWidth: 2,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1022,7 +1122,7 @@ const finishDrawing = () => {
     const poly = new Polygon(polygonPoints, {
       fill: `${color}1A`,
       stroke: color,
-      strokeWidth: 2,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1056,7 +1156,6 @@ const finishDrawing = () => {
 
   if (newAnn) {
     images[currentImgIndex.value].annotations.push(newAnn)
-    activeTool.value = 'select'
   }
   
   tempObj = null
@@ -1133,7 +1232,7 @@ const drawAnnotation = (ann: Annotation) => {
       height: ann.points[3],
       fill: `${ann.color}1A`,
       stroke: ann.color,
-      strokeWidth: 2,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1170,7 +1269,7 @@ const drawAnnotation = (ann: Annotation) => {
     const poly = new Polygon(points.length > 0 ? points : (ann.points as any), {
       fill: `${ann.color}1A`,
       stroke: ann.color,
-      strokeWidth: 2,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1218,7 +1317,7 @@ const highlightAnnotation = (id: string | null) => {
       if (obj.id === id) {
         // Apply glow effect
         obj.set({
-          strokeWidth: 4,
+          strokeWidth: 1,
           shadow: {
             color: obj.stroke,
             blur: 15,
@@ -1233,7 +1332,7 @@ const highlightAnnotation = (id: string | null) => {
       } else {
         // Reset to normal
         obj.set({
-          strokeWidth: 2,
+          strokeWidth: 1,
           shadow: null
         })
       }
@@ -1577,6 +1676,15 @@ watch(showLabelPanel, async () => {
           <div ref="viewerViewportRef" class="w-full h-full relative overflow-hidden flex items-center justify-center rounded-lg bg-background/40 shadow-2xl">
             <canvas ref="canvasRef"></canvas>
           </div>
+        </div>
+        <!-- Operation Hints -->
+        <div class="h-8 bg-background border-t flex items-center justify-center gap-4 text-[11px] text-muted-foreground select-none">
+          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">滚轮</kbd> 缩放</span>
+          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">中键/空格+拖动</kbd> 平移</span>
+          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">右键</kbd> 取消标注</span>
+          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">1-9</kbd> 选择标签</span>
+          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">V/R/P</kbd> 选择/矩形/多边形</span>
+          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">Delete</kbd> 删除</span>
         </div>
       </main>
 

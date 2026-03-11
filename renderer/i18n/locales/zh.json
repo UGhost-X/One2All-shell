@@ -406,7 +406,7 @@
     "selectProduct": "选择项目",
     "refresh": "刷新",
     "pleaseSelectProduct": "请先选择一个项目",
-    "deployableModels": "可部署模型",
+    "deployableModels": "模型列表",
     "loadingModels": "加载中...",
     "noModels": "暂无可部署的模型，请先完成训练",
     "modelCount": "{count} 个模型",

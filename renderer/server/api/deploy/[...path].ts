@@ -154,7 +154,6 @@ export default defineEventHandler(async (event) => {
     const projectId = eventPath.split('/api/deploy/models/')[1]
     
     try {
-      // 使用 /project/{project_id}/models 接口（支持新旧结构）
       const res = await fetch(`${pythonApiBase}/project/${projectId}/models`)
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`)

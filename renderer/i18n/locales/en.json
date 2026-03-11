@@ -390,7 +390,7 @@
     "selectProduct": "Select Product",
     "refresh": "Refresh",
     "pleaseSelectProduct": "Please select a product first",
-    "deployableModels": "Deployable Models",
+    "deployableModels": "Model List",
     "loadingModels": "Loading...",
     "noModels": "No deployable models available, please complete training first",
     "modelCount": "{count} models",

@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical, Zap } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical, Zap, Eye, EyeOff, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -2531,59 +2531,39 @@ const resumeGroup = async () => {
 
 const presetsData = ref({
   none: {
-    horizontal_flip: { enabled: false, prob: [0.5] },
-    vertical_flip: { enabled: false, prob: [0.5] },
     rotate: { enabled: false, angle: [30] },
     brightness: { enabled: false, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    pitch: { enabled: false, angle: [0] },
-    yaw: { enabled: false, angle: [0] },
     num_results: [1]
   },
   basic: {
-    horizontal_flip: { enabled: true, prob: [0.5] },
-    vertical_flip: { enabled: true, prob: [0.5] },
     rotate: { enabled: true, angle: [15] },
     brightness: { enabled: true, min: 0.9, max: 1.1 },
     contrast: { enabled: true, min: 0.9, max: 1.1 },
     blur: { enabled: false, ksize: [3] },
-    pitch: { enabled: true, angle: [5] },
-    yaw: { enabled: true, angle: [5] },
     num_results: [1]
   },
   standard: {
-    horizontal_flip: { enabled: true, prob: [0.5] },
-    vertical_flip: { enabled: true, prob: [0.5] },
     rotate: { enabled: true, angle: [45] },
     brightness: { enabled: true, min: 0.8, max: 1.2 },
     contrast: { enabled: true, min: 0.8, max: 1.2 },
     blur: { enabled: true, ksize: [3] },
-    pitch: { enabled: true, angle: [10] },
-    yaw: { enabled: true, angle: [10] },
     num_results: [1]
   },
   heavy: {
-    horizontal_flip: { enabled: true, prob: [0.5] },
-    vertical_flip: { enabled: true, prob: [0.5] },
     rotate: { enabled: true, angle: [90] },
     brightness: { enabled: true, min: 0.6, max: 1.4 },
     contrast: { enabled: true, min: 0.6, max: 1.4 },
     blur: { enabled: true, ksize: [5] },
-    pitch: { enabled: true, angle: [20] },
-    yaw: { enabled: true, angle: [20] },
     num_results: [1]
   },
   custom: {
-    horizontal_flip: { enabled: true, prob: [0.5] },
-    vertical_flip: { enabled: true, prob: [0.5] },
     rotate: { enabled: true, angle: [45] },
     brightness: { enabled: true, min: 0.8, max: 1.2 },
     contrast: { enabled: true, min: 0.8, max: 1.2 },
     blur: { enabled: true, ksize: [3] },
-    pitch: { enabled: true, angle: [10] },
-    yaw: { enabled: true, angle: [10] },
-    num_results: [1]
+    num_results: [40]
   }
 })
 
@@ -2599,6 +2579,21 @@ const applyPreset = (type: 'none' | 'basic' | 'standard' | 'heavy' | 'custom') =
 }
 
 const previewImage = ref<string | null>(null)
+const previewImageIndex = ref<number | null>(null)
+const previewShowAnnotations = ref(true)
+
+const showPrevImage = () => {
+  if (previewImageIndex.value === null || previewImageIndex.value <= 0) return
+  previewImageIndex.value--
+  previewImage.value = augmentedResults.value[previewImageIndex.value]?.imageUrl || null
+}
+
+const showNextImage = () => {
+  if (previewImageIndex.value === null || previewImageIndex.value >= augmentedResults.value.length - 1) return
+  previewImageIndex.value++
+  previewImage.value = augmentedResults.value[previewImageIndex.value]?.imageUrl || null
+}
+
 const selectedIndices = ref<Set<number>>(new Set())
 
 const toggleImageSelection = (index: number) => {
@@ -2630,8 +2625,6 @@ const activeAugmentations = computed(() => {
   if (augmentConfig.value.brightness.enabled) items.push({ value: 'brightness', label: t('training.visual.brightness') })
   if (augmentConfig.value.contrast.enabled) items.push({ value: 'contrast', label: t('training.visual.contrast') })
   if (augmentConfig.value.blur.enabled) items.push({ value: 'blur', label: t('training.visual.blur') })
-  if (augmentConfig.value.pitch.enabled) items.push({ value: 'pitch', label: t('training.geometric.pitch') })
-  if (augmentConfig.value.yaw.enabled) items.push({ value: 'yaw', label: t('training.geometric.yaw') })
   return items
 })
 
@@ -2788,9 +2781,7 @@ watch(
     if (sliceConfig.value.x === 'rotate' || sliceConfig.value.y === 'rotate') augmentConfig.value.rotate.enabled = true
     if (sliceConfig.value.x === 'brightness' || sliceConfig.value.y === 'brightness') augmentConfig.value.brightness.enabled = true
     if (sliceConfig.value.x === 'contrast' || sliceConfig.value.y === 'contrast') augmentConfig.value.contrast.enabled = true
-  if (sliceConfig.value.x === 'blur' || sliceConfig.value.y === 'blur') augmentConfig.value.blur.enabled = true
-  if (sliceConfig.value.x === 'pitch' || sliceConfig.value.y === 'pitch') augmentConfig.value.pitch.enabled = true
-  if (sliceConfig.value.x === 'yaw' || sliceConfig.value.y === 'yaw') augmentConfig.value.yaw.enabled = true
+    if (sliceConfig.value.x === 'blur' || sliceConfig.value.y === 'blur') augmentConfig.value.blur.enabled = true
 },
 { immediate: true }
 )
@@ -2818,14 +2809,10 @@ const trainConfig = ref({
 
 const enabledAugmentations = computed(() => {
   const enabled = []
-  if (augmentConfig.value.horizontal_flip.enabled) enabled.push(t('training.geometric.horizontalFlip'))
-  if (augmentConfig.value.vertical_flip.enabled) enabled.push(t('training.geometric.verticalFlip'))
   if (augmentConfig.value.rotate.enabled) enabled.push(t('training.geometric.rotate'))
   if (augmentConfig.value.brightness.enabled) enabled.push(t('training.visual.brightness'))
   if (augmentConfig.value.contrast.enabled) enabled.push(t('training.visual.contrast'))
   if (augmentConfig.value.blur.enabled) enabled.push(t('training.visual.blur'))
-  if (augmentConfig.value.pitch.enabled) enabled.push(t('training.geometric.pitch'))
-  if (augmentConfig.value.yaw.enabled) enabled.push(t('training.geometric.yaw'))
   return enabled.length > 0 ? enabled.join('、') : t('training.preview.noAugmentations')
 })
 
@@ -2922,14 +2909,10 @@ const handleAugment = async () => {
     }
 
     const augConfig: any = {}
-    if (augmentConfig.value.horizontal_flip.enabled) augConfig.horizontal_flip = {}
-    if (augmentConfig.value.vertical_flip.enabled) augConfig.vertical_flip = {}
     if (augmentConfig.value.rotate.enabled) augConfig.rotate = { range: [-augmentConfig.value.rotate.angle[0], augmentConfig.value.rotate.angle[0]] }
     if (augmentConfig.value.brightness.enabled) augConfig.brightness = { range: [augmentConfig.value.brightness.min, augmentConfig.value.brightness.max] }
     if (augmentConfig.value.contrast.enabled) augConfig.contrast = { range: [augmentConfig.value.contrast.min, augmentConfig.value.contrast.max] }
     if (augmentConfig.value.blur.enabled) augConfig.blur = { ksize_range: [1, augmentConfig.value.blur.ksize[0]] }
-    if (augmentConfig.value.pitch.enabled) augConfig.pitch = { range: [-augmentConfig.value.pitch.angle[0], augmentConfig.value.pitch.angle[0]] }
-    if (augmentConfig.value.yaw.enabled) augConfig.yaw = { range: [-augmentConfig.value.yaw.angle[0], augmentConfig.value.yaw.angle[0]] }
     
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const apiUrl = `${apiBase.replace(/\/$/, '')}/augment`
@@ -3150,6 +3133,29 @@ onBeforeUnmount(() => {
   closeMonitorStream()
   stopGroupPolling()
 })
+
+// 键盘事件处理
+const handleKeydown = (e: KeyboardEvent) => {
+  if (!previewImage.value) return
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    showPrevImage()
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault()
+    showNextImage()
+  } else if (e.key === 'Escape') {
+    previewImage.value = null
+    previewImageIndex.value = null
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <template>
@@ -3278,11 +3284,11 @@ onBeforeUnmount(() => {
                                         <span class="text-xs text-muted-foreground">包含 {{ ds.images.length }} 张图片</span>
                                      </div>
                                      <div class="grid grid-cols-6 gap-3 max-h-[400px] overflow-y-auto custom-scrollbar p-1">
-                                       <div 
-                                         v-for="(img, i) in ds.images" 
-                                         :key="i" 
+                                       <div
+                                         v-for="(img, i) in ds.images"
+                                         :key="i"
                                          class="aspect-square rounded-xl border relative cursor-zoom-in hover:ring-2 ring-primary/50 shadow-sm group/img"
-                                         @click.stop="previewImage = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url"
+                                         @click.stop="previewImage = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url; previewImageIndex = null"
                                        >
                                          <img :src="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url" class="w-full h-full object-cover transition-transform group-hover/img:scale-110 rounded-xl" loading="lazy" />
                                        </div>
@@ -3534,22 +3540,6 @@ onBeforeUnmount(() => {
               <!-- 几何变换组 -->
               <div class="space-y-2">
                 <Label class="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">{{ t('training.geometric.title') }}</Label>
-                <div class="grid grid-cols-2 gap-2">
-                  <button 
-                    @click="augmentConfig.horizontal_flip.enabled = !augmentConfig.horizontal_flip.enabled"
-                    :class="['flex items-center justify-center gap-2 h-9 border rounded-md text-xs transition-colors', 
-                      augmentConfig.horizontal_flip.enabled ? 'bg-primary/10 border-primary text-primary font-medium' : 'hover:bg-muted']"
-                  >
-                    {{ t('training.geometric.horizontalFlip') }}
-                  </button>
-                  <button 
-                    @click="augmentConfig.vertical_flip.enabled = !augmentConfig.vertical_flip.enabled"
-                    :class="['flex items-center justify-center gap-2 h-9 border rounded-md text-xs transition-colors', 
-                      augmentConfig.vertical_flip.enabled ? 'bg-primary/10 border-primary text-primary font-medium' : 'hover:bg-muted']"
-                  >
-                    {{ t('training.geometric.verticalFlip') }}
-                  </button>
-                </div>
                 
                 <div class="p-3 border rounded-lg space-y-3">
                   <div class="flex items-center justify-between">
@@ -3562,34 +3552,6 @@ onBeforeUnmount(() => {
                       <span>{{ augmentConfig.rotate.angle[0] }}°</span>
                     </div>
                     <Slider v-model="augmentConfig.rotate.angle" :min="0" :max="180" :step="1" />
-                  </div>
-                </div>
-
-                <div class="p-3 border rounded-lg space-y-3">
-                  <div class="flex items-center justify-between">
-                    <Label class="text-xs">{{ t('training.geometric.pitch') }}</Label>
-                    <input type="checkbox" v-model="augmentConfig.pitch.enabled" class="h-3 w-3" />
-                  </div>
-                  <div v-if="augmentConfig.pitch.enabled" class="space-y-2">
-                    <div class="flex justify-between text-[10px]">
-                      <span>{{ t('training.geometric.angleRange') }}</span>
-                      <span>±{{ augmentConfig.pitch.angle[0] }}°</span>
-                    </div>
-                    <Slider v-model="augmentConfig.pitch.angle" :min="0" :max="45" :step="1" />
-                  </div>
-                </div>
-
-                <div class="p-3 border rounded-lg space-y-3">
-                  <div class="flex items-center justify-between">
-                    <Label class="text-xs">{{ t('training.geometric.yaw') }}</Label>
-                    <input type="checkbox" v-model="augmentConfig.yaw.enabled" class="h-3 w-3" />
-                  </div>
-                  <div v-if="augmentConfig.yaw.enabled" class="space-y-2">
-                    <div class="flex justify-between text-[10px]">
-                      <span>{{ t('training.geometric.angleRange') }}</span>
-                      <span>±{{ augmentConfig.yaw.angle[0] }}°</span>
-                    </div>
-                    <Slider v-model="augmentConfig.yaw.angle" :min="0" :max="45" :step="1" />
                   </div>
                 </div>
               </div>
@@ -3836,7 +3798,7 @@ onBeforeUnmount(() => {
                             class="relative group w-full bg-background shadow-sm transition-all cursor-pointer hover:border-primary/50 rounded-lg overflow-hidden border-2 bg-clip-padding"
                             :class="[selectedIndices.has(idx) ? 'border-primary ring-2 ring-primary/20' : 'border-border']"
                             @click="toggleImageSelection(idx)"
-                            @dblclick="previewImage = res.imageUrl">
+                            @dblclick="previewImage = res.imageUrl; previewImageIndex = idx">
                           <div class="relative w-full">
                             <img :src="res.imageUrl" class="w-full h-auto block" />
                             <!-- 增强图标注 -->
@@ -4545,18 +4507,63 @@ onBeforeUnmount(() => {
 
     <div v-if="previewImage" 
          class="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 md:p-12 animate-in fade-in zoom-in duration-200"
-         @click="previewImage = null">
+         @click="previewImage = null; previewImageIndex = null">
       <div class="relative max-w-[90vw] max-h-[90vh] flex items-center justify-center group" @click.stop>
-        <img :src="previewImage" class="max-w-full max-h-[85vh] object-contain rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/10" />
-        <button 
-          class="absolute -top-3 -right-3 w-10 h-10 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
-          @click="previewImage = null"
+        <div class="relative">
+          <img :src="previewImage" class="max-w-full max-h-[85vh] object-contain rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/10" />
+          <!-- 预览标注框 -->
+          <svg v-if="previewShowAnnotations && previewImageIndex !== null && augmentedResults[previewImageIndex]?.annotations?.length > 0 && augmentedResults[previewImageIndex]?.width" 
+               class="absolute top-0 left-0 w-full h-full pointer-events-none" 
+               :viewBox="`0 0 ${augmentedResults[previewImageIndex].width} ${augmentedResults[previewImageIndex].height}`"
+               preserveAspectRatio="xMidYMid meet">
+            <polygon 
+              v-for="ann in augmentedResults[previewImageIndex].annotations" 
+              :key="ann.id"
+              :points="getSvgPoints(ann)"
+              fill="transparent"
+              :stroke="ann.color"
+              stroke-width="3"
+              vector-effect="non-scaling-stroke"
+            />
+          </svg>
+        </div>
+        <button
+          class="fixed top-6 right-6 w-10 h-10 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
+          @click="previewImage = null; previewImageIndex = null"
         >
           <X class="h-5 w-5" />
         </button>
-        <!-- Info Overlay on hover -->
-        <div class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/60 backdrop-blur-md rounded-full text-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-          {{ t('training.view.previewMode') }}
+        <!-- 标注框显示切换按钮 -->
+        <button
+          v-if="previewImageIndex !== null && augmentedResults[previewImageIndex]?.annotations?.length > 0"
+          class="fixed top-6 left-6 w-10 h-10 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
+          :class="previewShowAnnotations ? 'text-primary' : 'text-muted-foreground'"
+          @click="previewShowAnnotations = !previewShowAnnotations"
+          :title="previewShowAnnotations ? '隐藏标注框' : '显示标注框'"
+        >
+          <component :is="previewShowAnnotations ? Eye : EyeOff" class="h-5 w-5" />
+        </button>
+        <!-- 上一张按钮 -->
+        <button 
+          v-if="previewImageIndex !== null && previewImageIndex > 0"
+          class="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
+          @click="showPrevImage"
+          title="上一张 (←)"
+        >
+          <ChevronLeft class="h-6 w-6" />
+        </button>
+        <!-- 下一张按钮 -->
+        <button 
+          v-if="previewImageIndex !== null && previewImageIndex < augmentedResults.length - 1"
+          class="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
+          @click="showNextImage"
+          title="下一张 (→)"
+        >
+          <ChevronRight class="h-6 w-6" />
+        </button>
+        <!-- 图片计数 -->
+        <div v-if="previewImageIndex !== null" class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/60 backdrop-blur-md rounded-full text-white text-xs font-medium">
+          {{ previewImageIndex + 1 }} / {{ augmentedResults.length }}
         </div>
       </div>
     </div>

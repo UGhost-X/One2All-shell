@@ -26,7 +26,13 @@ import {
   Pencil,
   Wand2,
   Loader2,
-  Eye
+  Eye,
+  EyeOff,
+  ChevronDown,
+  CheckCircle2,
+  AlertCircle,
+  MapPin,
+  Sparkles
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
@@ -323,11 +329,12 @@ const gainValue = ref(1.2)
 
 const predictionConfidence = ref<number | null>(null)
 const predictionResults = ref<Array<{ label: string; score: number }>>([])
-const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }>>([])
+const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string; visible?: boolean }>>([])
 
 const inferenceServices = ref<Array<{ service_id: string; task_uuid: string; port: number; inference_url: string; labels: string[] }>>([])
 const selectedInferenceService = ref<string>('')
 const isInferring = ref(false)
+let inferenceAbortController: AbortController | null = null
 const showInferenceModal = ref(false)
 const inferenceImageUrl = ref('')
 const inferenceFileInput = ref<HTMLInputElement | null>(null)
@@ -738,13 +745,67 @@ const handleGainInput = (value: string | number) => {
 }
 
 // Prediction Actions
+const showDetectionLabels = ref(true)
+const normalGroupCollapsed = ref(false)
+const anomalyGroupCollapsed = ref(false)
+
+// 高亮检测框状态
+const highlightedIndex = ref<number | null>(null)
+let highlightTimer: NodeJS.Timeout | null = null
+let breatheAnimationId: number | null = null
+
+// 双击高亮检测框
+const highlightDetectionBox = (index: number) => {
+  // 清除之前的定时器
+  if (highlightTimer) {
+    clearTimeout(highlightTimer)
+  }
+  // 设置新的高亮索引
+  highlightedIndex.value = index
+  // 5秒后清除高亮
+  highlightTimer = setTimeout(() => {
+    highlightedIndex.value = null
+    if (breatheAnimationId) {
+      cancelAnimationFrame(breatheAnimationId)
+      breatheAnimationId = null
+    }
+    drawDetectionBoxes()
+  }, 5000)
+  // 开始呼吸动画
+  startBreatheAnimation()
+}
+
+// 呼吸动画
+const startBreatheAnimation = () => {
+  const animate = () => {
+    if (highlightedIndex.value === null) return
+    drawDetectionBoxes()
+    breatheAnimationId = requestAnimationFrame(animate)
+  }
+  animate()
+}
+
 const clearResults = () => {
   predictionConfidence.value = null
   predictionResults.value = []
   detectionResults.value = []
+  normalGroupCollapsed.value = false
+  anomalyGroupCollapsed.value = false
+  highlightedIndex.value = null
+  if (highlightTimer) {
+    clearTimeout(highlightTimer)
+    highlightTimer = null
+  }
+  if (breatheAnimationId) {
+    cancelAnimationFrame(breatheAnimationId)
+    breatheAnimationId = null
+  }
 }
 
 const openInferenceModal = () => {
+  if (isInferring.value) {
+    return
+  }
   if (inferenceServices.value.length === 0) {
     showToast('当前没有可用的推理服务，请先在部署页面启动服务', 'error')
     return
@@ -775,6 +836,10 @@ const triggerInferenceFileInput = () => {
 }
 
 const startInference = async () => {
+  if (isInferring.value) {
+    return
+  }
+  
   await fetchInferenceServices()
   
   if (inferenceServices.value.length === 0) {
@@ -786,6 +851,9 @@ const startInference = async () => {
   input.type = 'file'
   input.accept = 'image/*'
   input.onchange = async (e) => {
+    if (isInferring.value) {
+      return
+    }
     const file = (e.target as HTMLInputElement).files?.[0]
     if (!file) return
     
@@ -796,6 +864,7 @@ const startInference = async () => {
       reader.readAsDataURL(file)
     })
     
+    inferenceImageUrl.value = dataUrl
     mainViewUrl.value = dataUrl
     mainViewState.value = 'image'
     
@@ -813,20 +882,39 @@ const runInference = async () => {
     return
   }
 
+  if (isInferring.value) {
+    if (inferenceAbortController) {
+      inferenceAbortController.abort()
+    }
+  }
+  
+  inferenceAbortController = new AbortController()
+
   isInferring.value = true
   clearResults()
 
   try {
+    if (inferenceAbortController?.signal.aborted) {
+      return
+    }
+
     const formData = new FormData()
     formData.append('service_id', selectedInferenceService.value)
     
-    const response = await fetch(imageToUse)
+    const response = await fetch(imageToUse, { signal: inferenceAbortController?.signal })
+    if (inferenceAbortController?.signal.aborted) {
+      return
+    }
     const blob = await response.blob()
+    if (inferenceAbortController?.signal.aborted) {
+      return
+    }
     formData.append('file', blob, 'image.jpg')
     
     const res = await fetch('/api/deploy/inference', {
       method: 'POST',
-      body: formData
+      body: formData,
+      signal: inferenceAbortController?.signal
     })
 
     const data = await res.json()
@@ -834,7 +922,6 @@ const runInference = async () => {
     if (data.status === 'success' && data.result) {
       const result = data.result
       
-      // 处理 /predict_roi 返回格式 - results 是数组
       if (result.results && Array.isArray(result.results)) {
         const roiResults = result.results
         detectionResults.value = roiResults.map((r: any) => ({
@@ -844,7 +931,8 @@ const runInference = async () => {
           isAnomaly: r.is_anomaly || false,
           error: r.error || 0,
           threshold: r.threshold || 0,
-          alignmentStrategy: r.alignment_strategy || 'ORB'
+          alignmentStrategy: r.alignment_strategy || 'ORB',
+          visible: true
         }))
         const anomalyCount = roiResults.filter((r: any) => r.is_anomaly).length
         if (detectionResults.value.length > 0) {
@@ -858,7 +946,8 @@ const runInference = async () => {
         detectionResults.value = result.detections.map((d: any) => ({
           label: d.label || d.class || '未知',
           score: (d.score || d.confidence || d.probability || 0) * 100,
-          bbox: d.bbox || d.box || [0, 0, 0, 0]
+          bbox: d.bbox || d.box || [0, 0, 0, 0],
+          visible: true
         }))
         if (detectionResults.value.length > 0) {
           const maxScore = Math.max(...detectionResults.value.map(r => r.score))
@@ -904,12 +993,15 @@ const runInference = async () => {
       showToast(data.message || '推理失败', 'error')
     }
   } catch (err: any) {
+    if (err.name === 'AbortError' || err.name === 'DOMException') {
+      return
+    }
     console.error('Inference error:', err)
     showToast(err.message || '推理请求失败', 'error')
   } finally {
     isInferring.value = false
     showInferenceModal.value = false
-    // 绘制检测框
+    inferenceAbortController = null
     if (detectionResults.value.length > 0) {
       nextTick(() => drawDetectionBoxes())
     }
@@ -932,8 +1024,17 @@ const drawDetectionBoxes = () => {
   // 清空画布
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+  // 根据图片分辨率计算自适应字体大小和线宽
+  const minDimension = Math.min(canvas.width, canvas.height)
+  const fontSize = Math.max(12, Math.round(minDimension / 50))
+  const lineWidth = Math.max(2, Math.round(minDimension / 300))
+  const padding = Math.max(4, Math.round(fontSize / 4))
+
   // 绘制每个检测框
   detectionResults.value.forEach((det, index) => {
+    // 跳过不可见的检测框
+    if (det.visible === false) return
+
     const [x, y, w, h] = det.bbox
     let color = `hsl(${(index * 60) % 360}, 70%, 50%)`
     if (det.isAnomaly === true) {
@@ -942,29 +1043,67 @@ const drawDetectionBoxes = () => {
       color = 'hsl(120, 70%, 50%)'
     }
 
+    // 检查是否是高亮的检测框
+    const isHighlighted = highlightedIndex.value === index
+    let currentColor = color
+    let glowColor = ''
+
+    if (isHighlighted) {
+      // 呼吸效果：使用正弦波计算透明度变化
+      const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2 // 0 到 1
+      const alpha = 0.5 + breatheIntensity * 0.5 // 0.5 到 1
+
+      // 解析原始颜色并添加透明度
+      if (det.isAnomaly === true) {
+        currentColor = `rgba(239, 68, 68, ${alpha})`
+        glowColor = 'rgba(239, 68, 68,'
+      } else if (det.isAnomaly === false) {
+        currentColor = `rgba(34, 197, 94, ${alpha})`
+        glowColor = 'rgba(34, 197, 94,'
+      } else {
+        currentColor = `rgba(100, 100, 100, ${alpha})`
+        glowColor = 'rgba(100, 100, 100,'
+      }
+
+      // 绘制边缘发光效果
+      const glowSize = 8 + breatheIntensity * 6
+      const glowAlpha = alpha * 0.4
+      ctx.strokeStyle = `${glowColor}${glowAlpha})`
+      ctx.lineWidth = lineWidth + glowSize * 2
+      ctx.strokeRect(x - glowSize, y - glowSize, w + glowSize * 2, h + glowSize * 2)
+    }
+
     // 绘制矩形框
-    ctx.strokeStyle = color
-    ctx.lineWidth = 3
+    ctx.strokeStyle = currentColor
+    ctx.lineWidth = lineWidth
     ctx.strokeRect(x, y, w, h)
 
-    // 绘制标签背景
-    const label = `${det.label} ${det.score.toFixed(1)}%${det.isAnomaly !== undefined ? (det.isAnomaly ? ' 异常' : ' 正常') : ''}`
-    ctx.font = 'bold 16px sans-serif'
-    const textMetrics = ctx.measureText(label)
-    const textWidth = textMetrics.width
-    const textHeight = 20
+    // 绘制标签背景 - 只显示 OK/NG
+    if (showDetectionLabels.value && det.visible !== false) {
+      const label = det.isAnomaly !== undefined ? (det.isAnomaly ? 'NG' : 'OK') : det.label
+      ctx.font = `bold ${fontSize}px sans-serif`
+      const textMetrics = ctx.measureText(label)
+      const textWidth = textMetrics.width
+      const textHeight = fontSize
 
-    ctx.fillStyle = color
-    ctx.fillRect(x, y - textHeight - 4, textWidth + 8, textHeight + 4)
+      ctx.fillStyle = isHighlighted ? currentColor : color
+      ctx.fillRect(x, y - textHeight - padding * 2, textWidth + padding * 2, textHeight + padding * 2)
 
-    // 绘制标签文字
-    ctx.fillStyle = 'white'
-    ctx.fillText(label, x + 4, y - 6)
+      // 绘制标签文字
+      ctx.fillStyle = 'white'
+      ctx.fillText(label, x + padding, y - padding - 2)
+    }
   })
 }
 
 // 监听检测结果变化，自动绘制
 watch(detectionResults, () => {
+  if (detectionResults.value.length > 0) {
+    nextTick(() => drawDetectionBoxes())
+  }
+}, { deep: true })
+
+watch(showDetectionLabels, () => {
   if (detectionResults.value.length > 0) {
     nextTick(() => drawDetectionBoxes())
   }
@@ -986,6 +1125,10 @@ onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', syncFullscreenState)
   viewerResizeObserver?.disconnect()
   viewerResizeObserver = null
+  if (inferenceAbortController) {
+    inferenceAbortController.abort()
+    inferenceAbortController = null
+  }
 })
 </script>
 
@@ -1150,7 +1293,7 @@ onBeforeUnmount(() => {
         </div>
       </main>
 
-      <aside class="col-span-1 bg-card flex flex-col h-full">
+      <aside class="col-span-1 bg-card flex flex-col h-full overflow-hidden">
         <Tabs v-model="activeTab" class="flex flex-col h-full">
           <!-- Tabs Header -->
           <div class="border-b bg-muted/30 shrink-0">
@@ -1338,44 +1481,95 @@ onBeforeUnmount(() => {
           </section>
 
           <!-- Prediction Results -->
-          <section class="flex-[1.5] flex flex-col min-h-0">
+          <section class="flex-[1.5] flex flex-col min-h-0 overflow-hidden">
             <div class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0">
               <div class="flex items-center gap-2">
                 <BarChart3 class="h-4 w-4 text-primary" />
                 <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.predictionResults') }}</span>
               </div>
-              <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click="clearResults">
-                <RotateCcw class="h-3 w-3" />
-                {{ t('dashboard.clear') }}
-              </UiButton>
+              <div class="flex items-center gap-1">
+                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionLabels ? 'text-primary' : 'text-muted-foreground'" @click="showDetectionLabels = !showDetectionLabels">
+                  <component :is="showDetectionLabels ? Eye : EyeOff" class="h-3 w-3" />
+                </UiButton>
+                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click="clearResults">
+                  <RotateCcw class="h-3 w-3" />
+                  {{ t('dashboard.clear') }}
+                </UiButton>
+              </div>
             </div>
-            <div class="flex-1 overflow-y-auto p-4">
+            <div class="flex-1 overflow-y-auto p-4 min-h-0">
               <!-- 目标检测结果 -->
-              <div v-if="detectionResults.length > 0" class="space-y-4">
-                <div class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
-                  <div>
-                    <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">目标检测</div>
-                    <div class="text-2xl font-bold tracking-tighter">{{ detectionResults.length }} 个目标</div>
+              <div v-if="detectionResults.length > 0" class="space-y-3">
+                <!-- 正常分组 -->
+                <div v-if="detectionResults.filter(d => !d.isAnomaly).length > 0" class="rounded-xl border border-green-500/20 bg-gradient-to-br from-green-500/5 to-green-500/10 overflow-hidden">
+                  <button 
+                    @click="normalGroupCollapsed = !normalGroupCollapsed"
+                    class="w-full px-4 py-3 flex items-center justify-between hover:bg-green-500/5 transition-colors"
+                  >
+                    <div class="flex items-center gap-2">
+                      <div class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]"></div>
+                      <span class="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">正常</span>
+                      <span class="text-[10px] font-mono text-green-500/70 bg-green-500/10 px-2 py-0.5 rounded-full">{{ detectionResults.filter(d => !d.isAnomaly).length }}</span>
+                    </div>
+                    <ChevronDown 
+                      class="h-4 w-4 text-green-500 transition-transform duration-200" 
+                      :class="{ 'rotate-180': !normalGroupCollapsed }"
+                    />
+                  </button>
+                  <div v-show="!normalGroupCollapsed" class="px-3 pb-3 space-y-1">
+                    <div v-for="(item, index) in detectionResults" :key="'normal-' + index">
+                      <div v-if="!item.isAnomaly" @dblclick="highlightDetectionBox(index)" class="px-3 py-2 rounded-lg bg-background/60 border border-green-500/10 hover:border-green-500/30 transition-all hover:shadow-sm cursor-pointer">
+                        <div class="flex items-center justify-between">
+                          <div class="flex items-center gap-2">
+                            <button
+                              @click.stop="item.visible = !item.visible"
+                              class="flex items-center justify-center transition-colors hover:opacity-70"
+                            >
+                              <Eye v-if="item.visible" class="h-3.5 w-3.5 text-green-500" />
+                              <EyeOff v-else class="h-3.5 w-3.5 text-muted-foreground" />
+                            </button>
+                            <span class="text-xs font-semibold text-foreground">{{ item.label }}</span>
+                          </div>
+                          <span class="text-xs font-mono font-bold text-green-600">{{ item.score.toFixed(1) }}%</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div class="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin-slow"></div>
                 </div>
 
-                <div class="space-y-3">
-                  <div v-for="(item, index) in detectionResults" :key="index" class="space-y-1.5">
-                    <div class="flex justify-between text-[10px] font-bold">
-                      <span class="text-muted-foreground uppercase tracking-tight">
-                        {{ item.label }}
-                        <span v-if="item.isAnomaly !== undefined" :class="item.isAnomaly ? 'text-red-500' : 'text-green-500'">
-                          ({{ item.isAnomaly ? '异常' : '正常' }})
-                        </span>
-                      </span>
-                      <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
+                <!-- 异常分组 -->
+                <div v-if="detectionResults.filter(d => d.isAnomaly).length > 0" class="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/5 to-red-500/10 overflow-hidden">
+                  <button 
+                    @click="anomalyGroupCollapsed = !anomalyGroupCollapsed"
+                    class="w-full px-4 py-3 flex items-center justify-between hover:bg-red-500/5 transition-colors"
+                  >
+                    <div class="flex items-center gap-2">
+                      <div class="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"></div>
+                      <span class="text-xs font-bold text-red-600 dark:text-red-400 uppercase tracking-wider">异常</span>
+                      <span class="text-[10px] font-mono text-red-500/70 bg-red-500/10 px-2 py-0.5 rounded-full">{{ detectionResults.filter(d => d.isAnomaly).length }}</span>
                     </div>
-                    <Progress :model-value="item.score" class="h-1.5" />
-                    <div class="text-[9px] text-muted-foreground/60">
-                      位置: [{{ item.bbox.map(v => Math.round(v)).join(', ') }}]
-                      <span v-if="item.error"> | 误差: {{ item.error.toFixed(3) }}</span>
-                      <span v-if="item.alignmentStrategy"> | {{ item.alignmentStrategy }}</span>
+                    <ChevronDown 
+                      class="h-4 w-4 text-red-500 transition-transform duration-200" 
+                      :class="{ 'rotate-180': !anomalyGroupCollapsed }"
+                    />
+                  </button>
+                  <div v-show="!anomalyGroupCollapsed" class="px-3 pb-3 space-y-1">
+                    <div v-for="(item, index) in detectionResults" :key="'anomaly-' + index">
+                      <div v-if="item.isAnomaly" @dblclick="highlightDetectionBox(index)" class="px-3 py-2 rounded-lg bg-background/60 border border-red-500/10 hover:border-red-500/30 transition-all hover:shadow-sm cursor-pointer">
+                        <div class="flex items-center justify-between">
+                          <div class="flex items-center gap-2">
+                            <button
+                              @click.stop="item.visible = !item.visible"
+                              class="flex items-center justify-center transition-colors hover:opacity-70"
+                            >
+                              <Eye v-if="item.visible" class="h-3.5 w-3.5 text-red-500" />
+                              <EyeOff v-else class="h-3.5 w-3.5 text-muted-foreground" />
+                            </button>
+                            <span class="text-xs font-semibold text-foreground">{{ item.label }}</span>
+                          </div>
+                          <span class="text-xs font-mono font-bold text-red-600">{{ item.score.toFixed(1) }}%</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1383,28 +1577,32 @@ onBeforeUnmount(() => {
 
               <!-- 分类结果 -->
               <div v-else-if="predictionResults.length > 0" class="space-y-4">
-                <div v-if="predictionConfidence !== null" class="p-3 rounded-xl bg-primary/5 border border-primary/10 flex items-center justify-between">
-                  <div>
-                    <div class="text-[9px] font-bold text-primary uppercase tracking-widest mb-0.5">置信度评分</div>
-                    <div class="text-2xl font-bold tracking-tighter">{{ predictionConfidence.toFixed(1) }}%</div>
+                <div v-if="predictionConfidence !== null" class="p-4 rounded-xl bg-primary/5 border border-primary/10">
+                  <div class="flex items-center gap-2 mb-1">
+                    <Sparkles class="h-3.5 w-3.5 text-primary" />
+                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest">置信度评分</span>
                   </div>
-                  <div class="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin-slow"></div>
+                  <div class="text-3xl font-black tracking-tighter text-primary">{{ predictionConfidence.toFixed(1) }}<span class="text-lg text-primary/60">%</span></div>
                 </div>
 
-                <div class="space-y-3">
-                  <div v-for="item in predictionResults" :key="item.label" class="space-y-1.5">
-                    <div class="flex justify-between text-[10px] font-bold">
-                      <span class="text-muted-foreground uppercase tracking-tight">{{ item.label }}</span>
-                      <span class="font-mono">{{ item.score.toFixed(1) }}%</span>
+                <div class="space-y-2">
+                  <div v-for="(item, index) in predictionResults" :key="item.label" class="p-3 rounded-xl bg-muted/30 border border-muted/50 hover:bg-muted/50 hover:border-muted/70 transition-all">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-2">
+                        <div class="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">{{ index + 1 }}</div>
+                        <span class="text-xs font-semibold text-foreground">{{ item.label }}</span>
+                      </div>
+                      <span class="text-xs font-mono font-bold text-primary">{{ item.score.toFixed(1) }}%</span>
                     </div>
-                    <Progress :model-value="item.score" class="h-1.5" />
                   </div>
                 </div>
               </div>
 
-              <div v-else class="h-full flex flex-col items-center justify-center text-muted-foreground/40 space-y-2 py-8">
-                <BarChart3 class="h-8 w-8" />
-                <p class="text-[10px] font-bold uppercase tracking-wider">暂无预测数据</p>
+              <div v-else class="h-full flex flex-col items-center justify-center text-muted-foreground/40 space-y-3 py-12">
+                <div class="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center">
+                  <BarChart3 class="h-8 w-8" />
+                </div>
+                <p class="text-xs font-bold uppercase tracking-wider">暂无预测数据</p>
               </div>
             </div>
           </section>
