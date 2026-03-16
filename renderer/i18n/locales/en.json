@@ -158,7 +158,9 @@
       "maxAngle": "Max Angle",
       "pitch": "Pitch",
       "yaw": "Yaw",
-      "angleRange": "Angle Range"
+      "angleRange": "Angle Range",
+      "hFlip": "H-Flip",
+      "vFlip": "V-Flip"
     },
     "visual": {
       "title": "Visual Effects",
@@ -187,7 +189,8 @@
       "generating": "Generating...",
       "clear": "Clear Preview",
       "removeSelected": "Remove Selected ({count})",
-      "noAugmentations": "Not Enabled"
+      "noAugmentations": "Not Enabled",
+      "augmentParams": "Augmentation Params"
     },
     "summary": {
       "title": "Ready for Training",

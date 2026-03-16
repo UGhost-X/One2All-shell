@@ -167,7 +167,9 @@
       "maxAngle": "最大角度",
       "pitch": "俯视/仰视 (Pitch)",
       "yaw": "侧视/平移 (Yaw)",
-      "angleRange": "角度范围"
+      "angleRange": "角度范围",
+      "hFlip": "水平翻转",
+      "vFlip": "垂直翻转"
     },
     "visual": {
       "title": "视觉效果",
@@ -196,7 +198,8 @@
       "generating": "正在生成...",
       "clear": "清空预览",
       "removeSelected": "剔除选中 ({count})",
-      "noAugmentations": "未启用"
+      "noAugmentations": "未启用",
+      "augmentParams": "增强参数"
     },
     "summary": {
       "title": "训练准备就绪",

@@ -1078,7 +1078,7 @@ const finishDrawing = () => {
       height: tempObj.height,
       fill: `${color}1A`,
       stroke: color,
-      strokeWidth: 1,
+      strokeWidth: 0.5,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1122,7 +1122,7 @@ const finishDrawing = () => {
     const poly = new Polygon(polygonPoints, {
       fill: `${color}1A`,
       stroke: color,
-      strokeWidth: 1,
+      strokeWidth: 0.1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1232,7 +1232,7 @@ const drawAnnotation = (ann: Annotation) => {
       height: ann.points[3],
       fill: `${ann.color}1A`,
       stroke: ann.color,
-      strokeWidth: 1,
+      strokeWidth: 0.1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1269,7 +1269,7 @@ const drawAnnotation = (ann: Annotation) => {
     const poly = new Polygon(points.length > 0 ? points : (ann.points as any), {
       fill: `${ann.color}1A`,
       stroke: ann.color,
-      strokeWidth: 1,
+      strokeWidth: 0.1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1317,7 +1317,7 @@ const highlightAnnotation = (id: string | null) => {
       if (obj.id === id) {
         // Apply glow effect
         obj.set({
-          strokeWidth: 1,
+          strokeWidth: 0.1,
           shadow: {
             color: obj.stroke,
             blur: 15,
@@ -1332,7 +1332,7 @@ const highlightAnnotation = (id: string | null) => {
       } else {
         // Reset to normal
         obj.set({
-          strokeWidth: 1,
+          strokeWidth: 0.1,
           shadow: null
         })
       }

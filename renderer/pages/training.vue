@@ -2581,6 +2581,48 @@ const applyPreset = (type: 'none' | 'basic' | 'standard' | 'heavy' | 'custom') =
 const previewImage = ref<string | null>(null)
 const previewImageIndex = ref<number | null>(null)
 const previewShowAnnotations = ref(true)
+const previewZoom = ref(1)
+const previewPanX = ref(0)
+const previewPanY = ref(0)
+const previewContainerRef = ref<HTMLElement | null>(null)
+
+const handlePreviewWheel = (e: WheelEvent) => {
+  e.preventDefault()
+  if (!previewContainerRef.value) return
+  
+  const rect = previewContainerRef.value.getBoundingClientRect()
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
+  
+  const delta = e.deltaY > 0 ? -0.1 : 0.1
+  const newZoom = Math.max(0.1, Math.min(10, previewZoom.value + delta))
+  const zoomRatio = newZoom / previewZoom.value
+  
+  previewPanX.value = mouseX - (mouseX - previewPanX.value) * zoomRatio
+  previewPanY.value = mouseY - (mouseY - previewPanY.value) * zoomRatio
+  previewZoom.value = newZoom
+}
+
+const handlePreviewMouseDown = (e: MouseEvent) => {
+  if (previewZoom.value <= 1) return
+  const startX = e.clientX
+  const startY = e.clientY
+  const startPanX = previewPanX.value
+  const startPanY = previewPanY.value
+  
+  const onMouseMove = (ev: MouseEvent) => {
+    previewPanX.value = startPanX + (ev.clientX - startX)
+    previewPanY.value = startPanY + (ev.clientY - startY)
+  }
+  
+  const onMouseUp = () => {
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+  }
+  
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+}
 
 const showPrevImage = () => {
   if (previewImageIndex.value === null || previewImageIndex.value <= 0) return
@@ -4505,12 +4547,37 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="previewImage" 
+    <div v-if="previewImage"
          class="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 md:p-12 animate-in fade-in zoom-in duration-200"
-         @click="previewImage = null; previewImageIndex = null">
-      <div class="relative max-w-[90vw] max-h-[90vh] flex items-center justify-center group" @click.stop>
-        <div class="relative">
-          <img :src="previewImage" class="max-w-full max-h-[85vh] object-contain rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/10" />
+         @click="previewImage = null; previewImageIndex = null"
+         @wheel="handlePreviewWheel">
+      <div class="relative flex flex-col items-center gap-4">
+        <div v-if="previewImageIndex !== null && augmentedResults[previewImageIndex]?.params" class="px-4 py-2 bg-background/90 backdrop-blur-md rounded-lg border shadow-lg max-w-[800px]">
+          <div class="flex items-center gap-2 text-xs">
+            <span class="text-muted-foreground font-medium">{{ t('training.preview.augmentParams') }}:</span>
+            <span v-if="augmentedResults[previewImageIndex].params.rotate !== undefined" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+              {{ t('training.geometric.rotate') }} {{ Number(augmentedResults[previewImageIndex].params.rotate).toFixed(2) }}°
+            </span>
+            <span v-if="augmentedResults[previewImageIndex].params.brightness !== undefined" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+              {{ t('training.visual.brightness') }} {{ augmentedResults[previewImageIndex].params.brightness }}
+            </span>
+            <span v-if="augmentedResults[previewImageIndex].params.contrast !== undefined" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+              {{ t('training.visual.contrast') }} {{ augmentedResults[previewImageIndex].params.contrast }}
+            </span>
+            <span v-if="augmentedResults[previewImageIndex].params.blur !== undefined" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+              {{ t('training.visual.blur') }} {{ augmentedResults[previewImageIndex].params.blur }}
+            </span>
+            <span v-if="augmentedResults[previewImageIndex].params.horizontal_flip" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+              {{ t('training.geometric.hFlip') }}
+            </span>
+            <span v-if="augmentedResults[previewImageIndex].params.vertical_flip" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+              {{ t('training.geometric.vFlip') }}
+            </span>
+          </div>
+        </div>
+        <div ref="previewContainerRef" class="relative w-[800px] h-[600px] flex items-center justify-center group overflow-hidden bg-black/50 rounded-xl border border-white/10" @click.stop @mousedown="handlePreviewMouseDown">
+        <div class="relative" :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})`, transition: 'transform 0.1s ease-out', transformOrigin: '0 0' }">
+          <img :src="previewImage" class="max-w-none max-h-none object-contain rounded-lg" style="width: auto; height: auto;" />
           <!-- 预览标注框 -->
           <svg v-if="previewShowAnnotations && previewImageIndex !== null && augmentedResults[previewImageIndex]?.annotations?.length > 0 && augmentedResults[previewImageIndex]?.width" 
                class="absolute top-0 left-0 w-full h-full pointer-events-none" 
@@ -4522,7 +4589,7 @@ onBeforeUnmount(() => {
               :points="getSvgPoints(ann)"
               fill="transparent"
               :stroke="ann.color"
-              stroke-width="3"
+              stroke-width="0.1"
               vector-effect="non-scaling-stroke"
             />
           </svg>
@@ -4565,6 +4632,7 @@ onBeforeUnmount(() => {
         <div v-if="previewImageIndex !== null" class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/60 backdrop-blur-md rounded-full text-white text-xs font-medium">
           {{ previewImageIndex + 1 }} / {{ augmentedResults.length }}
         </div>
+      </div>
       </div>
     </div>
   </div>
