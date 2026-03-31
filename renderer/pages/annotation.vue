@@ -2,13 +2,14 @@
 import { onMounted, ref, reactive, onUnmounted, watch, nextTick, onActivated, onDeactivated, markRaw } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Canvas, Rect, Polygon, FabricImage, Point, Line, Circle } from 'fabric'
-import { 
-  Square, 
-  Hexagon, 
-  Save, 
+import {
+  Square,
+  Hexagon,
+  RotateCw,
+  Save,
   Undo2,
   Redo2,
-  ChevronLeft, 
+  ChevronLeft,
   ChevronRight,
   Trash2,
   Plus,
@@ -37,17 +38,19 @@ import UiSelectValue from '@/components/ui/select/SelectValue.vue'
 // --- Types ---
 interface Annotation {
   id: string
-  type: 'rect' | 'polygon'
+  type: 'rect' | 'polygon' | 'rbbox'
   labelId: string
   label: string
-  points: any[] 
+  points: any[]
+  rbbox?: [number, number, number, number, number]
   color: string
+  posId?: string | number
 }
 
 interface LabelConfig {
   id: string
   name: string
-  type: 'rect' | 'polygon'
+  type: 'rect' | 'polygon' | 'rbbox'
   color: string
 }
 
@@ -108,7 +111,7 @@ const updateViewerViewportSize = () => {
   }
 }
 
-const activeTool = ref<'select' | 'rect' | 'polygon'>('select')
+const activeTool = ref<'select' | 'rect' | 'polygon' | 'rbbox'>('select')
 const images = reactive<ImageData[]>([])
 const currentImgIndex = ref(0)
 const selectedId = ref<string | null>(null)
@@ -659,6 +662,8 @@ const handleKeyDown = (e: KeyboardEvent) => {
     activeTool.value = 'rect'
   } else if (e.key === 'p' || e.key === 'P') {
     activeTool.value = 'polygon'
+  } else if (e.key === 'b' || e.key === 'B') {
+    activeTool.value = 'rbbox'
   } else if (e.key === 'Escape') {
     cancelDrawing()
   }
@@ -800,6 +805,25 @@ const initCanvasEvents = () => {
         selectable: false,
       })
       fCanvas.value!.add(tempObj)
+    } else if (activeTool.value === 'rbbox') {
+      if (!activeLabelId.value) return
+      const config = labelConfigs.find(c => c.id === activeLabelId.value)
+      if (!config || config.type !== 'rbbox') return
+
+      isDrawing = true
+      startPoint = pointer
+      tempObj = new Rect({
+        left: pointer.x,
+        top: pointer.y,
+        width: 0,
+        height: 0,
+        fill: `${config.color}33`,
+        stroke: config.color,
+        strokeWidth: 2 / viewerScale.value,
+        selectable: false,
+        lockRotation: false,
+      })
+      fCanvas.value!.add(tempObj)
     } else if (activeTool.value === 'polygon') {
       if (!activeLabelId.value) return
       const config = labelConfigs.find(c => c.id === activeLabelId.value)
@@ -871,10 +895,24 @@ const initCanvasEvents = () => {
     if (activeTool.value === 'rect' && startPoint && tempObj) {
       const width = pointer.x - startPoint.x
       const height = pointer.y - startPoint.y
-      
+
       const finalWidth = Math.abs(width)
       const finalHeight = Math.abs(height)
-      
+
+      tempObj.set({
+        width: finalWidth,
+        height: finalHeight,
+        left: width > 0 ? startPoint.x : pointer.x,
+        top: height > 0 ? startPoint.y : pointer.y,
+      })
+      fCanvas.value.renderAll()
+    } else if (activeTool.value === 'rbbox' && startPoint && tempObj) {
+      const width = pointer.x - startPoint.x
+      const height = pointer.y - startPoint.y
+
+      const finalWidth = Math.abs(width)
+      const finalHeight = Math.abs(height)
+
       tempObj.set({
         width: finalWidth,
         height: finalHeight,
@@ -952,6 +990,12 @@ const initCanvasEvents = () => {
     }
     
     if (activeTool.value === 'rect' && isDrawing) {
+      if (tempObj && (tempObj.width > 2 || tempObj.height > 2)) {
+        finishDrawing()
+      } else {
+        cancelDrawing()
+      }
+    } else if (activeTool.value === 'rbbox' && isDrawing) {
       if (tempObj && (tempObj.width > 2 || tempObj.height > 2)) {
         finishDrawing()
       } else {
@@ -1037,6 +1081,22 @@ const initCanvasEvents = () => {
           y: pathOffset.y * scaleY
         }
       })
+    } else if (ann.type === 'rbbox') {
+      const cx = Number(obj.left ?? 0) + Number(obj.width ?? 0) / 2
+      const cy = Number(obj.top ?? 0) + Number(obj.height ?? 0) / 2
+      const w = Number(obj.width ?? 0) * Number(obj.scaleX ?? 1)
+      const h = Number(obj.height ?? 0) * Number(obj.scaleY ?? 1)
+      const angle = Number(obj.angle ?? 0)
+      ann.rbbox = [cx, cy, w, h, angle]
+      obj.set({
+        left: cx - w / 2,
+        top: cy - h / 2,
+        width: w,
+        height: h,
+        scaleX: 1,
+        scaleY: 1,
+        angle: 0
+      })
     }
   })
 }
@@ -1056,6 +1116,8 @@ const finishDrawing = () => {
   pushHistory()
 
   const id = `ann_${Date.now()}`
+  const currentAnns = images[currentImgIndex.value]?.annotations || []
+  const posId = currentAnns.length + 1
   let newAnn: Annotation | null = null
   const color = config.color
 
@@ -1065,9 +1127,9 @@ const finishDrawing = () => {
       type: 'rect',
       labelId: config.id,
       label: config.name,
-      // COCO bbox: [x, y, width, height]
       points: [tempObj.left, tempObj.top, tempObj.width, tempObj.height],
-      color
+      color,
+      posId
     }
     fCanvas.value.remove(tempObj)
     
@@ -1109,9 +1171,9 @@ const finishDrawing = () => {
       type: 'polygon',
       labelId: config.id,
       label: config.name,
-      // COCO segmentation: [x1, y1, x2, y2, ...]
       points: polygonPoints.flatMap(p => [p.x, p.y]),
-      color
+      color,
+      posId
     }
     
     // Clear temp items
@@ -1152,6 +1214,56 @@ const finishDrawing = () => {
     tempPoints = []
     tempLines = []
     activeLine = null
+  } else if (activeTool.value === 'rbbox' && tempObj) {
+    const w = tempObj.width
+    const h = tempObj.height
+    if (w > 2 || h > 2) {
+      const cx = tempObj.left + w / 2
+      const cy = tempObj.top + h / 2
+      newAnn = {
+        id,
+        type: 'rbbox',
+        labelId: config.id,
+        label: config.name,
+        rbbox: [cx, cy, w, h, 0],
+        color,
+        posId
+      }
+      fCanvas.value.remove(tempObj)
+
+      const rect = new Rect({
+        left: tempObj.left,
+        top: tempObj.top,
+        width: w,
+        height: h,
+        fill: `${color}1A`,
+        stroke: color,
+        strokeWidth: 0.5,
+        lockMovementX: false,
+        lockMovementY: false,
+        lockScalingX: false,
+        lockScalingY: false,
+        lockRotation: false,
+        lockScalingFlip: true,
+        hasControls: true,
+        selectable: true,
+        evented: true,
+        id: id as any,
+        labelId: config.id as any,
+        cornerColor: '#fff',
+        cornerStrokeColor: color,
+        cornerSize: 8,
+        cornerStyle: 'rect',
+        transparentCorners: false,
+        padding: 5,
+      } as any)
+
+      fCanvas.value.add(markRaw(rect))
+      rect.setCoords()
+      fCanvas.value.setActiveObject(markRaw(rect))
+    } else {
+      fCanvas.value.remove(tempObj)
+    }
   }
 
   if (newAnn) {
@@ -1254,6 +1366,37 @@ const drawAnnotation = (ann: Annotation) => {
     fCanvas.value.add(markRaw(rect))
     rect.setCoords()
     rect.setControlVisible('mtr', false)
+  } else if (ann.type === 'rbbox' && ann.rbbox) {
+    const [cx, cy, w, h, angle] = ann.rbbox
+    const rect = new Rect({
+      left: cx - w / 2,
+      top: cy - h / 2,
+      width: w,
+      height: h,
+      fill: `${ann.color}1A`,
+      stroke: ann.color,
+      strokeWidth: 0.1,
+      lockMovementX: false,
+      lockMovementY: false,
+      lockScalingX: false,
+      lockScalingY: false,
+      lockRotation: false,
+      lockScalingFlip: true,
+      hasControls: true,
+      selectable: true,
+      evented: true,
+      id: ann.id as any,
+      labelId: ann.labelId as any,
+      angle: angle,
+      cornerColor: '#fff',
+      cornerStrokeColor: ann.color,
+      cornerSize: 12,
+      cornerStyle: 'rect',
+      transparentCorners: false,
+      padding: 5,
+    } as any)
+    fCanvas.value.add(markRaw(rect))
+    rect.setCoords()
   } else {
     // COCO segmentation is [x1, y1, x2, y2, ...]
     // Need to convert to [{x, y}, ...] for fabric.Polygon
@@ -1548,11 +1691,13 @@ watch(showLabelPanel, async () => {
                 @click.stop="activeLabelId = config.id"
               >
                 <!-- Type-based Marker -->
-                <div 
+                <div
                   class="absolute -left-[2px] -top-[2px] -bottom-[2px] w-5 transition-all duration-300 z-10"
-                  :style="{ 
+                  :style="{
                     backgroundColor: config.color,
                     clipPath: config.type === 'rect'
+                      ? (activeLabelId === config.id ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(0 0, 60% 50%, 0 100%)')
+                      : config.type === 'rbbox'
                       ? (activeLabelId === config.id ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(0 0, 60% 50%, 0 100%)')
                       : (activeLabelId === config.id ? 'polygon(0 0, 100% 0, 25% 50%, 100% 100%, 0 100%)' : 'polygon(0 0, 70% 0, 15% 50%, 70% 100%, 0 100%)')
                   }"
@@ -1627,6 +1772,16 @@ watch(showLabelPanel, async () => {
                     <Hexagon class="h-4 w-4" />
                     <span class="text-xs">{{ t('annotation.types.polygon') }}</span>
                   </UiButton>
+                  <UiButton
+                    variant="outline"
+                    size="sm"
+                    class="h-9 gap-2"
+                    :class="editingLabel.type === 'rbbox' ? 'border-primary bg-primary/5 text-primary' : ''"
+                    @click="editingLabel.type = 'rbbox'"
+                  >
+                    <RotateCw class="h-4 w-4" />
+                    <span class="text-xs">{{ t('annotation.types.rbbox') }}</span>
+                  </UiButton>
                 </div>
               </div>
               
@@ -1683,7 +1838,7 @@ watch(showLabelPanel, async () => {
           <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">中键/空格+拖动</kbd> 平移</span>
           <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">右键</kbd> 取消标注</span>
           <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">1-9</kbd> 选择标签</span>
-          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">V/R/P</kbd> 选择/矩形/多边形</span>
+          <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">V/R/P/B</kbd> 选择/矩形/多边形/旋转框</span>
           <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">Delete</kbd> 删除</span>
         </div>
       </main>
@@ -1722,7 +1877,7 @@ watch(showLabelPanel, async () => {
               </UiButton>
             </div>
             <div class="flex items-center gap-2 mt-2">
-              <component :is="ann.type === 'rect' ? Square : Hexagon" class="h-3 w-3 text-muted-foreground" />
+              <component :is="ann.type === 'rect' || ann.type === 'rbbox' ? Square : Hexagon" class="h-3 w-3 text-muted-foreground" />
               <span class="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">{{ t(`annotation.types.${ann.type}`) }}</span>
             </div>
           </div>

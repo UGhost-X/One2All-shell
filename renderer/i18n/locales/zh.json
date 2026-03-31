@@ -132,7 +132,8 @@
     "defaultLabel": "目标",
     "types": {
       "rect": "矩形",
-      "polygon": "多边形"
+      "polygon": "多边形",
+      "rbbox": "旋转框"
     },
     "schemes": {
       "title": "标注方案",
@@ -300,6 +301,9 @@
       "epoch": "轮次",
       "iter": "迭代",
       "loss": "损失",
+      "threshold": "阈值",
+      "stage": "阶段",
+      "samples": "样本数",
       "lr": "学习率",
       "noMetrics": "暂无指标数据",
       "backToParams": "返回训练参数",
@@ -312,6 +316,7 @@
       "latestLoss": "最新迭代损失",
       "iterPrefix": "迭代",
       "lossConvergence": "损失收敛曲线",
+      "calibratedThreshold": "校准后阈值",
       "lrSchedule": "学习率调度曲线",
       "subTasksProgress": "任务进度",
       "labelsTotal": "共 {count} 个标签",
@@ -323,6 +328,13 @@
       "epochProgress": "轮次进度",
       "metricHistory": "指标历史",
       "clearLogs": "清除日志",
+      "stageLabels": {
+        "featureExtraction": "特征提取",
+        "coresetSampling": "核心集采样",
+        "thresholdCalibration": "阈值校准"
+      },
+      "calibrating": "正在校准中...",
+      "noThresholdData": "训练完成，无阈值数据",
       "axis": {
         "epochIter": "轮次 / 迭代",
         "iter": "迭代次数",
@@ -450,6 +462,12 @@
     "refreshLogs": "刷新",
     "noLogs": "暂无日志",
     "loadLogsFailed": "加载日志失败",
+    "memoryBanks": "内存库",
+    "noMemoryBanks": "暂无内存库信息",
+    "positiveLibrary": "正例库",
+    "negativeLibrary": "反例库",
+    "memoryBankDescription": "共 {count} 个样本",
+    "noSamples": "暂无样本",
     "messages": {
       "loadModelsFailed": "加载可部署模型失败",
       "startSuccess": "服务启动成功，端口: {port}",

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addCamera: (camera) => ipcRenderer.invoke('db:add-camera', camera),
   deleteCamera: (id) => ipcRenderer.invoke('db:delete-camera', id),
   updateCamera: (id, data) => ipcRenderer.invoke('db:update-camera', { id, data }),
+  getSystemCameras: () => ipcRenderer.invoke('camera:get-system-cameras'),
   // Annotation Schemes
   getSchemes: () => ipcRenderer.invoke('db:get-schemes'),
   saveScheme: (scheme) => ipcRenderer.invoke('db:save-scheme', scheme),

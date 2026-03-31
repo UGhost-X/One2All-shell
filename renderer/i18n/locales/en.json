@@ -126,7 +126,8 @@
     "defaultLabel": "Object",
     "types": {
       "rect": "Rect",
-      "polygon": "Polygon"
+      "polygon": "Polygon",
+      "rbbox": "RBox"
     },
     "schemes": {
       "title": "Annotation Schemes",
@@ -284,6 +285,9 @@
       "epoch": "Epoch",
       "iter": "Iter",
       "loss": "Loss",
+      "threshold": "Threshold",
+      "stage": "Stage",
+      "samples": "Samples",
       "lr": "LR",
       "noMetrics": "No metrics yet",
       "backToParams": "Back to Parameters",
@@ -296,6 +300,7 @@
       "latestLoss": "Latest iteration loss",
       "iterPrefix": "Iter",
       "lossConvergence": "Loss Convergence",
+      "calibratedThreshold": "Calibrated threshold",
       "lrSchedule": "Learning Rate Schedule",
       "subTasksProgress": "Tasks Progress",
       "labelsTotal": "{count} labels total",
@@ -308,6 +313,13 @@
       "epochProgress": "Epoch Progress",
       "metricHistory": "Metric History",
       "clearLogs": "Clear Logs",
+      "stageLabels": {
+        "featureExtraction": "Feature Extraction",
+        "coresetSampling": "Coreset Sampling",
+        "thresholdCalibration": "Threshold Calibration"
+      },
+      "calibrating": "Calibrating...",
+      "noThresholdData": "Training completed, no threshold data",
       "axis": {
         "epochIter": "Epoch / Iter",
         "iter": "Iterations",
@@ -434,6 +446,12 @@
     "refreshLogs": "Refresh",
     "noLogs": "No logs available",
     "loadLogsFailed": "Failed to load logs",
+    "memoryBanks": "Memory Banks",
+    "noMemoryBanks": "No memory bank information",
+    "positiveLibrary": "Positive Library",
+    "negativeLibrary": "Negative Library",
+    "memoryBankDescription": "Total {count} samples",
+    "noSamples": "No samples",
     "messages": {
       "loadModelsFailed": "Failed to load deployable models",
       "startSuccess": "Service started successfully, port: {port}",

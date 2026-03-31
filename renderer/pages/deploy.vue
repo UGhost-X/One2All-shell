@@ -3,7 +3,7 @@ import { computed, ref, onMounted, onUnmounted, inject, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { Play, Square, Trash2, RefreshCw, Server, Box, Loader2, Zap, FolderOpen, CheckCircle, XCircle, Clock, ImageIcon, BarChart3, FileText, X } from 'lucide-vue-next'
+import { Play, Square, Trash2, RefreshCw, Server, Box, Loader2, Zap, FolderOpen, CheckCircle, XCircle, Clock, ImageIcon, BarChart3, FileText, X, Database, Plus, Minus } from 'lucide-vue-next'
 import Switch from '@/components/ui/switch/Switch.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
 import UiButton from '@/components/ui/button/Button.vue'
@@ -119,6 +119,28 @@ const isLoadingAllLogs = ref(false)
 const autoRefreshLogs = ref(true)
 const logsRefreshInterval = ref<number | null>(null)
 const activeLogPolling = ref<string[]>([])
+
+// 内存库展示相关
+interface MemoryBankInfo {
+  category: string
+  positive_count: number
+  negative_count: number
+  positive_samples?: string[]
+  negative_samples?: string[]
+}
+
+interface ServiceMemoryBanks {
+  service_id: string
+  task_uuid: string
+  banks: MemoryBankInfo[]
+}
+
+const memoryBanks = ref<ServiceMemoryBanks[]>([])
+const isLoadingMemoryBanks = ref(false)
+const selectedMemoryBankService = ref<string>('')
+const memoryBankModalOpen = ref(false)
+const currentMemoryBank = ref<MemoryBankInfo | null>(null)
+const currentBankType = ref<'positive' | 'negative'>('positive')
 
 const loadServiceLog = async (serviceId: string, incremental = false) => {
   if (!serviceId) return
@@ -329,7 +351,11 @@ const loadDeployableModels = async () => {
       }
     }
     
-    deployableModels.value = models
+    deployableModels.value = models.sort((a: DeployableModel, b: DeployableModel) => {
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0
+      return timeB - timeA
+    })
   } catch (err) {
     console.error('Failed to load deployable models:', err)
     toast?.error(t('deploy.messages.loadModelsFailed'))
@@ -348,7 +374,11 @@ const loadServices = async () => {
     const res = await fetch(`/api/deploy/http/services?project_id=${productId.value}&include_health=true`)
     const data = await res.json()
     const previousServiceIds = new Set(services.value.map(s => s.service_id))
-    services.value = data.services || []
+    // 去重：根据 service_id 去重
+    const uniqueServices = (data.services || []).filter((svc: any, index: number, self: any[]) => 
+      index === self.findIndex((s) => s.service_id === svc.service_id)
+    )
+    services.value = uniqueServices
     const currentServiceIds = new Set(services.value.map(s => s.service_id))
 
     const pollingList = activeLogPolling.value.slice()
@@ -361,6 +391,7 @@ const loadServices = async () => {
     })
 
     await loadAllServiceLogs()
+    await loadMemoryBanks()
 
     // 只将新出现的服务添加到日志轮询
     services.value.forEach(s => {
@@ -375,10 +406,71 @@ const loadServices = async () => {
   }
 }
 
+const loadMemoryBanks = async () => {
+  if (services.value.length === 0) {
+    memoryBanks.value = []
+    return
+  }
+  isLoadingMemoryBanks.value = true
+  try {
+    const banks: ServiceMemoryBanks[] = []
+    for (const service of services.value) {
+      if (service.status !== 'running') continue
+      try {
+        const res = await fetch(`/api/deploy/http/service/${service.service_id}/memory_banks`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.banks) {
+            banks.push({
+              service_id: service.service_id,
+              task_uuid: service.task_uuid,
+              banks: data.banks
+            })
+          }
+        }
+      } catch (err) {
+        console.warn(`Failed to load memory banks for service ${service.service_id}:`, err)
+      }
+    }
+    memoryBanks.value = banks
+  } catch (err) {
+    console.error('Failed to load memory banks:', err)
+  } finally {
+    isLoadingMemoryBanks.value = false
+  }
+}
+
+const openMemoryBankModal = (serviceId: string, bank: MemoryBankInfo, type: 'positive' | 'negative') => {
+  selectedMemoryBankService.value = serviceId
+  currentMemoryBank.value = bank
+  currentBankType.value = type
+  memoryBankModalOpen.value = true
+}
+
+const closeMemoryBankModal = () => {
+  memoryBankModalOpen.value = false
+  currentMemoryBank.value = null
+  selectedMemoryBankService.value = ''
+}
+
 const startService = async (taskUuid: string, labels?: string[]) => {
   startingUuid.value = taskUuid
   
   try {
+    // 先停止该模型的其他运行中服务
+    const existingServices = getServicesForUuid(taskUuid)
+    for (const svc of existingServices) {
+      if (svc.status === 'running' || svc.status === 'starting') {
+        try {
+          await fetch(`/api/deploy/stop/${svc.service_id}`, { method: 'POST' })
+          removeServiceLogPolling(svc.service_id)
+          delete serviceLogs.value[svc.service_id]
+        } catch (e) {
+          console.warn(`停止已有服务失败: ${svc.service_id}`, e)
+        }
+      }
+    }
+    
     const res = await fetch(`/api/deploy/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -470,6 +562,10 @@ const deleteService = async (serviceId: string) => {
 
 const getServiceForUuid = (taskUuid: string) => {
   return services.value.find(s => s.task_uuid === taskUuid)
+}
+
+const getServicesForUuid = (taskUuid: string) => {
+  return services.value.filter(s => s.task_uuid === taskUuid)
 }
 
 // 日志查看函数
@@ -938,13 +1034,13 @@ onUnmounted(() => {
               <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
 
-            <div v-else-if="services.length === 0" class="text-center py-8 text-muted-foreground">
+            <div v-else-if="runningServices.length === 0" class="text-center py-8 text-muted-foreground">
               {{ t('deploy.noRunningServices') }}
             </div>
             
             <div v-else class="grid gap-4">
               <div 
-                v-for="service in services" 
+                v-for="service in runningServices" 
                 :key="service.service_id"
                 class="border rounded-lg bg-card overflow-hidden"
               >
@@ -967,10 +1063,138 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <Separator />
+
+          <!-- 内存库展示 -->
+          <div class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-lg font-semibold flex items-center gap-2">
+                <Database class="h-5 w-5" />
+                {{ t('deploy.memoryBanks') }}
+              </h2>
+              <UiButton variant="outline" size="sm" @click="loadMemoryBanks" :disabled="isLoadingMemoryBanks">
+                <RefreshCw class="h-4 w-4 mr-2" :class="{ 'animate-spin': isLoadingMemoryBanks }" />
+                {{ t('deploy.refresh') }}
+              </UiButton>
+            </div>
+
+            <div v-if="isLoadingMemoryBanks" class="flex items-center justify-center py-8">
+              <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+
+            <div v-else-if="memoryBanks.length === 0" class="text-center py-8 text-muted-foreground">
+              {{ t('deploy.noMemoryBanks') }}
+            </div>
+
+            <div v-else class="grid gap-4">
+              <div
+                v-for="serviceBank in memoryBanks"
+                :key="serviceBank.service_id"
+                class="border rounded-lg bg-card overflow-hidden"
+              >
+                <div class="flex items-center gap-4 p-3 bg-muted/50 border-b text-sm">
+                  <span><span class="text-muted-foreground">服务ID:</span> <span class="font-mono">{{ serviceBank.service_id }}</span></span>
+                  <span><span class="text-muted-foreground">任务UUID:</span> <span class="font-mono">{{ serviceBank.task_uuid }}</span></span>
+                </div>
+                <div class="p-3">
+                  <div class="grid gap-2">
+                    <div
+                      v-for="bank in serviceBank.banks"
+                      :key="bank.category"
+                      class="border rounded p-3 bg-muted/30"
+                    >
+                      <div class="flex items-center justify-between mb-2">
+                        <span class="font-semibold text-sm">{{ bank.category }}</span>
+                      </div>
+                      <div class="grid grid-cols-2 gap-2">
+                        <button
+                          @click="openMemoryBankModal(serviceBank.service_id, bank, 'positive')"
+                          class="flex items-center justify-between p-2 rounded bg-green-50 hover:bg-green-100 border border-green-200 transition-colors"
+                        >
+                          <div class="flex items-center gap-2">
+                            <Database class="h-4 w-4 text-green-600" />
+                            <span class="text-xs font-medium text-green-700">{{ t('deploy.positiveLibrary') }}</span>
+                          </div>
+                          <span class="text-xs font-bold text-green-700">{{ bank.positive_count }}</span>
+                        </button>
+                        <button
+                          @click="openMemoryBankModal(serviceBank.service_id, bank, 'negative')"
+                          class="flex items-center justify-between p-2 rounded bg-orange-50 hover:bg-orange-100 border border-orange-200 transition-colors"
+                        >
+                          <div class="flex items-center gap-2">
+                            <Database class="h-4 w-4 text-orange-600" />
+                            <span class="text-xs font-medium text-orange-700">{{ t('deploy.negativeLibrary') }}</span>
+                          </div>
+                          <span class="text-xs font-bold text-orange-700">{{ bank.negative_count }}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </template>
       </div>
 
     </main>
+
+    <!-- 内存库详情对话框 -->
+    <div v-if="memoryBankModalOpen" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-4xl h-[80vh] shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col">
+        <UiCardHeader class="pb-4 shrink-0">
+          <div class="flex items-center justify-between">
+            <UiCardTitle class="text-lg flex items-center gap-2">
+              <Database class="h-5 w-5" :class="currentBankType === 'positive' ? 'text-green-600' : 'text-orange-600'" />
+              {{ currentBankType === 'positive' ? t('deploy.positiveLibrary') : t('deploy.negativeLibrary') }} - {{ currentMemoryBank?.category }}
+            </UiCardTitle>
+            <UiButton variant="ghost" size="icon" class="h-8 w-8" @click="closeMemoryBankModal">
+              <X class="h-4 w-4" />
+            </UiButton>
+          </div>
+          <UiCardDescription>
+            {{ t('deploy.memoryBankDescription', { count: currentBankType === 'positive' ? currentMemoryBank?.positive_count : currentMemoryBank?.negative_count }) }}
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardContent class="flex-1 overflow-hidden py-4">
+          <div class="h-full overflow-auto bg-muted/50 rounded-lg border p-4">
+            <div v-if="currentBankType === 'positive' && currentMemoryBank?.positive_samples">
+              <div class="grid grid-cols-4 gap-2">
+                <div
+                  v-for="(sample, idx) in currentMemoryBank.positive_samples"
+                  :key="idx"
+                  class="aspect-square rounded border bg-white flex items-center justify-center text-xs text-muted-foreground"
+                >
+                  {{ sample }}
+                </div>
+              </div>
+            </div>
+            <div v-else-if="currentBankType === 'negative' && currentMemoryBank?.negative_samples">
+              <div class="grid grid-cols-4 gap-2">
+                <div
+                  v-for="(sample, idx) in currentMemoryBank.negative_samples"
+                  :key="idx"
+                  class="aspect-square rounded border bg-white flex items-center justify-center text-xs text-muted-foreground"
+                >
+                  {{ sample }}
+                </div>
+              </div>
+            </div>
+            <div v-else class="flex items-center justify-center h-full text-muted-foreground">
+              {{ t('deploy.noSamples') }}
+            </div>
+          </div>
+        </UiCardContent>
+
+        <UiCardFooter class="pt-4 shrink-0">
+          <UiButton variant="outline" class="w-full" @click="closeMemoryBankModal">
+            {{ t('common.close') }}
+          </UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
 
     <!-- 日志查看对话框 -->
     <div v-if="showLogModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">

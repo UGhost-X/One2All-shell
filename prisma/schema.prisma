@@ -106,6 +106,7 @@ model AppSettings {
   backendIp     String   @default("localhost")
   backendUrl    String   @default("http://localhost:8000")
   backendPort   String   @default("8000")
+  imageSettings String?  @default("{\"exposure\":67,\"gain\":1.2}")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }

@@ -1,4 +1,4 @@
-import { defineEventHandler, getQuery, createError, readBody, getRequestURL } from 'h3'
+import { defineEventHandler, getQuery, createError, readBody, getRequestURL, readFormData } from 'h3'
 import { InferenceServer } from '../../utils/inference-server'
 import fs from 'fs'
 import path from 'path'
@@ -781,6 +781,87 @@ export default defineEventHandler(async (event) => {
       throw createError({
         statusCode: 500,
         message: `获取服务日志失败：${err.message}`
+      })
+    }
+  }
+
+  // 获取服务内存库信息
+  if (eventPath.startsWith('/api/deploy/http/service/') && eventPath.endsWith('/memory_banks') && method === 'GET') {
+    const pathParts = eventPath.split('/')
+    const serviceId = pathParts[pathParts.length - 2]
+    
+    try {
+      const banksRes = await fetch(`${pythonApiBase}/deploy/http/service/${serviceId}/memory_banks`)
+      
+      if (!banksRes.ok) {
+        throw new Error(`后端服务返回 ${banksRes.status}`)
+      }
+      const banksData = await banksRes.json()
+      return banksData
+    } catch (err: any) {
+      console.warn(`Failed to fetch memory banks for service ${serviceId}:`, err.message)
+      return { banks: [] }
+    }
+  }
+
+  // 添加ROI到反例库
+  if (eventPath === '/api/deploy/roi/negative' && method === 'POST') {
+    try {
+      const formData = await readFormData(event)
+      const imageFile = formData.get('file') as File
+      const serviceId = formData.get('service_id') as string
+      const category = formData.get('category') as string
+      const posId = formData.get('pos_id') as string
+      const bbox = formData.get('bbox') as string
+
+      if (!imageFile || !serviceId) {
+        throw createError({
+          statusCode: 400,
+          message: '缺少必要参数 file 或 service_id'
+        })
+      }
+
+      const service = runningServices.get(serviceId)
+      if (!service || service.status !== 'running') {
+        throw createError({
+          statusCode: 404,
+          message: '服务不存在或未运行'
+        })
+      }
+
+      const host = getInferenceHost()
+      const inferenceUrl = `http://${host}:${service.port}`
+      const targetUrl = `${inferenceUrl}/negative_banks/${posId || 'default'}/add`
+      
+      console.log('[Add Negative] Service:', serviceId, 'Port:', service.port, 'Target:', targetUrl)
+      
+      const inferenceFormData = new FormData()
+      const blob = new Blob([new Uint8Array(await imageFile.arrayBuffer())], { type: imageFile.type })
+      inferenceFormData.append('file', blob, imageFile.name)
+      
+      const addRes = await fetch(targetUrl, {
+        method: 'POST',
+        body: inferenceFormData
+      })
+      
+      console.log('[Add Negative] Response status:', addRes.status)
+      
+      if (!addRes.ok) {
+        const errorText = await addRes.text().catch(() => '')
+        console.error('[Add Negative] Error response:', errorText)
+        throw new Error(`添加失败: ${addRes.status} - ${errorText}`)
+      }
+
+      const result = await addRes.json()
+      return {
+        status: 'success',
+        message: '已添加到反例库',
+        data: result
+      }
+    } catch (err: any) {
+      throw createError({
+        statusCode: err.statusCode || 500,
+        message: err.message || '添加到反例库失败'
       })
     }
   }

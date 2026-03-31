@@ -29,10 +29,13 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
+  ChevronRight,
   CheckCircle2,
   AlertCircle,
   MapPin,
-  Sparkles
+  Sparkles,
+  Square,
+  Database
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
@@ -327,9 +330,101 @@ const captureScreenshot = async () => {
 const exposureValue = ref(67)
 const gainValue = ref(1.2)
 
+const loadImageSettings = async () => {
+  if (window.electronAPI?.getSettings) {
+    try {
+      const settings = await window.electronAPI.getSettings()
+      if (settings?.imageSettings) {
+        exposureValue.value = settings.imageSettings.exposure ?? 67
+        gainValue.value = settings.imageSettings.gain ?? 1.2
+      }
+    } catch (err) {
+      console.error('Failed to load image settings:', err)
+    }
+  }
+}
+
+const saveImageSettings = async () => {
+  if (window.electronAPI?.saveSettings) {
+    try {
+      const currentSettings = await window.electronAPI.getSettings() || {}
+      await window.electronAPI.saveSettings({
+        ...currentSettings,
+        imageSettings: {
+          exposure: exposureValue.value,
+          gain: gainValue.value
+        }
+      })
+    } catch (err) {
+      console.error('Failed to save image settings:', err)
+    }
+  }
+}
+
+watch(exposureValue, () => {
+  if (isLiveStreaming.value) {
+    updateCameraSettings()
+  }
+  saveImageSettings()
+})
+
+watch(gainValue, () => {
+  if (isLiveStreaming.value) {
+    updateCameraSettings()
+  }
+  saveImageSettings()
+})
+
 const predictionConfidence = ref<number | null>(null)
 const predictionResults = ref<Array<{ label: string; score: number }>>([])
-const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string; visible?: boolean }>>([])
+
+const selectedProduct = computed(() => {
+  return products.value.find(p => p.id === selectedProductId.value)
+})
+
+const selectedProductHasImage = computed(() => {
+  return !!selectedProduct.value?.lastImagePath
+})
+
+const selectedProductAnnotations = ref<any>(null)
+
+const selectedProductHasAnnotation = computed(() => {
+  return !!selectedProductAnnotations.value
+})
+
+const fetchProductAnnotations = async () => {
+  if (!selectedProductId.value || !selectedProduct.value?.lastImagePath) {
+    selectedProductAnnotations.value = null
+    return
+  }
+  
+  if (window.electronAPI?.getAnnotations) {
+    try {
+      const annotations = await window.electronAPI.getAnnotations(
+        selectedProductId.value,
+        selectedProduct.value.lastImagePath
+      )
+      selectedProductAnnotations.value = annotations
+    } catch (err) {
+      console.error('Failed to fetch annotations:', err)
+      selectedProductAnnotations.value = null
+    }
+  }
+}
+const detectionResults = ref<Array<{
+  label: string
+  score: number
+  bbox: [number, number, number, number]
+  segmentation?: number[]
+  isAnomaly?: boolean
+  error?: number
+  threshold?: number
+  alignmentStrategy?: string
+  visible?: boolean
+  anomaly_type?: string
+  category?: string
+  pos_id?: string | number
+}>>([])
 
 const inferenceServices = ref<Array<{ service_id: string; task_uuid: string; port: number; inference_url: string; labels: string[] }>>([])
 const selectedInferenceService = ref<string>('')
@@ -352,6 +447,7 @@ const fetchInitialData = async () => {
   if (window.electronAPI) {
     products.value = await window.electronAPI.getProducts()
     cameras.value = await window.electronAPI.getCameras()
+    await fetchProductAnnotations()
   }
 }
 
@@ -372,10 +468,20 @@ const fetchInferenceServices = async () => {
 
 onMounted(async () => {
   if (window.electronAPI) {
+    await loadImageSettings()
     await fetchInitialData()
     await fetchInferenceServices()
-    
-    if (products.value.length > 0 && !selectedProductId.value) {
+
+    const savedProductId = localStorage.getItem('selectedProductId')
+    if (savedProductId) {
+      const id = parseInt(savedProductId, 10)
+      const productExists = products.value.find(p => p.id === id)
+      if (productExists) {
+        handleSelectProduct(id)
+      } else if (products.value.length > 0) {
+        handleSelectProduct(products.value[0].id)
+      }
+    } else if (products.value.length > 0 && !selectedProductId.value) {
       handleSelectProduct(products.value[0].id)
     }
   }
@@ -466,15 +572,63 @@ const removeProduct = async (id: number) => {
 }
 
 // Camera Actions
+const systemCameras = ref<Array<{ id: string; name: string; deviceId: string; isSystemCamera: boolean }>>([])
+const showCameraModal = ref(false)
+const selectedSystemCamera = ref<string>('')
+const cameraIpInput = ref('')
+const isLoadingSystemCameras = ref(false)
+
+const fetchSystemCameras = async () => {
+  if (!window.electronAPI?.getSystemCameras) return
+  isLoadingSystemCameras.value = true
+  try {
+    systemCameras.value = await window.electronAPI.getSystemCameras()
+  } catch (err) {
+    console.error('Failed to fetch system cameras:', err)
+    showToast('获取系统相机列表失败', 'error')
+  } finally {
+    isLoadingSystemCameras.value = false
+  }
+}
+
+const openCameraModal = async () => {
+  await fetchSystemCameras()
+  selectedSystemCamera.value = ''
+  cameraIpInput.value = ''
+  showCameraModal.value = true
+}
+
 const handleAddCamera = async () => {
-  if (window.electronAPI) {
-    const newCam = {
-      name: `相机 #${cameras.value.length + 1}`,
-      ip: `192.168.1.${100 + cameras.value.length + 1}`,
-      status: 'offline'
-    }
+  if (!window.electronAPI) return
+  if (!selectedSystemCamera.value) {
+    showToast('请选择相机', 'error')
+    return
+  }
+
+  const selectedCam = systemCameras.value.find(c => c.id === selectedSystemCamera.value)
+  if (!selectedCam) {
+    showToast('选择的相机无效', 'error')
+    return
+  }
+
+  const newCam = {
+    name: selectedCam.name,
+    ip: cameraIpInput.value.trim() || '127.0.0.1',
+    status: 'offline',
+    config: JSON.stringify({
+      deviceId: selectedCam.deviceId,
+      isSystemCamera: true
+    })
+  }
+
+  try {
     await window.electronAPI.addCamera(newCam)
     await fetchInitialData()
+    showCameraModal.value = false
+    showToast('相机添加成功', 'info')
+  } catch (err) {
+    console.error('Failed to add camera:', err)
+    showToast('添加相机失败', 'error')
   }
 }
 
@@ -496,8 +650,9 @@ const selectedProductId = ref<number | null>(null)
 
 const handleSelectProduct = async (id: number) => {
   selectedProductId.value = id
+  localStorage.setItem('selectedProductId', String(id))
   const product = products.value.find(p => p.id === id)
-  
+
   if (product?.lastImagePath && window.electronAPI?.loadImage) {
     try {
       const dataUrl = await window.electronAPI.loadImage(product.lastImagePath)
@@ -517,6 +672,8 @@ const handleSelectProduct = async (id: number) => {
     mainViewUrl.value = ''
     mainViewState.value = 'empty'
   }
+
+  await fetchProductAnnotations()
 }
 
 const handleEditProduct = (product: any) => {
@@ -573,15 +730,264 @@ const handleProductDoubleClick = (product: any) => {
 }
 
 // Main View Actions
-const startLive = () => {
+const liveVideoRef = ref<HTMLVideoElement | null>(null)
+const liveStream = ref<MediaStream | null>(null)
+const isLiveStreaming = ref(false)
+const isLiveInferring = ref(false)
+const isLiveInferenceProcessing = ref(false)
+const liveInferenceInterval = ref<number | null>(null)
+const liveInferenceIntervalMs = ref(1000)
+const liveDetectionCanvasRef = ref<HTMLCanvasElement | null>(null)
+
+// 流式识别专用状态
+const liveDetectionResults = ref<Array<{
+  label: string
+  score: number
+  bbox: [number, number, number, number]
+  segmentation?: number[]
+  isAnomaly?: boolean
+  visible: boolean
+}>>([])
+const livePredictionConfidence = ref(0)
+
+const stopLiveInference = () => {
+  if (liveInferenceInterval.value) {
+    clearInterval(liveInferenceInterval.value)
+    liveInferenceInterval.value = null
+  }
+  isLiveInferring.value = false
+  liveDetectionResults.value = []
+  livePredictionConfidence.value = 0
+  if (liveDetectionCanvasRef.value) {
+    const ctx = liveDetectionCanvasRef.value.getContext('2d')
+    if (ctx) {
+      ctx.clearRect(0, 0, liveDetectionCanvasRef.value.width, liveDetectionCanvasRef.value.height)
+    }
+  }
+}
+
+const stopLive = async () => {
+  stopLiveInference()
+  if (liveStream.value) {
+    liveStream.value.getTracks().forEach(track => track.stop())
+    liveStream.value = null
+  }
+  if (liveVideoRef.value) {
+    liveVideoRef.value.srcObject = null
+  }
+  isLiveStreaming.value = false
+  clearResults()
+
+  const product = products.value.find(p => p.id === selectedProductId.value)
+  if (product?.lastImagePath && window.electronAPI?.loadImage) {
+    try {
+      const dataUrl = await window.electronAPI.loadImage(product.lastImagePath)
+      if (dataUrl) {
+        mainViewUrl.value = dataUrl
+        mainViewState.value = 'image'
+      } else {
+        mainViewState.value = 'empty'
+        mainViewUrl.value = ''
+      }
+    } catch (err) {
+      console.error('Failed to load image from path:', err)
+      mainViewState.value = 'empty'
+      mainViewUrl.value = ''
+    }
+  } else {
+    mainViewState.value = 'empty'
+    mainViewUrl.value = ''
+  }
+}
+
+const startLive = async () => {
   if (!selectedProductId.value) {
     alert('请先选择一个产品')
     return
   }
-  mainViewState.value = 'live'
-  // In a real app, this would set a stream URL or start a websocket
-  mainViewUrl.value = 'camera-stream-placeholder'
+
+  if (mainViewState.value === 'live') {
+    stopLive()
+    return
+  }
+
+  const enabledCameras = cameras.value.filter(c => c.isEnabled !== false)
+  if (enabledCameras.length === 0) {
+    showToast('没有可用的相机，请先添加并启用相机', 'error')
+    return
+  }
+
+  let targetCamera = enabledCameras.find(c => c.id === selectedCameraId.value)
+  if (!targetCamera) {
+    targetCamera = enabledCameras[0]
+    selectedCameraId.value = targetCamera.id
+  }
+
+  try {
+    const constraints: MediaStreamConstraints = {
+      video: {
+        deviceId: targetCamera.config ? JSON.parse(targetCamera.config).deviceId : undefined,
+        exposureMode: 'manual'
+      } as MediaTrackConstraints
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints)
+    liveStream.value = stream
+    mainViewState.value = 'live'
+    isLiveStreaming.value = true
+
+    await nextTick()
+    if (liveVideoRef.value) {
+      liveVideoRef.value.srcObject = stream
+    }
+
+    await updateCameraSettings()
+  } catch (err) {
+    console.error('Failed to start live stream:', err)
+    showToast('启动实况失败：无法访问相机', 'error')
+  }
 }
+
+const updateCameraSettings = async () => {
+  if (!liveStream.value) return
+
+  const videoTrack = liveStream.value.getVideoTracks()[0]
+  if (!videoTrack) return
+
+  try {
+    const capabilities = videoTrack.getCapabilities()
+    const settings: any = {}
+
+    if (capabilities.exposureTime) {
+      const min = capabilities.exposureTime.min || 100
+      const max = capabilities.exposureTime.max || 10000
+      const normalizedValue = exposureValue.value / 200
+      settings.exposureTime = min + normalizedValue * (max - min)
+    } else if (capabilities.exposureCompensation) {
+      const min = capabilities.exposureCompensation.min || -2
+      const max = capabilities.exposureCompensation.max || 2
+      settings.exposureCompensation = min + (exposureValue.value / 200) * (max - min)
+    }
+
+    if (capabilities.iso) {
+      const min = capabilities.iso.min || 100
+      const max = capabilities.iso.max || 6400
+      const normalizedValue = gainValue.value / 4
+      settings.iso = Math.round(min + normalizedValue * (max - min))
+    } else if (capabilities.brightness) {
+      const min = capabilities.brightness.min || 0
+      const max = capabilities.brightness.max || 255
+      settings.brightness = min + (gainValue.value / 4) * (max - min)
+    }
+
+    if (Object.keys(settings).length > 0) {
+      await videoTrack.applyConstraints({ advanced: [settings] })
+    }
+  } catch (err) {
+    console.error('Failed to update camera settings:', err)
+  }
+}
+
+const runLiveInference = async () => {
+  if (!liveVideoRef.value || !isLiveStreaming.value || isLiveInferenceProcessing.value) return
+
+  try {
+    const video = liveVideoRef.value
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 640
+    canvas.height = video.videoHeight || 480
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob>((resolve) => {
+      canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.9)
+    })
+
+    if (!selectedInferenceService.value) return
+
+    isLiveInferenceProcessing.value = true
+
+    const formData = new FormData()
+    formData.append('service_id', selectedInferenceService.value)
+    formData.append('file', blob, 'live.jpg')
+
+    const res = await fetch('/api/deploy/inference', {
+      method: 'POST',
+      body: formData
+    })
+
+    const data = await res.json()
+
+    if (data.status === 'success' && data.result) {
+      const result = data.result
+
+      if (result.results && Array.isArray(result.results)) {
+        const roiResults = result.results
+        liveDetectionResults.value = roiResults.map((r: any) => ({
+          label: r.category || '未知',
+          score: (r.anomaly_score || 0) * 100,
+          bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
+          segmentation: r.segmentation_in_pred || r.segmentation || [],
+          isAnomaly: r.is_anomaly || false,
+          visible: true
+        }))
+        if (liveDetectionResults.value.length > 0) {
+          livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
+        }
+      } else if (result.detections && Array.isArray(result.detections)) {
+        liveDetectionResults.value = result.detections.map((d: any) => ({
+          label: d.label || d.class || '未知',
+          score: (d.score || d.confidence || d.probability || 0) * 100,
+          bbox: d.bbox || d.box || [0, 0, 0, 0],
+          segmentation: d.segmentation || [],
+          isAnomaly: d.is_anomaly || false,
+          visible: true
+        }))
+        if (liveDetectionResults.value.length > 0) {
+          livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
+        }
+      }
+
+      await nextTick()
+      drawLiveDetectionBoxes()
+    }
+  } catch (err) {
+    console.error('Live inference error:', err)
+  } finally {
+    isLiveInferenceProcessing.value = false
+  }
+}
+
+const toggleLiveInference = async () => {
+  if (isLiveInferring.value) {
+    stopLiveInference()
+    return
+  }
+
+  if (!isLiveStreaming.value) {
+    showToast('请先启动实况', 'error')
+    return
+  }
+
+  await fetchInferenceServices()
+
+  if (inferenceServices.value.length === 0) {
+    showToast('当前没有可用的推理服务', 'error')
+    return
+  }
+
+  selectedInferenceService.value = inferenceServices.value[0]?.service_id || ''
+  isLiveInferring.value = true
+
+  await runLiveInference()
+
+  liveInferenceInterval.value = window.setInterval(() => {
+    runLiveInference()
+  }, liveInferenceIntervalMs.value)
+}
+
+const selectedCameraId = ref<number | null>(null)
 
 const takeCapture = async () => {
   if (!selectedProductId.value) {
@@ -589,46 +995,178 @@ const takeCapture = async () => {
     return
   }
 
-  const product = products.value.find(p => p.id === selectedProductId.value)
-  if (product?.lastImagePath) {
-    showToast('该产品已绑定图片，不允许再次拍摄', 'error')
+  const enabledCameras = cameras.value.filter(c => c.isEnabled !== false)
+  if (enabledCameras.length === 0) {
+    showToast('没有可用的相机，请先添加并启用相机', 'error')
     return
   }
 
-  // 模拟拍照过程
-  const canvas = document.createElement('canvas')
-  canvas.width = 640
-  canvas.height = 480
-  const ctx = canvas.getContext('2d')
-  if (ctx) {
-    ctx.fillStyle = '#333'
-    ctx.fillRect(0, 0, 640, 480)
-    ctx.fillStyle = '#fff'
-    ctx.font = '20px Arial'
-    ctx.fillText(`Captured at ${new Date().toLocaleTimeString()}`, 50, 50)
+  let targetCamera = enabledCameras.find(c => c.id === selectedCameraId.value)
+  if (!targetCamera) {
+    targetCamera = enabledCameras[0]
+    selectedCameraId.value = targetCamera.id
   }
-  
-  const dataUrl = canvas.toDataURL('image/jpeg')
-  const fileName = `capture_${Date.now()}.jpg`
-  
-  if (window.electronAPI?.saveImage) {
-    try {
-      const filePath = await window.electronAPI.saveImage({
-        productId: selectedProductId.value,
-        fileName,
-        dataUrl
-      })
+
+  let stream: MediaStream | null = null
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        deviceId: targetCamera.config ? JSON.parse(targetCamera.config).deviceId : undefined,
+        exposureMode: 'manual'
+      } as MediaTrackConstraints
+    })
+
+    const videoTrack = stream.getVideoTracks()[0]
+    if (videoTrack) {
+      const capabilities = videoTrack.getCapabilities()
+      const settings: any = {}
+
+      if (capabilities.exposureTime) {
+        const min = capabilities.exposureTime.min || 100
+        const max = capabilities.exposureTime.max || 10000
+        settings.exposureTime = min + (exposureValue.value / 200) * (max - min)
+      } else if (capabilities.exposureCompensation) {
+        const min = capabilities.exposureCompensation.min || -2
+        const max = capabilities.exposureCompensation.max || 2
+        settings.exposureCompensation = min + (exposureValue.value / 200) * (max - min)
+      }
+
+      if (capabilities.iso) {
+        const min = capabilities.iso.min || 100
+        const max = capabilities.iso.max || 6400
+        settings.iso = Math.round(min + (gainValue.value / 4) * (max - min))
+      } else if (capabilities.brightness) {
+        const min = capabilities.brightness.min || 0
+        const max = capabilities.brightness.max || 255
+        settings.brightness = min + (gainValue.value / 4) * (max - min)
+      }
+
+      if (Object.keys(settings).length > 0) {
+        await videoTrack.applyConstraints({ advanced: [settings] })
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+
+    const video = document.createElement('video')
+    video.srcObject = stream
+    await new Promise((resolve) => {
+      video.onloadedmetadata = () => {
+        video.play()
+        resolve(true)
+      }
+    })
+
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 640
+    canvas.height = video.videoHeight || 480
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    }
+
+    stream.getTracks().forEach(track => track.stop())
+
+    const dataUrl = canvas.toDataURL('image/jpeg')
+
+    if (selectedProductHasImage.value && selectedProductHasAnnotation.value) {
+      await runCaptureInference(dataUrl)
+    } else {
+      const fileName = `capture_${Date.now()}.jpg`
+      if (window.electronAPI?.saveImage) {
+        try {
+          const filePath = await window.electronAPI.saveImage({
+            productId: selectedProductId.value,
+            fileName,
+            dataUrl
+          })
+          mainViewUrl.value = dataUrl
+          mainViewState.value = 'image'
+
+          await fetchInitialData()
+          showToast('拍照成功', 'info')
+        } catch (err) {
+          console.error('Failed to save captured image:', err)
+          showToast('保存图片失败', 'error')
+        }
+      } else {
+        mainViewUrl.value = dataUrl
+        mainViewState.value = 'image'
+      }
+    }
+  } catch (err) {
+    console.error('Failed to capture from camera:', err)
+    showToast('拍照失败：无法访问相机', 'error')
+  }
+}
+
+const runCaptureInference = async (dataUrl: string) => {
+  await fetchInferenceServices()
+
+  if (inferenceServices.value.length === 0) {
+    showToast('当前没有可用的推理服务，请先在部署页面启动服务', 'error')
+    return
+  }
+
+  isInferring.value = true
+  inferenceAbortController = new AbortController()
+
+  try {
+    const blob = await fetch(dataUrl).then(r => r.blob())
+    const formData = new FormData()
+    formData.append('service_id', inferenceServices.value[0]?.service_id || '')
+    formData.append('file', blob, 'capture.jpg')
+
+    const res = await fetch('/api/deploy/inference', {
+      method: 'POST',
+      body: formData,
+      signal: inferenceAbortController.signal
+    })
+
+    const data = await res.json()
+
+    if (data.status === 'success' && data.result) {
+      const result = data.result
+
+      if (result.results && Array.isArray(result.results)) {
+        const roiResults = result.results
+        detectionResults.value = roiResults.map((r: any) => ({
+          label: r.category || '未知',
+          score: (r.anomaly_score || 0) * 100,
+          bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
+          segmentation: r.segmentation_in_pred || r.segmentation || [],
+          isAnomaly: r.is_anomaly || false,
+          visible: true
+        }))
+        if (detectionResults.value.length > 0) {
+          predictionConfidence.value = Math.max(...detectionResults.value.map(r => r.score))
+        }
+      } else if (result.detections && Array.isArray(result.detections)) {
+        detectionResults.value = result.detections.map((d: any) => ({
+          label: d.label || d.class || '未知',
+          score: (d.score || d.confidence || d.probability || 0) * 100,
+          bbox: d.bbox || d.box || [0, 0, 0, 0],
+          segmentation: d.segmentation || [],
+          isAnomaly: d.is_anomaly || false,
+          visible: true
+        }))
+        if (detectionResults.value.length > 0) {
+          predictionConfidence.value = Math.max(...detectionResults.value.map(r => r.score))
+        }
+      }
+
       mainViewUrl.value = dataUrl
       mainViewState.value = 'image'
-      
-      // 更新本地产品列表中的路径，或者重新获取列表
-      await fetchInitialData()
-    } catch (err) {
-      console.error('Failed to save captured image:', err)
+      showToast('拍照识别完成', 'info')
+    } else {
+      showToast('推理失败：' + (data.message || '未知错误'), 'error')
     }
-  } else {
-    mainViewUrl.value = dataUrl
-    mainViewState.value = 'image'
+  } catch (err) {
+    console.error('Capture inference error:', err)
+    showToast('拍照识别失败', 'error')
+  } finally {
+    isInferring.value = false
+    inferenceAbortController = null
   }
 }
 
@@ -636,13 +1174,6 @@ const handleImportFileChange = async (e: Event) => {
   const input = e.target as HTMLInputElement | null
   const file = input?.files?.[0]
   if (!file) return
-
-  const product = products.value.find(p => p.id === selectedProductId.value)
-  if (product?.lastImagePath) {
-    showToast('该产品已绑定图片，不允许再次导入', 'error')
-    if (input) input.value = ''
-    return
-  }
 
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -676,12 +1207,6 @@ const handleImportFileChange = async (e: Event) => {
 const importImage = async () => {
   if (!selectedProductId.value) {
     alert('请先选择一个产品')
-    return
-  }
-
-  const product = products.value.find(p => p.id === selectedProductId.value)
-  if (product?.lastImagePath) {
-    showToast('该产品已绑定图片，不允许再次导入', 'error')
     return
   }
 
@@ -749,6 +1274,34 @@ const showDetectionLabels = ref(true)
 const normalGroupCollapsed = ref(false)
 const anomalyGroupCollapsed = ref(false)
 
+// 树形结构折叠状态
+const treeCollapsedState = ref<Record<string, boolean>>({})
+
+// 按 anomaly_type -> category -> pos_id 层级分组的计算属性
+const groupedDetectionResults = computed(() => {
+  const groups: Record<string, Record<string, Record<string, typeof detectionResults.value[0][]>>> = {}
+
+  detectionResults.value.forEach((item) => {
+    const rawType = item.anomaly_type || '未知类型'
+    const type = rawType === 'normal' ? 'OK' : 'NG'
+    const cat = item.category || '未知类别'
+    const pos = item.pos_id !== undefined ? String(item.pos_id) : '未知位置'
+
+    if (!groups[type]) {
+      groups[type] = {}
+    }
+    if (!groups[type][cat]) {
+      groups[type][cat] = {}
+    }
+    if (!groups[type][cat][pos]) {
+      groups[type][cat][pos] = []
+    }
+    groups[type][cat][pos].push(item)
+  })
+
+  return groups
+})
+
 // 高亮检测框状态
 const highlightedIndex = ref<number | null>(null)
 let highlightTimer: NodeJS.Timeout | null = null
@@ -802,6 +1355,105 @@ const clearResults = () => {
   }
 }
 
+const isAddingToNegativeLibrary = ref(false)
+
+const cropImageBySegmentation = (imageUrl: string, segmentation: number[]): Promise<Blob> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      if (!segmentation || segmentation.length < 6) {
+        reject(new Error('Invalid segmentation data'))
+        return
+      }
+
+      const points: { x: number; y: number }[] = []
+      for (let i = 0; i < segmentation.length; i += 2) {
+        points.push({ x: segmentation[i], y: segmentation[i + 1] })
+      }
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      points.forEach(p => {
+        minX = Math.min(minX, p.x)
+        minY = Math.min(minY, p.y)
+        maxX = Math.max(maxX, p.x)
+        maxY = Math.max(maxY, p.y)
+      })
+
+      const width = maxX - minX
+      const height = maxY - minY
+
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        reject(new Error('Failed to get canvas context'))
+        return
+      }
+
+      ctx.beginPath()
+      ctx.moveTo(points[0].x - minX, points[0].y - minY)
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x - minX, points[i].y - minY)
+      }
+      ctx.closePath()
+      ctx.clip()
+
+      ctx.drawImage(img, minX, minY, width, height, 0, 0, width, height)
+
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob)
+        } else {
+          reject(new Error('Failed to create blob from canvas'))
+        }
+      }, 'image/jpeg', 0.95)
+    }
+    img.onerror = () => reject(new Error('Failed to load image'))
+    img.src = imageUrl
+  })
+}
+
+const addToNegativeLibrary = async (item: any, index: number) => {
+  if (!selectedInferenceService.value) {
+    showToast('请先选择推理服务', 'error')
+    return
+  }
+  if (!mainViewUrl.value) {
+    showToast('没有可用的图像', 'error')
+    return
+  }
+  
+  isAddingToNegativeLibrary.value = true
+  try {
+    const roiBlob = await cropImageBySegmentation(mainViewUrl.value, item.segmentation || [])
+    const formData = new FormData()
+    formData.append('file', roiBlob, 'roi.jpg')
+    formData.append('service_id', selectedInferenceService.value)
+    formData.append('category', item.category || item.label || '')
+    formData.append('pos_id', String(item.pos_id || ''))
+    
+    const res = await fetch('/api/deploy/roi/negative', {
+      method: 'POST',
+      body: formData
+    })
+    
+    const data = await res.json()
+    
+    if (res.ok && data.status === 'success') {
+      showToast('已添加到反例库', 'info')
+    } else {
+      showToast(data.message || '添加到反例库失败', 'error')
+    }
+  } catch (err: any) {
+    console.error('Failed to add to negative library:', err)
+    showToast(err.message || '添加到反例库失败', 'error')
+  } finally {
+    isAddingToNegativeLibrary.value = false
+  }
+}
+
 const openInferenceModal = () => {
   if (isInferring.value) {
     return
@@ -833,6 +1485,128 @@ const handleInferenceFileChange = async (e: Event) => {
 
 const triggerInferenceFileInput = () => {
   inferenceFileInput.value?.click()
+}
+
+const captureAndInfer = async () => {
+  if (!selectedProductId.value) {
+    showToast('请先选择一个产品', 'error')
+    return
+  }
+
+  if (isInferring.value) {
+    return
+  }
+
+  const enabledCameras = cameras.value.filter(c => c.isEnabled !== false)
+  if (enabledCameras.length === 0) {
+    showToast('没有可用的相机，请先添加并启用相机', 'error')
+    return
+  }
+
+  await fetchInferenceServices()
+
+  if (inferenceServices.value.length === 0) {
+    showToast('当前没有可用的推理服务，请先在部署页面启动服务', 'error')
+    return
+  }
+
+  let targetCamera = enabledCameras.find(c => c.id === selectedCameraId.value)
+  if (!targetCamera) {
+    targetCamera = enabledCameras[0]
+    selectedCameraId.value = targetCamera.id
+  }
+
+  isInferring.value = true
+
+  try {
+    const constraints: MediaStreamConstraints = {
+      video: {
+        deviceId: targetCamera.config ? JSON.parse(targetCamera.config).deviceId : undefined,
+        exposureMode: 'manual'
+      } as MediaTrackConstraints
+    }
+    const stream = await navigator.mediaDevices.getUserMedia(constraints)
+
+    const videoTrack = stream.getVideoTracks()[0]
+    if (videoTrack) {
+      const capabilities = videoTrack.getCapabilities()
+      const settings: any = {}
+
+      if (capabilities.exposureTime) {
+        const min = capabilities.exposureTime.min || 100
+        const max = capabilities.exposureTime.max || 10000
+        settings.exposureTime = min + (exposureValue.value / 200) * (max - min)
+      } else if (capabilities.exposureCompensation) {
+        const min = capabilities.exposureCompensation.min || -2
+        const max = capabilities.exposureCompensation.max || 2
+        settings.exposureCompensation = min + (exposureValue.value / 200) * (max - min)
+      }
+
+      if (capabilities.iso) {
+        const min = capabilities.iso.min || 100
+        const max = capabilities.iso.max || 6400
+        settings.iso = Math.round(min + (gainValue.value / 4) * (max - min))
+      } else if (capabilities.brightness) {
+        const min = capabilities.brightness.min || 0
+        const max = capabilities.brightness.max || 255
+        settings.brightness = min + (gainValue.value / 4) * (max - min)
+      }
+
+      if (Object.keys(settings).length > 0) {
+        await videoTrack.applyConstraints({ advanced: [settings] })
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+
+    const video = document.createElement('video')
+    video.srcObject = stream
+    await new Promise((resolve) => {
+      video.onloadedmetadata = () => {
+        video.play()
+        resolve(true)
+      }
+    })
+
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 640
+    canvas.height = video.videoHeight || 480
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    }
+
+    stream.getTracks().forEach(track => track.stop())
+
+    const dataUrl = canvas.toDataURL('image/jpeg')
+    const fileName = `capture_${Date.now()}.jpg`
+
+    inferenceImageUrl.value = dataUrl
+    mainViewUrl.value = dataUrl
+    mainViewState.value = 'image'
+    selectedInferenceService.value = inferenceServices.value[0]?.service_id || ''
+
+    if (window.electronAPI?.saveImage) {
+      try {
+        await window.electronAPI.saveImage({
+          productId: selectedProductId.value,
+          fileName,
+          dataUrl
+        })
+        await fetchInitialData()
+      } catch (err) {
+        console.error('Failed to save captured image:', err)
+      }
+    }
+
+    await runInference()
+    showToast('拍照识别完成', 'info')
+  } catch (err) {
+    console.error('Failed to capture and infer:', err)
+    showToast('拍照识别失败', 'error')
+  } finally {
+    isInferring.value = false
+  }
 }
 
 const startInference = async () => {
@@ -928,11 +1702,15 @@ const runInference = async () => {
           label: r.category || '未知',
           score: (r.anomaly_score || 0) * 100,
           bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
+          segmentation: r.segmentation_in_pred || r.segmentation || [],
           isAnomaly: r.is_anomaly || false,
           error: r.error || 0,
           threshold: r.threshold || 0,
           alignmentStrategy: r.alignment_strategy || 'ORB',
-          visible: true
+          visible: true,
+          anomaly_type: r.anomaly_type || '',
+          category: r.category || '',
+          pos_id: r.pos_id
         }))
         const anomalyCount = roiResults.filter((r: any) => r.is_anomaly).length
         if (detectionResults.value.length > 0) {
@@ -1017,22 +1795,14 @@ const drawDetectionBoxes = () => {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
 
-  // 设置canvas尺寸与图片一致
   canvas.width = img.naturalWidth
   canvas.height = img.naturalHeight
 
-  // 清空画布
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-  // 根据图片分辨率计算自适应字体大小和线宽
-  const minDimension = Math.min(canvas.width, canvas.height)
-  const fontSize = Math.max(12, Math.round(minDimension / 50))
-  const lineWidth = Math.max(2, Math.round(minDimension / 300))
-  const padding = Math.max(4, Math.round(fontSize / 4))
+  const lineWidth = 1
 
-  // 绘制每个检测框
   detectionResults.value.forEach((det, index) => {
-    // 跳过不可见的检测框
     if (det.visible === false) return
 
     const [x, y, w, h] = det.bbox
@@ -1043,17 +1813,14 @@ const drawDetectionBoxes = () => {
       color = 'hsl(120, 70%, 50%)'
     }
 
-    // 检查是否是高亮的检测框
     const isHighlighted = highlightedIndex.value === index
     let currentColor = color
     let glowColor = ''
 
     if (isHighlighted) {
-      // 呼吸效果：使用正弦波计算透明度变化
-      const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2 // 0 到 1
-      const alpha = 0.5 + breatheIntensity * 0.5 // 0.5 到 1
+      const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2
+      const alpha = 0.5 + breatheIntensity * 0.5
 
-      // 解析原始颜色并添加透明度
       if (det.isAnomaly === true) {
         currentColor = `rgba(239, 68, 68, ${alpha})`
         glowColor = 'rgba(239, 68, 68,'
@@ -1064,34 +1831,191 @@ const drawDetectionBoxes = () => {
         currentColor = `rgba(100, 100, 100, ${alpha})`
         glowColor = 'rgba(100, 100, 100,'
       }
-
-      // 绘制边缘发光效果
-      const glowSize = 8 + breatheIntensity * 6
-      const glowAlpha = alpha * 0.4
-      ctx.strokeStyle = `${glowColor}${glowAlpha})`
-      ctx.lineWidth = lineWidth + glowSize * 2
-      ctx.strokeRect(x - glowSize, y - glowSize, w + glowSize * 2, h + glowSize * 2)
     }
 
-    // 绘制矩形框
-    ctx.strokeStyle = currentColor
-    ctx.lineWidth = lineWidth
-    ctx.strokeRect(x, y, w, h)
+    const hasSegmentation = det.segmentation && det.segmentation.length >= 8
 
-    // 绘制标签背景 - 只显示 OK/NG
-    if (showDetectionLabels.value && det.visible !== false) {
-      const label = det.isAnomaly !== undefined ? (det.isAnomaly ? 'NG' : 'OK') : det.label
-      ctx.font = `bold ${fontSize}px sans-serif`
-      const textMetrics = ctx.measureText(label)
-      const textWidth = textMetrics.width
-      const textHeight = fontSize
+    if (hasSegmentation) {
+      const points: [number, number][] = []
+      for (let i = 0; i < det.segmentation!.length; i += 2) {
+        points.push([det.segmentation![i], det.segmentation![i + 1]])
+      }
 
-      ctx.fillStyle = isHighlighted ? currentColor : color
-      ctx.fillRect(x, y - textHeight - padding * 2, textWidth + padding * 2, textHeight + padding * 2)
+      if (isHighlighted) {
+        const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2
+        const glowAlpha = breatheIntensity * 0.4
+        const glowSize = 8 + breatheIntensity * 6
 
-      // 绘制标签文字
-      ctx.fillStyle = 'white'
-      ctx.fillText(label, x + padding, y - padding - 2)
+        ctx.save()
+        ctx.shadowColor = glowColor + glowAlpha + ')'
+        ctx.shadowBlur = glowSize
+        ctx.strokeStyle = currentColor
+        ctx.lineWidth = lineWidth
+        ctx.beginPath()
+        ctx.moveTo(points[0][0], points[0][1])
+        for (let i = 1; i < points.length; i++) {
+          ctx.lineTo(points[i][0], points[i][1])
+        }
+        ctx.closePath()
+        ctx.stroke()
+        ctx.restore()
+      }
+
+      ctx.strokeStyle = currentColor
+      ctx.lineWidth = lineWidth
+      ctx.beginPath()
+      ctx.moveTo(points[0][0], points[0][1])
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i][0], points[i][1])
+      }
+      ctx.closePath()
+      ctx.stroke()
+
+      // 绘制 pos_id 标签
+      if (det.pos_id !== undefined && det.pos_id !== null && det.pos_id !== '') {
+        const posIdText = String(det.pos_id)
+        const minX = Math.min(...points.map(p => p[0]))
+        const minY = Math.min(...points.map(p => p[1]))
+        ctx.font = 'bold 10px sans-serif'
+        const textMetrics = ctx.measureText(posIdText)
+        const textWidth = textMetrics.width
+        const textHeight = 10
+        const padding = 4
+
+        // 计算标签位置（确保不超出画布顶部）
+        let labelX = minX
+        let labelY = minY - textHeight - padding * 2
+        if (labelY < 0) {
+          labelY = minY + padding * 2
+        }
+
+        // 标签背景
+        ctx.fillStyle = color
+        ctx.fillRect(labelX, labelY, textWidth + padding * 2, textHeight + padding * 2)
+
+        // 标签文字
+        ctx.fillStyle = '#ffffff'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(posIdText, labelX + padding, labelY + textHeight / 2 + padding)
+      }
+    } else {
+      if (isHighlighted) {
+        const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2
+        const glowAlpha = breatheIntensity * 0.4
+        const glowSize = 8 + breatheIntensity * 6
+        ctx.strokeStyle = `${glowColor}${glowAlpha})`
+        ctx.lineWidth = lineWidth + glowSize * 2
+        ctx.strokeRect(x - glowSize, y - glowSize, w + glowSize * 2, h + glowSize * 2)
+      }
+
+      ctx.strokeStyle = currentColor
+      ctx.lineWidth = lineWidth
+      ctx.strokeRect(x, y, w, h)
+
+      // 绘制 pos_id 标签
+      if (det.pos_id !== undefined && det.pos_id !== null && det.pos_id !== '') {
+        const posIdText = String(det.pos_id)
+        ctx.font = 'bold 14px sans-serif'
+        const textMetrics = ctx.measureText(posIdText)
+        const textWidth = textMetrics.width
+        const textHeight = 14
+        const padding = 4
+
+        // 计算标签位置（确保不超出画布顶部）
+        let labelX = x
+        let labelY = y - textHeight - padding * 2
+        if (labelY < 0) {
+          labelY = y + padding * 2
+        }
+
+        // 标签背景
+        ctx.fillStyle = color
+
+        // 标签文字
+        ctx.fillStyle = '#16e12b'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(posIdText, labelX + padding, labelY + textHeight / 2 + padding)
+      }
+    }
+  })
+}
+
+const drawLiveDetectionBoxes = () => {
+  const canvas = liveDetectionCanvasRef.value
+  const video = liveVideoRef.value
+  if (!canvas || !video || !isLiveStreaming.value) return
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const rect = video.getBoundingClientRect()
+  const parentRect = video.parentElement?.getBoundingClientRect()
+  if (!parentRect) return
+
+  canvas.width = parentRect.width
+  canvas.height = parentRect.height
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+  const videoRatio = video.videoWidth / video.videoHeight
+  const containerRatio = canvas.width / canvas.height
+
+  let drawWidth = canvas.width
+  let drawHeight = canvas.height
+  let offsetX = 0
+  let offsetY = 0
+
+  if (videoRatio > containerRatio) {
+    drawHeight = canvas.width / videoRatio
+    offsetY = (canvas.height - drawHeight) / 2
+  } else {
+    drawWidth = canvas.height * videoRatio
+    offsetX = (canvas.width - drawWidth) / 2
+  }
+
+  const scaleX = drawWidth / video.videoWidth
+  const scaleY = drawHeight / video.videoHeight
+
+  liveDetectionResults.value.forEach((det) => {
+    if (det.visible === false) return
+
+    let color = '#3b82f6'
+    if (det.isAnomaly === true) {
+      color = '#ef4444'
+    } else if (det.isAnomaly === false) {
+      color = '#22c55e'
+    }
+
+    const hasSegmentation = det.segmentation && det.segmentation.length >= 8
+
+    if (hasSegmentation) {
+      const points: [number, number][] = []
+      for (let i = 0; i < det.segmentation!.length; i += 2) {
+        points.push([
+          offsetX + det.segmentation![i] * scaleX,
+          offsetY + det.segmentation![i + 1] * scaleY
+        ])
+      }
+
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(points[0][0], points[0][1])
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i][0], points[i][1])
+      }
+      ctx.closePath()
+      ctx.stroke()
+    } else {
+      const [x, y, w, h] = det.bbox
+      const drawX = offsetX + x * scaleX
+      const drawY = offsetY + y * scaleY
+      const drawW = w * scaleX
+      const drawH = h * scaleY
+
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2
+      ctx.strokeRect(drawX, drawY, drawW, drawH)
     }
   })
 }
@@ -1099,7 +2023,12 @@ const drawDetectionBoxes = () => {
 // 监听检测结果变化，自动绘制
 watch(detectionResults, () => {
   if (detectionResults.value.length > 0) {
-    nextTick(() => drawDetectionBoxes())
+    nextTick(() => {
+      drawDetectionBoxes()
+      if (mainViewState.value === 'live') {
+        drawLiveDetectionBoxes()
+      }
+    })
   }
 }, { deep: true })
 
@@ -1275,20 +2204,51 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="mainViewState === 'live'" class="flex-1 relative flex items-center justify-center bg-black">
-          <!-- Placeholder for Video Stream -->
-          <div class="w-full h-full flex items-center justify-center">
+          <video
+            v-show="isLiveStreaming"
+            ref="liveVideoRef"
+            class="w-full h-full object-contain"
+            autoplay
+            playsinline
+            muted
+          />
+          <canvas
+            v-show="isLiveStreaming && liveDetectionResults.length > 0"
+            ref="liveDetectionCanvasRef"
+            class="absolute inset-0 w-full h-full pointer-events-none"
+          />
+          <div v-if="!isLiveStreaming" class="w-full h-full flex items-center justify-center">
             <div class="text-center space-y-4">
               <div class="relative w-24 h-24 mx-auto">
                 <div class="absolute inset-0 border-4 border-primary/20 rounded-full"></div>
                 <div class="absolute inset-0 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
                 <Video class="h-8 w-8 text-primary absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
               </div>
-              <p class="text-primary font-mono text-sm animate-pulse">LIVE STREAMING...</p>
+              <p class="text-primary font-mono text-sm animate-pulse">正在启动实况...</p>
             </div>
           </div>
           <div class="absolute top-4 left-4 bg-red-600 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-2">
             <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
             实时监控
+          </div>
+          <div class="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2">
+            <UiButton
+              variant="default"
+              size="sm"
+              class="h-10 px-4 gap-2 bg-primary/90 hover:bg-primary"
+              :class="{ 'bg-destructive hover:bg-destructive': isLiveInferring }"
+              :disabled="!isLiveStreaming"
+              @click="toggleLiveInference"
+            >
+              <Loader2 v-if="isLiveInferenceProcessing" class="h-4 w-4 animate-spin" />
+              <Wand2 v-else-if="!isLiveInferring" class="h-4 w-4" />
+              <Square v-else class="h-4 w-4" />
+              {{ isLiveInferenceProcessing ? '识别中...' : (isLiveInferring ? '停止识别' : '开始流式识别') }}
+            </UiButton>
+            <div v-if="isLiveInferring" class="bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs">
+              <span class="text-muted-foreground">间隔:</span>
+              <span class="font-mono font-bold ml-1">{{ liveInferenceIntervalMs }}ms</span>
+            </div>
           </div>
         </div>
       </main>
@@ -1369,47 +2329,70 @@ onBeforeUnmount(() => {
                   <Video class="h-4 w-4" :class="mainViewState === 'live' ? 'text-primary' : 'text-primary'" />
                   {{ t('dashboard.live') }}
                 </UiButton>
-                <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold" @click="takeCapture">
-                  <CameraIcon class="h-4 w-4 text-primary" />
-                  {{ t('dashboard.capture') }}
+                <UiButton
+                  variant="outline"
+                  size="sm"
+                  class="h-14 flex flex-col gap-1 text-[10px] font-bold"
+                  :disabled="isInferring"
+                  @click="takeCapture"
+                >
+                  <Loader2 v-if="isInferring && selectedProductHasImage && selectedProductHasAnnotation" class="h-4 w-4 animate-spin text-primary" />
+                  <CameraIcon v-else class="h-4 w-4 text-primary" />
+                  {{ selectedProductHasImage && selectedProductHasAnnotation ? (isInferring ? '识别中...' : '拍照识别') : '添加产品图' }}
                 </UiButton>
                 <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2" @click="importImage">
                   <Upload class="h-4 w-4 text-primary" />
                   {{ t('dashboard.import') }}
                 </UiButton>
-                <UiButton variant="default" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2 bg-primary/90 hover:bg-primary" @click="startInference">
+                <UiButton
+                  variant="default"
+                  size="sm"
+                  class="h-14 flex flex-col gap-1 text-[10px] font-bold bg-primary/90 hover:bg-primary"
+                  :disabled="isInferring"
+                  @click="captureAndInfer"
+                >
+                  <Loader2 v-if="isInferring" class="h-4 w-4 animate-spin" />
+                  <CameraIcon v-else class="h-4 w-4" />
+                  {{ isInferring ? '识别中...' : '拍照识别' }}
+                </UiButton>
+                <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold" @click="startInference">
                   <Wand2 class="h-4 w-4" />
-                  {{ t('dashboard.inference') }}
+                  选择图片推理
                 </UiButton>
               </div>
             </TabsContent>
 
             <TabsContent value="camera" class="flex-1 overflow-auto p-4 space-y-4">
               <!-- Camera List -->
-              <div v-for="cam in cameras" :key="cam.id" class="p-3 rounded-lg border bg-muted/10 space-y-3 relative group">
+              <div v-for="cam in cameras" :key="cam.id" 
+                class="p-3 rounded-lg border space-y-3 relative group cursor-pointer transition-all"
+                :class="selectedCameraId === cam.id ? 'border-primary bg-primary/10' : 'bg-muted/10 hover:border-primary/50'"
+                @click="selectedCameraId = cam.id"
+              >
                 <div class="flex items-center justify-between">
                   <div class="flex items-center gap-2">
-                    <div :class="['w-2 h-2 rounded-full', cam.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500']"></div>
+                    <div :class="['w-2 h-2 rounded-full', cam.isEnabled !== false ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500']"></div>
                     <span class="text-xs font-bold">{{ cam.name }}</span>
+                    <div v-if="selectedCameraId === cam.id" class="px-1.5 py-0.5 bg-primary text-primary-foreground text-[9px] rounded">当前</div>
                   </div>
                   <div class="flex items-center gap-1">
-                    <UiButton variant="ghost" size="icon" class="h-6 w-6" @click="toggleCameraEnabled(cam)">
-                      <component :is="cam.isEnabled ? Power : PowerOff" :class="['h-3 w-3', cam.isEnabled ? 'text-green-600' : 'text-red-500']" />
+                    <UiButton variant="ghost" size="icon" class="h-6 w-6" @click.stop="toggleCameraEnabled(cam)">
+                      <component :is="cam.isEnabled !== false ? Power : PowerOff" :class="['h-3 w-3', cam.isEnabled !== false ? 'text-green-600' : 'text-red-500']" />
                     </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-6 w-6 text-destructive hover:bg-destructive/10" @click="handleRemoveCamera(cam.id)">
+                    <UiButton variant="ghost" size="icon" class="h-6 w-6 text-destructive hover:bg-destructive/10" @click.stop="handleRemoveCamera(cam.id)">
                       <Trash2 class="h-3 w-3" />
                     </UiButton>
                   </div>
                 </div>
                 <div class="grid grid-cols-2 gap-y-2 text-[10px]">
-                  <div class="text-muted-foreground uppercase font-bold tracking-tight">{{ t('dashboard.cameraStatus') }}</div>
-                  <div class="text-right font-mono">{{ cam.status }}</div>
+                  <div class="text-muted-foreground uppercase font-bold tracking-tight">状态</div>
+                  <div class="text-right font-mono" :class="cam.isEnabled !== false ? 'text-green-600' : 'text-red-500'">{{ cam.isEnabled !== false ? '已启用' : '已禁用' }}</div>
                   <div class="text-muted-foreground uppercase font-bold tracking-tight">IP</div>
                   <div class="text-right font-mono">{{ cam.ip }}</div>
                 </div>
               </div>
 
-              <UiButton variant="outline" class="w-full h-10 border-dashed gap-2 text-xs font-bold" @click="handleAddCamera">
+              <UiButton variant="outline" class="w-full h-10 border-dashed gap-2 text-xs font-bold" @click="openCameraModal">
                 <Plus class="h-3.5 w-3.5" />
                 {{ t('dashboard.add') }}
               </UiButton>
@@ -1497,77 +2480,93 @@ onBeforeUnmount(() => {
                 </UiButton>
               </div>
             </div>
-            <div class="flex-1 overflow-y-auto p-4 min-h-0">
-              <!-- 目标检测结果 -->
-              <div v-if="detectionResults.length > 0" class="space-y-3">
-                <!-- 正常分组 -->
-                <div v-if="detectionResults.filter(d => !d.isAnomaly).length > 0" class="rounded-xl border border-green-500/20 bg-gradient-to-br from-green-500/5 to-green-500/10 overflow-hidden">
-                  <button 
-                    @click="normalGroupCollapsed = !normalGroupCollapsed"
-                    class="w-full px-4 py-3 flex items-center justify-between hover:bg-green-500/5 transition-colors"
+            <div class="flex-1 overflow-y-auto p-3 min-h-0">
+              <!-- 目标检测结果 - 树形展示 -->
+              <div v-if="detectionResults.length > 0" class="space-y-2">
+                <!-- 遍历 anomaly_type -->
+                <div v-for="(categories, anomalyType) in groupedDetectionResults" :key="anomalyType" class="border border-border rounded-lg overflow-hidden">
+                  <!-- 第一层: anomaly_type -->
+                  <button
+                    @click="treeCollapsedState['type_' + anomalyType] = !treeCollapsedState['type_' + anomalyType]"
+                    class="w-full px-3 py-2 flex items-center justify-between bg-muted/50 hover:bg-muted transition-colors"
                   >
                     <div class="flex items-center gap-2">
-                      <div class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]"></div>
-                      <span class="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">正常</span>
-                      <span class="text-[10px] font-mono text-green-500/70 bg-green-500/10 px-2 py-0.5 rounded-full">{{ detectionResults.filter(d => !d.isAnomaly).length }}</span>
+                      <ChevronRight
+                        class="h-4 w-4 text-muted-foreground transition-transform duration-200"
+                        :class="{ 'rotate-90': !treeCollapsedState['type_' + anomalyType] }"
+                      />
+                      <span class="text-xs font-semibold text-foreground">{{ anomalyType }}</span>
                     </div>
-                    <ChevronDown 
-                      class="h-4 w-4 text-green-500 transition-transform duration-200" 
-                      :class="{ 'rotate-180': !normalGroupCollapsed }"
-                    />
                   </button>
-                  <div v-show="!normalGroupCollapsed" class="px-3 pb-3 space-y-1">
-                    <div v-for="(item, index) in detectionResults" :key="'normal-' + index">
-                      <div v-if="!item.isAnomaly" @dblclick="highlightDetectionBox(index)" class="px-3 py-2 rounded-lg bg-background/60 border border-green-500/10 hover:border-green-500/30 transition-all hover:shadow-sm cursor-pointer">
-                        <div class="flex items-center justify-between">
-                          <div class="flex items-center gap-2">
-                            <button
-                              @click.stop="item.visible = !item.visible"
-                              class="flex items-center justify-center transition-colors hover:opacity-70"
-                            >
-                              <Eye v-if="item.visible" class="h-3.5 w-3.5 text-green-500" />
-                              <EyeOff v-else class="h-3.5 w-3.5 text-muted-foreground" />
-                            </button>
-                            <span class="text-xs font-semibold text-foreground">{{ item.label }}</span>
-                          </div>
-                          <span class="text-xs font-mono font-bold text-green-600">{{ item.score.toFixed(1) }}%</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
 
-                <!-- 异常分组 -->
-                <div v-if="detectionResults.filter(d => d.isAnomaly).length > 0" class="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/5 to-red-500/10 overflow-hidden">
-                  <button 
-                    @click="anomalyGroupCollapsed = !anomalyGroupCollapsed"
-                    class="w-full px-4 py-3 flex items-center justify-between hover:bg-red-500/5 transition-colors"
-                  >
-                    <div class="flex items-center gap-2">
-                      <div class="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"></div>
-                      <span class="text-xs font-bold text-red-600 dark:text-red-400 uppercase tracking-wider">异常</span>
-                      <span class="text-[10px] font-mono text-red-500/70 bg-red-500/10 px-2 py-0.5 rounded-full">{{ detectionResults.filter(d => d.isAnomaly).length }}</span>
-                    </div>
-                    <ChevronDown 
-                      class="h-4 w-4 text-red-500 transition-transform duration-200" 
-                      :class="{ 'rotate-180': !anomalyGroupCollapsed }"
-                    />
-                  </button>
-                  <div v-show="!anomalyGroupCollapsed" class="px-3 pb-3 space-y-1">
-                    <div v-for="(item, index) in detectionResults" :key="'anomaly-' + index">
-                      <div v-if="item.isAnomaly" @dblclick="highlightDetectionBox(index)" class="px-3 py-2 rounded-lg bg-background/60 border border-red-500/10 hover:border-red-500/30 transition-all hover:shadow-sm cursor-pointer">
-                        <div class="flex items-center justify-between">
-                          <div class="flex items-center gap-2">
-                            <button
-                              @click.stop="item.visible = !item.visible"
-                              class="flex items-center justify-center transition-colors hover:opacity-70"
+                  <!-- 第二层: category -->
+                  <div v-show="!treeCollapsedState['type_' + anomalyType]" class="border-t border-border">
+                    <div v-for="(posIds, category) in categories" :key="category" class="border-b border-border/50 last:border-b-0">
+                      <button
+                        @click="treeCollapsedState['cat_' + anomalyType + '_' + category] = !treeCollapsedState['cat_' + anomalyType + '_' + category]"
+                        class="w-full px-3 py-2 pl-8 flex items-center justify-between hover:bg-muted/30 transition-colors"
+                      >
+                        <div class="flex items-center gap-2">
+                          <ChevronRight
+                            class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
+                            :class="{ 'rotate-90': !treeCollapsedState['cat_' + anomalyType + '_' + category] }"
+                          />
+                          <span class="text-xs text-foreground">{{ category }}</span>
+                        </div>
+                      </button>
+
+                      <!-- 第三层: pos_id -->
+                      <div v-show="!treeCollapsedState['cat_' + anomalyType + '_' + category]" class="border-t border-border/30">
+                        <div v-for="(items, posId) in posIds" :key="posId" class="border-b border-border/30 last:border-b-0">
+                          <button
+                            @click="treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] = !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]"
+                            class="w-full px-3 py-1.5 pl-12 flex items-center justify-between hover:bg-muted/20 transition-colors"
+                          >
+                            <div class="flex items-center gap-2">
+                              <ChevronRight
+                                class="h-3 w-3 text-muted-foreground transition-transform duration-200"
+                                :class="{ 'rotate-90': !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] }"
+                              />
+                              <span class="text-[11px] text-muted-foreground">位置ID: {{ posId }}</span>
+                            </div>
+                          </button>
+
+                          <!-- 叶子节点: 显示 anomaly_score -->
+                          <div v-show="!treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]" class="border-t border-border/20">
+                            <div
+                              v-for="(item, idx) in items"
+                              :key="idx"
+                              @dblclick="highlightDetectionBox(detectionResults.indexOf(item))"
+                              class="px-3 py-1.5 pl-16 flex items-center justify-between hover:bg-muted/10 cursor-pointer group"
                             >
-                              <Eye v-if="item.visible" class="h-3.5 w-3.5 text-red-500" />
-                              <EyeOff v-else class="h-3.5 w-3.5 text-muted-foreground" />
-                            </button>
-                            <span class="text-xs font-semibold text-foreground">{{ item.label }}</span>
+                              <div class="flex items-center gap-2">
+                                <button
+                                  @click.stop="item.visible = !item.visible"
+                                  class="flex items-center justify-center transition-colors hover:opacity-70"
+                                >
+                                  <Eye v-if="item.visible" class="h-3 w-3 text-muted-foreground" />
+                                  <EyeOff v-else class="h-3 w-3 text-muted-foreground/50" />
+                                </button>
+                                <span class="text-[11px] text-muted-foreground">异常得分:</span>
+                              </div>
+                              <div class="flex items-center gap-2">
+                                <span
+                                  class="text-[11px] font-mono font-medium"
+                                  :class="item.isAnomaly ? 'text-red-500' : 'text-green-500'"
+                                >
+                                  {{ (item.score / 100).toFixed(2) }}
+                                </span>
+                                <button
+                                  @click.stop="addToNegativeLibrary(item, detectionResults.indexOf(item))"
+                                  :disabled="isAddingToNegativeLibrary"
+                                  class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-orange-100 text-orange-600"
+                                  title="添加到反例库"
+                                >
+                                  <Database class="h-3 w-3" />
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                          <span class="text-xs font-mono font-bold text-red-600">{{ item.score.toFixed(1) }}%</span>
                         </div>
                       </div>
                     </div>
@@ -1649,6 +2648,61 @@ onBeforeUnmount(() => {
         <UiCardFooter class="flex justify-end gap-2">
           <UiButton variant="outline" @click="showDeleteModal = false">取消</UiButton>
           <UiButton variant="destructive" @click="confirmDeleteProductAction">确认删除</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <div v-if="showCameraModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg flex items-center gap-2">
+            <Camera class="h-5 w-5 text-primary" />
+            添加相机
+          </UiCardTitle>
+          <UiCardDescription>
+            从系统检测到的相机列表中选择要添加的相机
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardContent class="space-y-4">
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">选择相机</Label>
+            <div v-if="isLoadingSystemCameras" class="flex items-center justify-center py-4">
+              <Loader2 class="h-5 w-5 animate-spin text-primary" />
+              <span class="ml-2 text-xs text-muted-foreground">正在获取系统相机...</span>
+            </div>
+            <div v-else-if="systemCameras.length === 0" class="text-center py-4 text-xs text-muted-foreground">
+              未检测到系统相机
+            </div>
+            <div v-else class="space-y-2 max-h-40 overflow-y-auto">
+              <div
+                v-for="cam in systemCameras"
+                :key="cam.id"
+                class="p-3 rounded-lg border cursor-pointer transition-all"
+                :class="selectedSystemCamera === cam.id ? 'border-primary bg-primary/10' : 'border-muted hover:border-primary/50'"
+                @click="selectedSystemCamera = cam.id"
+              >
+                <div class="flex items-center gap-2">
+                  <div class="w-2 h-2 rounded-full" :class="selectedSystemCamera === cam.id ? 'bg-primary' : 'bg-muted-foreground'"></div>
+                  <span class="text-xs font-medium">{{ cam.name }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">IP 地址（可选）</Label>
+            <Input
+              v-model="cameraIpInput"
+              type="text"
+              placeholder="127.0.0.1"
+            />
+          </div>
+        </UiCardContent>
+
+        <UiCardFooter class="gap-2 w-full">
+          <UiButton variant="outline" class="flex-1" @click="showCameraModal = false">取消</UiButton>
+          <UiButton variant="default" class="flex-1" @click="handleAddCamera" :disabled="!selectedSystemCamera || isLoadingSystemCameras">确认添加</UiButton>
         </UiCardFooter>
       </UiCard>
     </div>

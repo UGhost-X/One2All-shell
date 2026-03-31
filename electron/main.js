@@ -1,7 +1,11 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
+const util = require('util');
 const { PrismaClient } = require('@prisma/client');
+
+const execAsync = util.promisify(exec);
 
 let mainWindow;
 const prisma = new PrismaClient();
@@ -82,7 +86,8 @@ app.whenReady().then(async () => {
         backendMode: settings.backendMode,
         backendIp: settings.backendIp,
         backendUrl: settings.backendUrl,
-        backendPort: settings.backendPort
+        backendPort: settings.backendPort,
+        imageSettings: settings.imageSettings ? JSON.parse(settings.imageSettings) : { exposure: 67, gain: 1.2 }
       };
     } catch (err) {
       console.error('Failed to load settings from database:', err);
@@ -92,7 +97,8 @@ app.whenReady().then(async () => {
         backendMode: 'local',
         backendIp: 'localhost',
         backendUrl: 'http://localhost:8000',
-        backendPort: '8000'
+        backendPort: '8000',
+        imageSettings: { exposure: 67, gain: 1.2 }
       };
     }
   }
@@ -102,9 +108,20 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:get', () => appSettings);
   ipcMain.handle('settings:save', async (event, newSettings) => {
     try {
+      const dataToSave = {
+        dataPath: newSettings.dataPath,
+        locale: newSettings.locale,
+        backendMode: newSettings.backendMode,
+        backendIp: newSettings.backendIp,
+        backendUrl: newSettings.backendUrl,
+        backendPort: newSettings.backendPort
+      };
+      if (newSettings.imageSettings) {
+        dataToSave.imageSettings = JSON.stringify(newSettings.imageSettings);
+      }
       const updated = await prisma.appSettings.update({
         where: { id: 1 },
-        data: newSettings
+        data: dataToSave
       });
       appSettings = {
         dataPath: updated.dataPath,
@@ -112,7 +129,8 @@ app.whenReady().then(async () => {
         backendMode: updated.backendMode,
         backendIp: updated.backendIp,
         backendUrl: updated.backendUrl,
-        backendPort: updated.backendPort
+        backendPort: updated.backendPort,
+        imageSettings: updated.imageSettings ? JSON.parse(updated.imageSettings) : { exposure: 67, gain: 1.2 }
       };
       return true;
     } catch (err) {
@@ -222,6 +240,50 @@ app.whenReady().then(async () => {
     return await prisma.product.delete({
       where: { id }
     });
+  });
+
+  async function getSystemCameras() {
+    try {
+      if (process.platform === 'win32') {
+        const { stdout } = await execAsync('wmic path Win32_PnPEntity where "PNPClass=\'Camera\' or PNPClass=\'Image\'" get Name /format:list');
+        const lines = stdout.split('\n').filter(line => line.trim().startsWith('Name='));
+        return lines.map((line, index) => {
+          const name = line.replace('Name=', '').trim();
+          return {
+            id: `system_${index}`,
+            name: name,
+            deviceId: `camera_${index}`,
+            isSystemCamera: true
+          };
+        });
+      } else if (process.platform === 'darwin') {
+        const { stdout } = await execAsync('system_profiler SPCameraDataType -json');
+        const data = JSON.parse(stdout);
+        const cameras = data?.SPCameraDataType || [];
+        return cameras.map((cam, index) => ({
+          id: `system_${index}`,
+          name: cam._name || `Camera ${index + 1}`,
+          deviceId: cam.spcamera_unique_id || `camera_${index}`,
+          isSystemCamera: true
+        }));
+      } else {
+        const { stdout } = await execAsync('ls /dev/video* 2>/dev/null || echo ""');
+        const devices = stdout.trim().split('\n').filter(Boolean);
+        return devices.map((device, index) => ({
+          id: `system_${index}`,
+          name: `Video Device ${index + 1}`,
+          deviceId: device,
+          isSystemCamera: true
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to get system cameras:', err);
+      return [];
+    }
+  }
+
+  ipcMain.handle('camera:get-system-cameras', async () => {
+    return await getSystemCameras();
   });
 
   ipcMain.handle('db:get-cameras', async () => {
@@ -430,10 +492,27 @@ app.whenReady().then(async () => {
             params: imgEntry.params,
             annotations: imgAnnotations.map(ann => {
               let type = 'polygon';
-              let points = ann.segmentation[0];
-              
-              if (ann.segmentation[0].length === 8) {
-                const p = ann.segmentation[0];
+              let points = ann.segmentation?.[0] || [];
+
+              if (ann.rbbox && ann.rbbox.length >= 5) {
+                type = 'rbbox';
+                if (!points || points.length === 0) {
+                  const [cx, cy, w, h, angle] = ann.rbbox;
+                  const rad = (angle * Math.PI) / 180;
+                  const cos = Math.cos(rad);
+                  const sin = Math.sin(rad);
+                  const dx = w / 2;
+                  const dy = h / 2;
+                  const corners = [
+                    cx - dx * cos - (-dy) * sin, cy - dx * sin + (-dy) * cos,
+                    cx + dx * cos - (-dy) * sin, cy + dx * sin + (-dy) * cos,
+                    cx + dx * cos - dy * sin, cy + dx * sin + dy * cos,
+                    cx - dx * cos - dy * sin, cy - dx * sin + dy * cos,
+                  ];
+                  points = corners;
+                }
+              } else if (points.length === 8) {
+                const p = points;
                 if (p[0] === p[6] && p[1] === p[3] && p[2] === p[4] && p[5] === p[7]) {
                   type = 'rect';
                   points = [p[0], p[1], p[2] - p[0], p[5] - p[1]];
@@ -445,6 +524,9 @@ app.whenReady().then(async () => {
                 categoryId: ann.category_id,
                 type,
                 points,
+                rbbox: ann.rbbox,
+                posId: ann.pos_id,
+                segmentation: ann.segmentation,
                 angle: ann.angle || 0,
                 horizontal_flip: ann.horizontal_flip || false,
                 vertical_flip: ann.vertical_flip || false
@@ -568,58 +650,46 @@ app.whenReady().then(async () => {
   // Training Record API
   ipcMain.handle('db:save-training-record', async (event, data) => {
     try {
-      const existing = await prisma.trainingRecord.findUnique({
-        where: { 
-          taskUuid_labelName: { 
-            taskUuid: data.taskId, 
-            labelName: data.labelName 
-          } 
-        }
-      });
-      
-      if (existing) {
-        const updateData = {
-          status: data.status,
-          progress: data.progress,
+      const labelName = data.labelName || 'default'
+      const updateData = {
+        status: data.status,
+        progress: data.progress,
+        totalEpochs: data.totalEpochs,
+        currentEpoch: data.currentEpoch,
+        endTime: data.completedAt
+      };
+      if (data.metrics) updateData.metrics = JSON.stringify(data.metrics);
+      if (data.logs) updateData.logs = JSON.stringify(data.logs);
+      if (data.batchSize != null) updateData.batchSize = data.batchSize;
+      if (data.learningRate != null) updateData.learningRate = data.learningRate;
+
+      return await prisma.trainingRecord.upsert({
+        where: {
+          taskUuid_labelName: {
+            taskUuid: data.taskId,
+            labelName
+          }
+        },
+        update: updateData,
+        create: {
+          productId: data.productId,
+          taskUuid: data.taskId,
+          labelName,
+          modelName: data.modelName || 'PatchCore',
+          config: '{}',
+          status: data.status || 'pending',
+          progress: data.progress || 0,
           totalEpochs: data.totalEpochs,
           currentEpoch: data.currentEpoch,
+          batchSize: data.batchSize,
+          learningRate: data.learningRate,
+          metrics: JSON.stringify(data.metrics || []),
+          logs: JSON.stringify(data.logs || []),
+          outputPath: data.outputPath,
+          startTime: data.startedAt,
           endTime: data.completedAt
-        };
-        if (data.metrics) updateData.metrics = JSON.stringify(data.metrics);
-        if (data.logs) updateData.logs = JSON.stringify(data.logs);
-        if (data.batchSize != null) updateData.batchSize = data.batchSize;
-        if (data.learningRate != null) updateData.learningRate = data.learningRate;
-        return await prisma.trainingRecord.update({
-          where: { 
-            taskUuid_labelName: { 
-              taskUuid: data.taskId, 
-              labelName: data.labelName 
-            } 
-          },
-          data: updateData
-        });
-      } else {
-        return await prisma.trainingRecord.create({
-          data: {
-            productId: data.productId,
-            taskUuid: data.taskId,
-            labelName: data.labelName,
-            modelName: data.modelName || 'STFPM',
-            config: '{}',
-            status: data.status || 'pending',
-            progress: data.progress || 0,
-            totalEpochs: data.totalEpochs,
-            currentEpoch: data.currentEpoch,
-            batchSize: data.batchSize,
-            learningRate: data.learningRate,
-            metrics: JSON.stringify(data.metrics || []),
-            logs: JSON.stringify(data.logs || []),
-            outputPath: data.outputPath,
-            startTime: data.startedAt,
-            endTime: data.completedAt
-          }
-        });
-      }
+        }
+      });
     } catch (err) {
       console.error('Failed to save training record:', err);
       throw err;

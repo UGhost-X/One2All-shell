@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical, Zap, Eye, EyeOff, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical, Zap, Eye, EyeOff, ChevronLeft, ChevronRight, Loader2 } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -169,36 +169,61 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
         height: res.height,
         file_name: `image_${idx + 1}.jpg`
       })),
-      annotations: augmentedResults.value.flatMap((res, resIdx) => 
+      annotations: augmentedResults.value.flatMap((res, resIdx) =>
         res.annotations.map((ann: any, annIdx: number) => {
-          // Recalculate bbox and area for the augmented image
-          const calculateBbox = (points: any, type: string) => {
-            if (type === 'rect') return points
+          const calculateBbox = (ann: any) => {
+            if (ann.type === 'rect' && ann.points) return ann.points
+            if (ann.type === 'rbbox' && ann.rbbox) {
+              const [cx, cy, w, h, angle] = ann.rbbox
+              const rad = (angle * Math.PI) / 180
+              const cos = Math.cos(rad)
+              const sin = Math.sin(rad)
+              const dx = w / 2
+              const dy = h / 2
+              const corners = [
+                [cx - dx * cos - (-dy) * sin, cy - dx * sin + (-dy) * cos],
+                [cx + dx * cos - (-dy) * sin, cy + dx * sin + (-dy) * cos],
+                [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos],
+                [cx - dx * cos - dy * sin, cy - dx * sin + dy * cos],
+              ]
+              const xs = corners.map(p => p[0])
+              const ys = corners.map(p => p[1])
+              const minX = Math.min(...xs)
+              const maxX = Math.max(...xs)
+              const minY = Math.min(...ys)
+              const maxY = Math.max(...ys)
+              return [minX, minY, maxX - minX, maxY - minY]
+            }
+            if (!ann.points || !ann.points.length) return [0, 0, 0, 0]
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-            for (let i = 0; i < points.length; i += 2) {
-              const x = points[i]; const y = points[i+1]
+            for (let i = 0; i < ann.points.length; i += 2) {
+              const x = ann.points[i]; const y = ann.points[i+1]
               minX = Math.min(minX, x); minY = Math.min(minY, y)
               maxX = Math.max(maxX, x); maxY = Math.max(maxY, y)
             }
             return [minX, minY, maxX - minX, maxY - minY]
           }
-          const calculateArea = (points: any, type: string) => {
-            if (type === 'rect') return points[2] * points[3]
+          const calculateArea = (ann: any) => {
+            if (ann.type === 'rect' && ann.points) return ann.points[2] * ann.points[3]
+            if (ann.type === 'rbbox' && ann.rbbox) {
+              return ann.rbbox[2] * ann.rbbox[3]
+            }
+            if (!ann.points || !ann.points.length) return 0
             let area = 0
-            for (let i = 0; i < points.length; i += 2) {
-              const j = (i + 2) % points.length
-              area += points[i] * points[j + 1]; area -= points[j] * points[i + 1]
+            for (let i = 0; i < ann.points.length; i += 2) {
+              const j = (i + 2) % ann.points.length
+              area += ann.points[i] * ann.points[j + 1]; area -= ann.points[j] * ann.points[i + 1]
             }
             return Math.abs(area) / 2
           }
 
-          const bbox = calculateBbox(ann.points, ann.type)
-          const area = calculateArea(ann.points, ann.type)
+          const bbox = calculateBbox(ann)
+          const area = calculateArea(ann)
           let segmentation: number[][] = []
           if (ann.type === 'rect') {
             const [x, y, w, h] = ann.points
             segmentation = [[x, y, x + w, y, x + w, y + h, x, y + h]]
-          } else {
+          }else {
             segmentation = [ann.points]
           }
 
@@ -209,6 +234,8 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
             segmentation,
             area,
             bbox,
+            rbbox: ann.rbbox,
+            pos_id: ann.posId,
             iscrowd: 0,
             angle: res.params?.rotate || 0,
             horizontal_flip: res.params?.horizontal_flip || false,
@@ -287,7 +314,7 @@ const labelSelectionValue = computed({
     }
   }
 })
-const trainModelName = ref('STFPM')
+const trainModelName = ref('PatchCore')
 const isTrainDatasetVersionOpen = ref(false)
 const isTrainStartModeOpen = ref(false)
 const isResumeModeOpen = ref(false)
@@ -312,6 +339,19 @@ const innerStepStorageKey = computed(() => {
   const pid = productId.value == null ? '' : String(productId.value)
   return `one2all.training.innerStep.${pid}`
 })
+
+const isPatchCoreModel = computed(() => {
+  const model = String(trainModelName.value || '').toLowerCase()
+  return model.includes('patchcore')
+})
+
+const patchcoreStageLabels = [
+  'training.monitor.stageLabels.featureExtraction',
+  'training.monitor.stageLabels.coresetSampling',
+  'training.monitor.stageLabels.thresholdCalibration'
+]
+
+const patchcoreStages = ['1/3', '2/3', '3/3']
 
 const parsePositiveInt = (raw: any) => {
   const n = Math.round(Number(raw))
@@ -656,6 +696,16 @@ const currentTaskStatus = computed(() => {
 const currentStatusDisplay = computed(() => normalizeStatus(currentTaskStatus.value))
 const groupStatusDisplay = computed(() => normalizeStatus(monitorGroupStatus.value))
 
+const isCurrentTaskCompleted = computed(() => {
+  const s = String(currentTaskStatus.value || '').toLowerCase()
+  return s === 'completed' || s === 'success'
+})
+
+const isGroupCompleted = computed(() => {
+  const s = String(monitorGroupStatus.value || '').toLowerCase()
+  return s === 'completed' || s === 'success'
+})
+
 const hasRunningTasks = computed(() => {
   return trainTasks.value.some(t => isMonitorRunning(t.status))
 })
@@ -687,6 +737,24 @@ const getStatusClass = (status?: string) => {
   const s = normalizeStatus(status)
   const isRunning = s === 'running' || s === 'training' || s === 'starting' || s === 'preparing'
   return `${color} ${isRunning ? 'animate-pulse' : ''}`
+}
+
+const getStageClass = (stage: string, currentStage?: string) => {
+  if (!currentStage) return 'border-muted text-muted-foreground'
+  const stageOrder = ['1/3', '2/3', '3/3']
+  const currentIdx = stageOrder.indexOf(currentStage)
+  const stageIdx = stageOrder.indexOf(stage)
+  if (stageIdx < currentIdx) return 'border-green-500 bg-green-500/10 text-green-500'
+  if (stageIdx === currentIdx) return 'border-primary bg-primary/10 text-primary animate-pulse'
+  return 'border-muted text-muted-foreground'
+}
+
+const isStageCompleted = (stage: string, currentStage?: string) => {
+  if (!currentStage) return false
+  const stageOrder = ['1/3', '2/3', '3/3']
+  const currentIdx = stageOrder.indexOf(currentStage)
+  const stageIdx = stageOrder.indexOf(stage)
+  return stageIdx < currentIdx
 }
 
 const getRecordLearningRate = () => {
@@ -1199,10 +1267,13 @@ const latestMonitorMetric = computed(() => {
       iter: Number(last.iter),
       total_iters: Number(last.total_iters),
       loss: Number(last.loss),
-      lr: Number(last.lr)
+      lr: Number(last.lr),
+      stage: last.stage,
+      threshold: last.threshold,
+      num_samples: last.num_samples
     }
   }
-  
+
   // Overall mode: average of latest metrics from all tasks
   let totalLoss = 0
   let count = 0
@@ -1210,6 +1281,9 @@ const latestMonitorMetric = computed(() => {
   let maxIter = 0
   let totalIters = 0
   let totalLr = 0
+  let lastStage = undefined
+  let lastThreshold = undefined
+  let lastNumSamples = undefined
 
   trainTasks.value.forEach(tItem => {
     const metrics = groupMetrics.value[tItem.task_id] || []
@@ -1220,6 +1294,10 @@ const latestMonitorMetric = computed(() => {
       maxEpoch = Math.max(maxEpoch, Number(last.epoch || 0))
       maxIter = Math.max(maxIter, Number(last.iter || 0))
       totalIters = Math.max(totalIters, Number(last.total_iters || 0))
+      // 使用最后一个任务的 PatchCore 特有字段
+      if (last.stage) lastStage = last.stage
+      if (last.threshold != null) lastThreshold = last.threshold
+      if (last.num_samples) lastNumSamples = last.num_samples
       count++
     }
   })
@@ -1230,7 +1308,10 @@ const latestMonitorMetric = computed(() => {
     lr: totalLr / count,
     epoch: maxEpoch,
     iter: maxIter,
-    total_iters: totalIters
+    total_iters: totalIters,
+    stage: lastStage,
+    threshold: lastThreshold,
+    num_samples: lastNumSamples
   }
 })
 
@@ -1875,6 +1956,7 @@ const formatMetricNumber = (v: number) => {
 }
 
 const enrichedLoadedImages = (images: any[]) => {
+  console.log('images:', images)
   return (images || []).map((img: any) => ({
     ...img,
     annotations: (img.annotations || []).map((ann: any) => {
@@ -2095,6 +2177,16 @@ const applyMonitorPayload = (taskId: string, data: any) => {
   if (Array.isArray(data.metrics) && data.metrics.length > 0) {
     mergeMetricPoints(taskId, data.metrics, 'append')
   }
+
+  // 处理 PatchCore 特有指标 (stage, threshold, num_samples)
+  if (data.stage || data.threshold != null || data.num_samples) {
+    const patchcoreMetrics = {
+      stage: data.stage,
+      threshold: data.threshold,
+      num_samples: data.num_samples
+    }
+    mergeMetricPoints(taskId, [patchcoreMetrics], 'append')
+  }
 }
 
 watch(monitorTaskId, (taskId) => {
@@ -2169,24 +2261,50 @@ onDeactivated(() => {
 })
 
 const buildTrainCocoData = (results: any[]) => {
-  const calculateBbox = (points: any, type: string) => {
-    if (type === 'rect') return points
+  const calculateBbox = (ann: any) => {
+    if (ann.type === 'rect' && ann.points) return ann.points
+    if (ann.type === 'rbbox' && ann.rbbox) {
+      const [cx, cy, w, h, angle] = ann.rbbox
+      const rad = (angle * Math.PI) / 180
+      const cos = Math.cos(rad)
+      const sin = Math.sin(rad)
+      const dx = w / 2
+      const dy = h / 2
+      const corners = [
+        [cx - dx * cos - (-dy) * sin, cy - dx * sin + (-dy) * cos],
+        [cx + dx * cos - (-dy) * sin, cy + dx * sin + (-dy) * cos],
+        [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos],
+        [cx - dx * cos - dy * sin, cy - dx * sin + dy * cos],
+      ]
+      const xs = corners.map(p => p[0])
+      const ys = corners.map(p => p[1])
+      const minX = Math.min(...xs)
+      const maxX = Math.max(...xs)
+      const minY = Math.min(...ys)
+      const maxY = Math.max(...ys)
+      return [minX, minY, maxX - minX, maxY - minY]
+    }
+    if (!ann.points || !ann.points.length) return [0, 0, 0, 0]
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (let i = 0; i < points.length; i += 2) {
-      const x = points[i]
-      const y = points[i + 1]
+    for (let i = 0; i < ann.points.length; i += 2) {
+      const x = ann.points[i]
+      const y = ann.points[i + 1]
       minX = Math.min(minX, x); minY = Math.min(minY, y)
       maxX = Math.max(maxX, x); maxY = Math.max(maxY, y)
     }
     return [minX, minY, maxX - minX, maxY - minY]
   }
-  const calculateArea = (points: any, type: string) => {
-    if (type === 'rect') return points[2] * points[3]
+  const calculateArea = (ann: any) => {
+    if (ann.type === 'rect' && ann.points) return ann.points[2] * ann.points[3]
+    if (ann.type === 'rbbox' && ann.rbbox) {
+      return ann.rbbox[2] * ann.rbbox[3]
+    }
+    if (!ann.points || !ann.points.length) return 0
     let area = 0
-    for (let i = 0; i < points.length; i += 2) {
-      const j = (i + 2) % points.length
-      area += points[i] * points[j + 1]
-      area -= points[j] * points[i + 1]
+    for (let i = 0; i < ann.points.length; i += 2) {
+      const j = (i + 2) % ann.points.length
+      area += ann.points[i] * ann.points[j + 1]
+      area -= ann.points[j] * ann.points[i + 1]
     }
     return Math.abs(area) / 2
   }
@@ -2201,17 +2319,23 @@ const buildTrainCocoData = (results: any[]) => {
   let annId = 1
   const annotations = (results || []).flatMap((img, idx) => {
     return (img.annotations || []).map((ann: any) => {
-      const bbox = calculateBbox(ann.points, ann.type)
-      const area = calculateArea(ann.points, ann.type)
-      const segmentation = ann.type === 'rect'
-        ? [[bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3], bbox[0], bbox[1] + bbox[3]]]
-        : [ann.points]
+      const bbox = calculateBbox(ann)
+      // console.log('ann:', ann)
+      const area = calculateArea(ann)
+      let segmentation: number[][] = []
+      if (ann.type === 'rect') {
+        segmentation = [[bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3], bbox[0], bbox[1] + bbox[3]]]
+      } else {
+        segmentation = [ann.points]
+      }
       return {
         id: annId++,
         image_id: idx + 1,
         category_id: ann.categoryId || 1,
         bbox,
         points: ann.points,
+        rbbox: ann.rbbox,
+        pos_id: ann.posId,
         segmentation,
         area,
         iscrowd: 0,
@@ -2247,7 +2371,6 @@ const startTraining = async () => {
     const basePath = settings?.dataPath || settingsDataPath.value || ''
     const images = trainDatasetResults.value.map((img: any) => String(img.imageUrl || '').split(',')[1] || '')
     const cocoData = buildTrainCocoData(trainDatasetResults.value)
-
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const apiUrl = `${apiBase.replace(/\/$/, '')}/train/anomaly`
 
@@ -2272,7 +2395,7 @@ const startTraining = async () => {
         }
       }
       
-      currentBaseEpoch.value = completedEpochs // 记录本次续训的基数
+      currentBaseEpoch.value = completedEpochs
       finalEpochs = completedEpochs + additionalEpochs
       
       // 确保 finalEpochs 至少比 completedEpochs 大
@@ -2316,7 +2439,7 @@ const startTraining = async () => {
       coco_data: cocoData,
       base_path: basePath,
       project_id: String(productId.value),
-      model_name: String(trainModelName.value || 'STFPM'),
+      model_name: String(trainModelName.value || 'PatchCore'),
       train_epochs: finalEpochs,
       batch_size: Math.round(Number(trainConfig.value.batchSize[0] || 8)),
       learning_rate: Number(trainConfig.value.learningRate || 0.01),
@@ -2387,9 +2510,9 @@ const startTraining = async () => {
       for (const t of trainTasks.value) {
         window.electronAPI.saveTrainingRecord({
           productId: productId.value,
-          taskId: trainTaskUuid.value,
+          taskId: t.task_id,
           labelName: t.label,
-          modelName: trainModelName.value || 'STFPM',
+          modelName: trainModelName.value || 'PatchCore',
           status: 'pending',
           progress: 0,
           totalEpochs: finalEpochs,
@@ -2584,42 +2707,48 @@ const previewShowAnnotations = ref(true)
 const previewZoom = ref(1)
 const previewPanX = ref(0)
 const previewPanY = ref(0)
+const previewIsDragging = ref(false)
 const previewContainerRef = ref<HTMLElement | null>(null)
+const datasetPreviewImages = ref<any[]>([])
+const datasetPreviewCurrentIndex = ref<number>(0)
 
 const handlePreviewWheel = (e: WheelEvent) => {
   e.preventDefault()
   if (!previewContainerRef.value) return
-  
+
   const rect = previewContainerRef.value.getBoundingClientRect()
   const mouseX = e.clientX - rect.left
   const mouseY = e.clientY - rect.top
-  
+
   const delta = e.deltaY > 0 ? -0.1 : 0.1
   const newZoom = Math.max(0.1, Math.min(10, previewZoom.value + delta))
   const zoomRatio = newZoom / previewZoom.value
-  
+
   previewPanX.value = mouseX - (mouseX - previewPanX.value) * zoomRatio
   previewPanY.value = mouseY - (mouseY - previewPanY.value) * zoomRatio
   previewZoom.value = newZoom
 }
 
 const handlePreviewMouseDown = (e: MouseEvent) => {
+  e.preventDefault()
   if (previewZoom.value <= 1) return
+  previewIsDragging.value = true
   const startX = e.clientX
   const startY = e.clientY
   const startPanX = previewPanX.value
   const startPanY = previewPanY.value
-  
+
   const onMouseMove = (ev: MouseEvent) => {
     previewPanX.value = startPanX + (ev.clientX - startX)
     previewPanY.value = startPanY + (ev.clientY - startY)
   }
-  
+
   const onMouseUp = () => {
+    previewIsDragging.value = false
     window.removeEventListener('mousemove', onMouseMove)
     window.removeEventListener('mouseup', onMouseUp)
   }
-  
+
   window.addEventListener('mousemove', onMouseMove)
   window.addEventListener('mouseup', onMouseUp)
 }
@@ -2634,6 +2763,18 @@ const showNextImage = () => {
   if (previewImageIndex.value === null || previewImageIndex.value >= augmentedResults.value.length - 1) return
   previewImageIndex.value++
   previewImage.value = augmentedResults.value[previewImageIndex.value]?.imageUrl || null
+}
+
+const showDatasetPrevImage = () => {
+  if (datasetPreviewCurrentIndex.value <= 0) return
+  datasetPreviewCurrentIndex.value--
+  previewImage.value = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + datasetPreviewImages.value[datasetPreviewCurrentIndex.value].url
+}
+
+const showDatasetNextImage = () => {
+  if (datasetPreviewCurrentIndex.value >= datasetPreviewImages.value.length - 1) return
+  datasetPreviewCurrentIndex.value++
+  previewImage.value = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + datasetPreviewImages.value[datasetPreviewCurrentIndex.value].url
 }
 
 const selectedIndices = ref<Set<number>>(new Set())
@@ -2734,7 +2875,6 @@ const isRollingBack = ref(false)
               }
             })
           }))
-          
           if (augmentedResults.value.length > 0) {
             augmentedImageUrl.value = augmentedResults.value[0].imageUrl
           }
@@ -2881,25 +3021,51 @@ const handleAugment = async () => {
     const base64Data = baseImageUrl.value.split(',')[1]
     
     // ... (COCO format helpers) ...
-    const calculateBbox = (points: any, type: string) => {
-      if (type === 'rect') return points // [x, y, w, h]
+    const calculateBbox = (ann: any) => {
+      if (ann.type === 'rect' && ann.points) return ann.points
+      if (ann.type === 'rbbox' && ann.rbbox) {
+        const [cx, cy, w, h, angle] = ann.rbbox
+        const rad = (angle * Math.PI) / 180
+        const cos = Math.cos(rad)
+        const sin = Math.sin(rad)
+        const dx = w / 2
+        const dy = h / 2
+        const corners = [
+          [cx - dx * cos - (-dy) * sin, cy - dx * sin + (-dy) * cos],
+          [cx + dx * cos - (-dy) * sin, cy + dx * sin + (-dy) * cos],
+          [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos],
+          [cx - dx * cos - dy * sin, cy - dx * sin + dy * cos],
+        ]
+        const xs = corners.map(p => p[0])
+        const ys = corners.map(p => p[1])
+        const minX = Math.min(...xs)
+        const maxX = Math.max(...xs)
+        const minY = Math.min(...ys)
+        const maxY = Math.max(...ys)
+        return [minX, minY, maxX - minX, maxY - minY]
+      }
+      if (!ann.points || !ann.points.length) return [0, 0, 0, 0]
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-      for (let i = 0; i < points.length; i += 2) {
-        const x = points[i]
-        const y = points[i+1]
+      for (let i = 0; i < ann.points.length; i += 2) {
+        const x = ann.points[i]
+        const y = ann.points[i+1]
         minX = Math.min(minX, x); minY = Math.min(minY, y)
         maxX = Math.max(maxX, x); maxY = Math.max(maxY, y)
       }
       return [minX, minY, maxX - minX, maxY - minY]
     }
 
-    const calculateArea = (points: any, type: string) => {
-      if (type === 'rect') return points[2] * points[3]
+    const calculateArea = (ann: any) => {
+      if (ann.type === 'rect' && ann.points) return ann.points[2] * ann.points[3]
+      if (ann.type === 'rbbox' && ann.rbbox) {
+        return ann.rbbox[2] * ann.rbbox[3]
+      }
+      if (!ann.points || !ann.points.length) return 0
       let area = 0
-      for (let i = 0; i < points.length; i += 2) {
-        const j = (i + 2) % points.length
-        area += points[i] * points[j + 1]
-        area -= points[j] * points[i + 1]
+      for (let i = 0; i < ann.points.length; i += 2) {
+        const j = (i + 2) % ann.points.length
+        area += ann.points[i] * ann.points[j + 1]
+        area -= ann.points[j] * ann.points[i + 1]
       }
       return Math.abs(area) / 2
     }
@@ -2909,10 +3075,24 @@ const handleAugment = async () => {
       const bbox = calculateBbox(ann.points, ann.type)
       const area = calculateArea(ann.points, ann.type)
       let segmentation: number[][] = []
-      
+
       if (ann.type === 'rect') {
         const [x, y, w, h] = ann.points
         segmentation = [[x, y, x + w, y, x + w, y + h, x, y + h]]
+      } else if (ann.type === 'rbbox' && ann.rbbox) {
+        const [cx, cy, w, h, angle] = ann.rbbox
+        const rad = (angle * Math.PI) / 180
+        const cos = Math.cos(rad)
+        const sin = Math.sin(rad)
+        const dx = w / 2
+        const dy = h / 2
+        const corners = [
+          [cx - dx * cos - (-dy) * sin, cy - dx * sin + (-dy) * cos],
+          [cx + dx * cos - (-dy) * sin, cy + dx * sin + (-dy) * cos],
+          [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos],
+          [cx - dx * cos - dy * sin, cy - dx * sin + dy * cos],
+        ]
+        segmentation = [corners.flat()]
       } else {
         segmentation = [ann.points]
       }
@@ -2929,6 +3109,8 @@ const handleAugment = async () => {
         bbox,
         iscrowd: 0,
         type: ann.type,
+        rbbox: ann.rbbox,
+        pos_id: ann.posId,
         color: ann.color,
         label: ann.label,
         labelId: ann.labelId
@@ -2959,50 +3141,63 @@ const handleAugment = async () => {
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const apiUrl = `${apiBase.replace(/\/$/, '')}/augment`
 
+    const requestBody = {
+      image_base64: base64Data,
+      coco_data: cocoData,
+      config: augConfig,
+      num_results: requestedNumResults.value,
+      gradient_axes: {
+        x: isMatrixMode.value ? sliceConfig.value.x : 'none',
+        y: isMatrixMode.value ? sliceConfig.value.y : 'none',
+      }
+    }
+
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_base64: base64Data,
-        coco_data: cocoData,
-        config: augConfig,
-        num_results: requestedNumResults.value,
-        gradient_axes: {
-          x: isMatrixMode.value ? sliceConfig.value.x : 'none',
-          y: isMatrixMode.value ? sliceConfig.value.y : 'none',
-        }
-      })
+      body: JSON.stringify(requestBody)
     })
 
     if (!response.ok) throw new Error(`Augmentation failed: ${response.statusText}`)
 
     const result = await response.json()
     const items = (result.items || []).slice(0, requestedNumResults.value)
-    
     augmentedResults.value = items.map((item: any) => {
       const resultCoco = item.coco_data || {}
       const annotations = (resultCoco.annotations || []).map((ann: any) => {
         let points: any = []
-        let type = ann.type || (ann.segmentation && ann.segmentation[0]?.length > 8 ? 'polygon' : 'rect')
-        
-        if (type === 'rect') {
+        let type = ann.type
+
+        if (ann.rbbox) {
+          type = 'rbbox'
+          points = ann.segmentation?.[0] || []
+        } else if (!type) {
+          type = ann.segmentation && ann.segmentation[0]?.length > 8 ? 'polygon' : 'rect'
+          if (type === 'rect') {
+            points = ann.bbox || [0, 0, 0, 0]
+          } else {
+            const seg = ann.segmentation?.[0] || []
+            points = seg
+          }
+        } else if (type === 'rect') {
           points = ann.bbox || [0, 0, 0, 0]
         } else {
           const seg = ann.segmentation?.[0] || []
           points = seg
         }
-        
+
         const labelInfo = labelConfigs.value[ann.category_id - 1] || {}
-        
         return {
           id: ann.id || Math.random().toString(36).substr(2, 9),
           type,
           points,
+          rbbox: ann.rbbox,
           color: ann.color || labelInfo.color || '#3b82f6',
           label: ann.label || labelInfo.name || 'unknown',
           labelId: labelInfo.id,
           categoryId: ann.category_id,
-          angle: ann.angle || 0
+          angle: ann.angle || 0,
+          posId: ann.pos_id
         }
       })
 
@@ -3032,17 +3227,45 @@ const handleAugment = async () => {
 }
 
 const getSvgPoints = (ann: any) => {
-  if (ann.type === 'rect') {
-    const [x, y, w, h] = ann.points
-    return `${x},${y} ${x + w},${y} ${x + w},${y + h} ${x},${y + h}`
-  } else {
-    // ann.points for polygon is [x1, y1, x2, y2, ...]
+  if (ann.type === 'rbbox' && ann.points && ann.points.length === 8) {
     const pts = []
     for (let i = 0; i < ann.points.length; i += 2) {
       pts.push(`${ann.points[i]},${ann.points[i + 1]}`)
     }
     return pts.join(' ')
   }
+  if (ann.type === 'rect') {
+    const [x, y, w, h] = ann.points || [0, 0, 0, 0]
+    return `${x},${y} ${x + w},${y} ${x + w},${y + h} ${x},${y + h}`
+  }
+  const pts = []
+  for (let i = 0; i < (ann.points?.length || 0); i += 2) {
+    pts.push(`${ann.points[i]},${ann.points[i + 1]}`)
+  }
+  return pts.join(' ')
+}
+
+const getLabelPosition = (ann: any) => {
+  if (ann.type === 'rbbox' && ann.points && ann.points.length === 8) {
+    const xs = [ann.points[0], ann.points[2], ann.points[4], ann.points[6]]
+    const ys = [ann.points[1], ann.points[3], ann.points[5], ann.points[7]]
+    const minX = Math.min(...xs)
+    const minY = Math.min(...ys)
+    return { x: minX, y: minY - 2 }
+  }
+  if (ann.type === 'rect') {
+    const [x, y] = ann.points || [0, 0]
+    return { x, y: y - 2 }
+  }
+  const xs: number[] = []
+  const ys: number[] = []
+  for (let i = 0; i < (ann.points?.length || 0); i += 2) {
+    xs.push(ann.points[i])
+    ys.push(ann.points[i + 1])
+  }
+  const minX = xs.length > 0 ? Math.min(...xs) : 0
+  const minY = ys.length > 0 ? Math.min(...ys) : 0
+  return { x: minX, y: minY - 2 }
 }
 
 onMounted(async () => {
@@ -3085,7 +3308,11 @@ onMounted(async () => {
       // Load annotations
       const ann = await window.electronAPI.getAnnotations(productId.value, qImagePath)
       if (ann && ann.data) {
-        currentAnnotations.value = JSON.parse(ann.data)
+        const loadedAnns = JSON.parse(ann.data)
+        currentAnnotations.value = loadedAnns.map((a: any, idx: number) => ({
+          ...a,
+          posId: a.posId ?? (idx + 1)
+        }))
       }
     } else {
       // 获取产品的所有图片，取第一张
@@ -3105,7 +3332,11 @@ onMounted(async () => {
         
         const ann = await window.electronAPI.getAnnotations(productId.value, targetImagePath)
         if (ann && ann.data) {
-          currentAnnotations.value = JSON.parse(ann.data)
+          const loadedAnns = JSON.parse(ann.data)
+          currentAnnotations.value = loadedAnns.map((a: any, idx: number) => ({
+            ...a,
+            posId: a.posId ?? (idx + 1)
+          }))
         }
       }
     }
@@ -3165,7 +3396,11 @@ watch(() => route.query, async (newQuery) => {
     if (productId.value) {
       const ann = await window.electronAPI.getAnnotations(productId.value, qImagePath)
       if (ann && ann.data) {
-        currentAnnotations.value = JSON.parse(ann.data)
+        const loadedAnns = JSON.parse(ann.data)
+        currentAnnotations.value = loadedAnns.map((a: any, idx: number) => ({
+          ...a,
+          posId: a.posId ?? (idx + 1)
+        }))
       }
     }
   }
@@ -3330,7 +3565,7 @@ onBeforeUnmount(() => {
                                          v-for="(img, i) in ds.images"
                                          :key="i"
                                          class="aspect-square rounded-xl border relative cursor-zoom-in hover:ring-2 ring-primary/50 shadow-sm group/img"
-                                         @click.stop="previewImage = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url; previewImageIndex = null"
+                                         @click.stop="datasetPreviewImages = ds.images; datasetPreviewCurrentIndex = i; previewImage = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url; previewImageIndex = null"
                                        >
                                          <img :src="(config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + img.url" class="w-full h-full object-cover transition-transform group-hover/img:scale-110 rounded-xl" loading="lazy" />
                                        </div>
@@ -4086,37 +4321,36 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
 
-                  <!-- Loss KPI -->
+                  <!-- Threshold KPI -->
                   <div class="group border rounded-2xl bg-gradient-to-br from-background to-muted/20 p-5 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between h-[120px] relative overflow-hidden">
                     <div class="flex justify-between items-start relative z-10">
-                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.loss') }}</span>
-                      <TrendingDown class="w-4 h-4 text-red-500/40" />
+                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.threshold') }}</span>
+                      <TrendingDown class="w-4 h-4 text-green-500/40" />
                     </div>
                     <div class="space-y-1 relative z-10">
                       <div class="text-3xl font-black tracking-tight text-primary tabular-nums font-mono">
-                        {{ latestMonitorMetric ? formatMetricNumber(latestMonitorMetric.loss) : '-' }}
+                        {{ latestMonitorMetric?.threshold ? formatMetricNumber(latestMonitorMetric.threshold) : '-' }}
                       </div>
                       <div class="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
                         <Zap class="w-3 h-3 text-amber-500/60" />
-                        {{ t('training.monitor.latestLoss') }}
+                        {{ t('training.monitor.calibratedThreshold') }}
                       </div>
                     </div>
                   </div>
 
-                  <!-- Iteration Info -->
+                  <!-- Stage Info -->
                   <div class="group border rounded-2xl bg-gradient-to-br from-background to-muted/20 p-5 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between h-[120px] relative overflow-hidden">
                     <div class="flex justify-between items-start relative z-10">
-                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.epoch') }}</span>
+                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.stage') }}</span>
                       <GitCommit class="w-4 h-4 text-blue-500/40" />
                     </div>
                     <div class="space-y-1 relative z-10">
                       <div class="flex items-baseline gap-1.5">
-                        <span class="text-3xl font-black tracking-tight text-primary tabular-nums">{{ latestMonitorMetric?.epoch || 0 }}</span>
-                        <span class="text-xs text-muted-foreground font-bold">/ {{ targetTotalEpochs }}</span>
+                        <span class="text-3xl font-black tracking-tight text-primary tabular-nums">{{ latestMonitorMetric?.stage || '-' }}</span>
                       </div>
                       <div class="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
-                        <Clock class="w-3 h-3 text-blue-500/60" />
-                        {{ t('training.monitor.iterPrefix') }}: {{ latestMonitorMetric?.iter || 0 }} / {{ latestMonitorMetric?.total_iters || '-' }}
+                        <Layers class="w-3 h-3 text-blue-500/60" />
+                        {{ t('training.monitor.samples') }}: {{ latestMonitorMetric?.num_samples || latestMonitorMetric?.total_samples || '-' }}
                       </div>
                     </div>
                   </div>
@@ -4153,10 +4387,9 @@ onBeforeUnmount(() => {
                   </div>
                   <div class="divide-y divide-border/50 overflow-y-auto custom-scrollbar flex-1">
                     <div v-for="tItem in trainTasks" :key="tItem.task_id" 
-                      class="flex flex-col transition-all duration-300 group/item"
-                      :class="monitorTaskId === tItem.task_id ? 'bg-primary/[0.03]' : 'hover:bg-muted/10'"
+                      class="flex flex-col transition-all duration-300 group/item hover:bg-muted/10"
                     >
-                      <div class="p-5 flex items-center gap-8 cursor-pointer" @click="if(monitorTaskId !== tItem.task_id) { monitorTaskId = tItem.task_id; loadTaskSnapshot(tItem.task_id) }">
+                      <div class="p-5 flex items-center gap-8">
                         <div class="flex items-center gap-4 w-48 shrink-0">
                           <!-- 批量选择框 -->
                           <div v-if="['pending', 'waiting', 'preparing', 'running', 'training', 'starting'].includes(tItem.status?.toLowerCase() || '')"
@@ -4167,8 +4400,8 @@ onBeforeUnmount(() => {
                           </div>
                           <div v-else class="w-4 h-4 shrink-0"></div>
 
-                          <div class="w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_8px_rgba(0,0,0,0.1)] transition-all duration-300 animate-pulse-slow" :class="[getStatusClass(tItem.status), monitorTaskId === tItem.task_id ? 'ring-4 ring-primary/20 scale-110' : '']"></div>
-                          <div class="truncate text-sm font-semibold tracking-tight transition-colors" :class="monitorTaskId === tItem.task_id ? 'text-primary' : 'text-foreground/80 group-hover/item:text-foreground'">{{ tItem.label }}</div>
+                          <div class="w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_8px_rgba(0,0,0,0.1)] transition-all duration-300 animate-pulse-slow" :class="getStatusClass(tItem.status)"></div>
+                          <div class="truncate text-sm font-semibold tracking-tight text-foreground/80 group-hover/item:text-foreground">{{ tItem.label }}</div>
                         </div>
                         <div class="flex-1 grid grid-cols-[1fr_100px] items-center gap-10">
                           <div class="space-y-2">
@@ -4208,24 +4441,7 @@ onBeforeUnmount(() => {
                         </div>
                       </div>
                       
-                      <!-- Inline Chart (Accordion Content) -->
-                      <div v-if="monitorTaskId === tItem.task_id" class="border-t border-border/50 bg-muted/[0.02] p-6 animate-in slide-in-from-top-4 duration-300">
-                        <div class="flex items-center justify-between mb-5">
-                          <h4 class="text-xs font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
-                            <Activity class="w-4 h-4 text-primary/60" />
-                            {{ t('training.monitor.metrics') }}
-                          </h4>
-                          <div v-if="selectedEpoch !== null" class="flex items-center gap-2">
-                            <span class="text-[10px] px-3 py-1 rounded-full bg-primary/10 text-primary font-bold border border-primary/20">{{ t('training.monitor.epoch') }} {{ selectedEpoch }}</span>
-                            <UiButton variant="ghost" size="sm" class="h-7 text-[10px] px-3 rounded-full hover:bg-primary/5" @click="selectedEpoch = null">
-                              {{ t('training.monitor.showAllEpochs') }}
-                            </UiButton>
-                          </div>
-                        </div>
-                        <div class="h-[350px] w-full relative bg-background/50 rounded-2xl border border-border/50 shadow-inner p-4">
-                          <Line :data="combinedChartData" :options="chartOptions" :plugins="[epochLinesPlugin]" />
-                        </div>
-                      </div>
+
                     </div>
                   </div>
                 </div>
@@ -4351,7 +4567,7 @@ onBeforeUnmount(() => {
                           <div class="grid grid-cols-2 gap-3">
                             <div class="p-3 border border-border/60 rounded-xl bg-background/80">
                               <span class="text-[10px] text-muted-foreground uppercase tracking-wider">{{ t('training.train.modelName') }}</span>
-                              <div class="text-sm font-semibold mt-1">{{ popoverRecord.modelName || 'STFPM' }}</div>
+                              <div class="text-sm font-semibold mt-1">{{ popoverRecord.modelName || 'PatchCore' }}</div>
                             </div>
                             <div class="p-3 border border-border/60 rounded-xl bg-background/80">
                               <span class="text-[10px] text-muted-foreground uppercase tracking-wider">{{ t('training.train.epochs') }}</span>
@@ -4549,7 +4765,7 @@ onBeforeUnmount(() => {
 
     <div v-if="previewImage"
          class="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 md:p-12 animate-in fade-in zoom-in duration-200"
-         @click="previewImage = null; previewImageIndex = null"
+         @click="previewImage = null; previewImageIndex = null; datasetPreviewImages = []"
          @wheel="handlePreviewWheel">
       <div class="relative flex flex-col items-center gap-4">
         <div v-if="previewImageIndex !== null && augmentedResults[previewImageIndex]?.params" class="px-4 py-2 bg-background/90 backdrop-blur-md rounded-lg border shadow-lg max-w-[800px]">
@@ -4559,10 +4775,10 @@ onBeforeUnmount(() => {
               {{ t('training.geometric.rotate') }} {{ Number(augmentedResults[previewImageIndex].params.rotate).toFixed(2) }}°
             </span>
             <span v-if="augmentedResults[previewImageIndex].params.brightness !== undefined" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
-              {{ t('training.visual.brightness') }} {{ augmentedResults[previewImageIndex].params.brightness }}
+              {{ t('training.visual.brightness') }} {{ Number(augmentedResults[previewImageIndex].params.brightness).toFixed(2) }}
             </span>
             <span v-if="augmentedResults[previewImageIndex].params.contrast !== undefined" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
-              {{ t('training.visual.contrast') }} {{ augmentedResults[previewImageIndex].params.contrast }}
+              {{ t('training.visual.contrast') }} {{ Number(augmentedResults[previewImageIndex].params.contrast).toFixed(2) }}
             </span>
             <span v-if="augmentedResults[previewImageIndex].params.blur !== undefined" class="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
               {{ t('training.visual.blur') }} {{ augmentedResults[previewImageIndex].params.blur }}
@@ -4576,27 +4792,35 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div ref="previewContainerRef" class="relative w-[800px] h-[600px] flex items-center justify-center group overflow-hidden bg-black/50 rounded-xl border border-white/10" @click.stop @mousedown="handlePreviewMouseDown">
-        <div class="relative" :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})`, transition: 'transform 0.1s ease-out', transformOrigin: '0 0' }">
-          <img :src="previewImage" class="max-w-none max-h-none object-contain rounded-lg" style="width: auto; height: auto;" />
+        <div class="relative" :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})`, transition: previewIsDragging ? 'none' : 'transform 0.1s ease-out', transformOrigin: '0 0' }">
+          <img :src="previewImage" class="max-w-none max-h-none object-contain rounded-lg select-none" style="width: auto; height: auto;" draggable="false" />
           <!-- 预览标注框 -->
-          <svg v-if="previewShowAnnotations && previewImageIndex !== null && augmentedResults[previewImageIndex]?.annotations?.length > 0 && augmentedResults[previewImageIndex]?.width" 
-               class="absolute top-0 left-0 w-full h-full pointer-events-none" 
+          <svg v-if="previewShowAnnotations && previewImageIndex !== null && augmentedResults[previewImageIndex]?.annotations?.length > 0 && augmentedResults[previewImageIndex]?.width"
+               class="absolute top-0 left-0 w-full h-full pointer-events-none"
                :viewBox="`0 0 ${augmentedResults[previewImageIndex].width} ${augmentedResults[previewImageIndex].height}`"
                preserveAspectRatio="xMidYMid meet">
-            <polygon 
-              v-for="ann in augmentedResults[previewImageIndex].annotations" 
-              :key="ann.id"
-              :points="getSvgPoints(ann)"
-              fill="transparent"
-              :stroke="ann.color"
-              stroke-width="0.1"
-              vector-effect="non-scaling-stroke"
-            />
+            <g v-for="ann in augmentedResults[previewImageIndex].annotations" :key="ann.id">
+              <polygon
+                :points="getSvgPoints(ann)"
+                fill="transparent"
+                :stroke="ann.color"
+                stroke-width="0.1"
+                vector-effect="non-scaling-stroke"
+              />
+              <text
+                :x="getLabelPosition(ann).x"
+                :y="getLabelPosition(ann).y"
+                :fill="ann.color"
+                font-size="8"
+                font-weight="bold"
+                vector-effect="non-scaling-stroke"
+              >{{ ann.posId }}</text>
+            </g>
           </svg>
         </div>
         <button
           class="fixed top-6 right-6 w-10 h-10 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
-          @click="previewImage = null; previewImageIndex = null"
+          @click="previewImage = null; previewImageIndex = null; datasetPreviewImages = []"
         >
           <X class="h-5 w-5" />
         </button>
@@ -4610,8 +4834,8 @@ onBeforeUnmount(() => {
         >
           <component :is="previewShowAnnotations ? Eye : EyeOff" class="h-5 w-5" />
         </button>
-        <!-- 上一张按钮 -->
-        <button 
+        <!-- 上一张按钮 (增强结果图片) -->
+        <button
           v-if="previewImageIndex !== null && previewImageIndex > 0"
           class="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
           @click="showPrevImage"
@@ -4619,8 +4843,8 @@ onBeforeUnmount(() => {
         >
           <ChevronLeft class="h-6 w-6" />
         </button>
-        <!-- 下一张按钮 -->
-        <button 
+        <!-- 下一张按钮 (增强结果图片) -->
+        <button
           v-if="previewImageIndex !== null && previewImageIndex < augmentedResults.length - 1"
           class="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
           @click="showNextImage"
@@ -4628,9 +4852,31 @@ onBeforeUnmount(() => {
         >
           <ChevronRight class="h-6 w-6" />
         </button>
-        <!-- 图片计数 -->
+        <!-- 上一张按钮 (数据集图片) -->
+        <button
+          v-if="previewImageIndex === null && datasetPreviewCurrentIndex > 0"
+          class="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
+          @click="showDatasetPrevImage"
+          title="上一张 (←)"
+        >
+          <ChevronLeft class="h-6 w-6" />
+        </button>
+        <!-- 下一张按钮 (数据集图片) -->
+        <button
+          v-if="previewImageIndex === null && datasetPreviewCurrentIndex < datasetPreviewImages.length - 1"
+          class="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-background/80 backdrop-blur border shadow-xl flex items-center justify-center hover:bg-background transition-all hover:scale-110 active:scale-95 z-10"
+          @click="showDatasetNextImage"
+          title="下一张 (→)"
+        >
+          <ChevronRight class="h-6 w-6" />
+        </button>
+        <!-- 图片计数 (增强结果图片) -->
         <div v-if="previewImageIndex !== null" class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/60 backdrop-blur-md rounded-full text-white text-xs font-medium">
           {{ previewImageIndex + 1 }} / {{ augmentedResults.length }}
+        </div>
+        <!-- 图片计数 (数据集图片) -->
+        <div v-if="previewImageIndex === null && datasetPreviewImages.length > 0" class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/60 backdrop-blur-md rounded-full text-white text-xs font-medium">
+          {{ datasetPreviewCurrentIndex + 1 }} / {{ datasetPreviewImages.length }}
         </div>
       </div>
       </div>

@@ -12,6 +12,7 @@ declare global {
       addCamera: (camera: any) => Promise<any>
       deleteCamera: (id: number) => Promise<void>
       updateCamera: (id: number, data: any) => Promise<any>
+      getSystemCameras: () => Promise<Array<{ id: string; name: string; deviceId: string; isSystemCamera: boolean }>>
       // Annotation Schemes
       getSchemes: () => Promise<any[]>
       saveScheme: (scheme: any) => Promise<any>
