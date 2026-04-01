@@ -288,7 +288,9 @@
       "noLabels": "暂无类别可供选择",
       "selectedLabelsCount": "已选择 {count} 个类别",
       "allLabelsSelected": "未选择类别将训练全部",
-      "allCategories": "所有分类"
+      "allCategories": "所有分类",
+      "numAugmentations": "增强图数量",
+      "maxConcurrent": "并发数量"
     },
     "monitor": {
       "currentTask": "当前任务",
@@ -451,6 +453,7 @@
     "noResults": "暂无推理结果",
     "targetDetected": "检测到 {count} 个目标",
     "anomalyDetected": "检测到 {count} 个目标，异常 {anomaly} 个",
+    "multiWorkpieceDetected": "检测到 {workpieces} 个工件，异常 {anomaly} 个",
     "inferenceComplete": "推理完成",
     "inferenceFailed": "推理失败",
     "unknown": "未知",

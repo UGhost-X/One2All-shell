@@ -55,73 +55,10 @@ const labelConfigs = ref<any[]>([])
 
 const originalImages = ref<any[]>([])
 
-const currentPreset = ref<'none' | 'basic' | 'standard' | 'heavy' | 'custom'>('none')
-const presetsData = ref<Record<string, any>>({
-  none: {
-    rotate: { enabled: false, angle: [30] },
-    brightness: { enabled: false, min: 0.8, max: 1.2 },
-    contrast: { enabled: false, min: 0.8, max: 1.2 },
-    blur: { enabled: false, ksize: [3] },
-    num_results: [1]
-  },
-  basic: {
-    rotate: { enabled: true, angle: [15] },
-    brightness: { enabled: false, min: 0.8, max: 1.2 },
-    contrast: { enabled: false, min: 0.8, max: 1.2 },
-    blur: { enabled: false, ksize: [3] },
-    num_results: [1]
-  },
-  standard: {
-    rotate: { enabled: true, angle: [30] },
-    brightness: { enabled: true, min: 0.8, max: 1.2 },
-    contrast: { enabled: false, min: 0.8, max: 1.2 },
-    blur: { enabled: false, ksize: [3] },
-    num_results: [1]
-  },
-  heavy: {
-    rotate: { enabled: true, angle: [45] },
-    brightness: { enabled: true, min: 0.7, max: 1.3 },
-    contrast: { enabled: true, min: 0.8, max: 1.2 },
-    blur: { enabled: false, ksize: [3] },
-    num_results: [1]
-  },
-  custom: {
-    rotate: { enabled: false, angle: [30] },
-    brightness: { enabled: false, min: 0.8, max: 1.2 },
-    contrast: { enabled: false, min: 0.8, max: 1.2 },
-    blur: { enabled: false, ksize: [3] },
-    num_results: [1]
-  }
-})
-
-const datasetVersions = ref<any[]>([])
-const versionName = ref('v1.0')
-const isSaved = ref(false)
-const showUnsavedDialog = ref(false)
-const lastSavedVersionId = ref<number | null>(null)
-const selectedDatasetVersionId = ref<string>('')
-const augmentedResults = ref<any[]>([])
-const augmentedImageUrl = ref('')
-const baseImageUrl = ref('')
-const baseImageSize = ref({ width: 0, height: 0 })
-const isAugmenting = ref(false)
-const isAutoAugment = ref(false)
-const currentAnnotations = ref<any[]>([])
-const sliceConfig = ref({ x: 'none', y: 'none', rows: [1], cols: [1] })
-const isRollingBack = ref(false)
-const selectedIndices = ref<Set<number>>(new Set())
-const previewImageSize = ref([100])
-const previewImage = ref<string | null>(null)
-const previewImageIndex = ref<number | null>(null)
-const MAX_AUGMENT_RESULTS = 100
-const showSaveDialog = ref(false)
-const saveDisplayName = ref('')
-const saveVersionName = ref('')
-const isSavingDataset = ref(false)
-const showDeleteConfirm = ref(false)
-const deletingVersionId = ref<number | null>(null)
-
 const settingsDataPath = ref('')
+
+const trainDatasetVersionId = ref<string>('')
+const trainDatasetResults = ref<any[]>([])
 
 const trainProjectVersion = ref('v1')
 const trainRunCount = ref(1)
@@ -139,6 +76,7 @@ const labelSelectionValue = computed({
   }
 })
 const trainModelName = ref('PatchCore')
+const isTrainDatasetVersionOpen = ref(false)
 const isTrainStartModeOpen = ref(false)
 const isResumeModeOpen = ref(false)
 const isLabelSelectOpen = ref(false)
@@ -147,9 +85,10 @@ const resumeMode = ref<'interrupted' | 'extended'>('interrupted')
 
 const trainRunCountStorageKey = computed(() => {
   const pid = productId.value == null ? '' : String(productId.value)
+  const datasetKey = trainDatasetVersionId.value ? `dataset_${String(trainDatasetVersionId.value)}` : 'dataset_current'
   const projectVersionKey = String(trainProjectVersion.value || '')
   const modelKey = String(trainModelName.value || '')
-  return `one2all.training.runCount.${pid}.${projectVersionKey}.${modelKey}`
+  return `one2all.training.runCount.${pid}.${projectVersionKey}.${datasetKey}.${modelKey}`
 })
 
 const trainStartModeStorageKey = computed(() => {
@@ -214,6 +153,7 @@ const resetMonitorState = (opts?: { clearActive?: boolean }) => {
     trainTasks.value = []
     trainGroupId.value = ''
     trainTaskUuid.value = ''
+    trainDatasetVersionId.value = ''
     currentBaseEpoch.value = 0
   }
 }
@@ -257,9 +197,11 @@ const restoreActiveTrainingState = async () => {
   const gidKey = trainGroupIdStorageKey.value
   const uuidKey = trainTaskUuidStorageKey.value
   const tasksKey = trainTasksStorageKey.value
+  const datasetVersionKey = trainDatasetVersionIdStorageKey.value
   const savedGid = window.localStorage.getItem(gidKey)
   const savedUuid = window.localStorage.getItem(uuidKey)
   const savedTasksRaw = window.localStorage.getItem(tasksKey)
+  const savedDatasetVersionId = window.localStorage.getItem(datasetVersionKey)
   if (!savedGid || !savedTasksRaw) return false
   try {
     const savedTasks = JSON.parse(savedTasksRaw)
@@ -267,8 +209,19 @@ const restoreActiveTrainingState = async () => {
     trainGroupId.value = savedGid
     trainTaskUuid.value = savedUuid || ''
     trainTasks.value = savedTasks
+    innerStep.value = 'train'
     activeMonitorTab.value = 'overview'
     monitorTaskId.value = 'all'
+
+    // 恢复数据集
+    if (savedDatasetVersionId) {
+      trainDatasetVersionId.value = savedDatasetVersionId
+      try {
+        await loadTrainDatasetFromVersion(savedDatasetVersionId)
+      } catch (err) {
+        console.error('Failed to restore dataset version:', err)
+      }
+    }
 
     startGroupPolling()
     await Promise.all(savedTasks.map((t: any) => loadTaskSnapshot(String(t?.task_id || ''))))
@@ -384,7 +337,10 @@ const trainTasksStorageKey = computed(() => {
   return `one2all.training.activeTasks.${pid}`
 })
 
-
+const trainDatasetVersionIdStorageKey = computed(() => {
+  const pid = productId.value == null ? '' : String(productId.value)
+  return `one2all.training.datasetVersionId.${pid}`
+})
 
 // Persistence for active training state
 watch(trainGroupId, (id) => {
@@ -416,6 +372,16 @@ watch(trainTasks, (tasks) => {
     window.localStorage.removeItem(key)
   }
 }, { deep: true })
+
+watch(trainDatasetVersionId, (id) => {
+  const key = trainDatasetVersionIdStorageKey.value
+  if (!key || typeof window === 'undefined') return
+  if (id) {
+    window.localStorage.setItem(key, id)
+  } else {
+    window.localStorage.removeItem(key)
+  }
+})
 
 const monitorGroupProgress = ref(0)
 const monitorGroupStatus = ref('')
@@ -904,6 +870,7 @@ const startGroupPolling = () => {
             window.localStorage.removeItem(trainGroupIdStorageKey.value)
             window.localStorage.removeItem(trainTasksStorageKey.value)
             window.localStorage.removeItem(trainTaskUuidStorageKey.value)
+            window.localStorage.removeItem(trainDatasetVersionIdStorageKey.value)
           }
         } else {
           // 组未完成时，仅同步目标轮数，不覆盖子任务的独立进度
@@ -1745,11 +1712,73 @@ const enrichedLoadedImages = (images: any[]) => {
   }))
 }
 
-const trainImagesCount = computed(() => originalImages.value.length)
+const loadTrainDatasetFromVersion = async (id: string) => {
+  const v = datasetVersions.value.find(vv => String(vv.id) === String(id))
+  if (!v) throw new Error('Version not found')
+  const loadResult = await window.electronAPI?.loadDataset?.({ id: v.id, savePath: v.savePath })
+  if (!loadResult?.success) throw new Error(loadResult?.error || 'Load failed')
+  trainDatasetResults.value = enrichedLoadedImages(loadResult.images || [])
+}
+
+const enterTrainStep = async (opts?: { useCurrent?: boolean }) => {
+  if (opts?.useCurrent) {
+    trainDatasetVersionId.value = ''
+    trainDatasetResults.value = JSON.parse(JSON.stringify(augmentedResults.value || []))
+    innerStep.value = 'train'
+    return
+  }
+
+  const preferred =
+    (lastSavedVersionId.value != null ? String(lastSavedVersionId.value) : '') ||
+    (selectedDatasetVersionId.value ? String(selectedDatasetVersionId.value) : '') ||
+    (datasetVersions.value?.[0]?.id != null ? String(datasetVersions.value[0].id) : '')
+
+  if (!preferred) {
+    trainDatasetVersionId.value = ''
+    trainDatasetResults.value = JSON.parse(JSON.stringify(augmentedResults.value || []))
+    innerStep.value = 'train'
+    return
+  }
+
+  trainDatasetVersionId.value = preferred
+  try {
+    await loadTrainDatasetFromVersion(preferred)
+  } catch (err: any) {
+    trainDatasetResults.value = JSON.parse(JSON.stringify(augmentedResults.value || []))
+    toast?.error(`${t('training.view.rollbackFailed')}: ${err.message}`)
+  }
+  innerStep.value = 'train'
+}
+
+const handleNextStep = () => {
+  if (augmentedResults.value.length > 0 && !isSaved.value) {
+    showUnsavedDialog.value = true
+    return
+  }
+  enterTrainStep()
+}
+
+const trainDataVersionName = computed(() => {
+  if (!trainDatasetVersionId.value) return ''
+  const v = datasetVersions.value.find(vv => String(vv.id) === String(trainDatasetVersionId.value))
+  return v?.versionName || ''
+})
+
+const trainImagesCount = computed(() => trainDatasetResults.value.length)
 const trainAnnotationsCount = computed(() => {
   let n = 0
-  for (const img of originalImages.value || []) n += (img.annotations || []).length
+  for (const img of trainDatasetResults.value || []) n += (img.annotations || []).length
   return n
+})
+
+watch(trainDatasetVersionId, async (id) => {
+  if (!id) return
+  if (innerStep.value !== 'train') return
+  try {
+    await loadTrainDatasetFromVersion(id)
+  } catch (err: any) {
+    toast?.error(`${t('training.view.rollbackFailed')}: ${err.message}`)
+  }
 })
 
 const closeMonitorStream = (taskId?: string) => {
@@ -1938,7 +1967,14 @@ watch(trainTasks, (tasks) => {
   }
 }, { deep: true })
 
-
+watch(innerStep, (step) => {
+  if (step === 'monitor') {
+    monitorTaskId.value = 'all'
+    selectedEpoch.value = null
+    fetchProjectResults()
+  }
+  if (step !== 'train') closeMonitorStream()
+})
 
 onActivated(() => {
   if (trainGroupId.value && !groupPollingTimer) startGroupPolling()
@@ -2066,7 +2102,7 @@ const buildTrainCocoData = (results: any[]) => {
 const startTraining = async () => {
   if (isTrainingStarting.value) return
   if (!productId.value) return
-  if (!originalImages.value || originalImages.value.length === 0) {
+  if (!trainDatasetResults.value || trainDatasetResults.value.length === 0) {
     toast?.error(t('training.train.noData'))
     return
   }
@@ -2075,12 +2111,42 @@ const startTraining = async () => {
   try {
     const settings = await window.electronAPI?.getSettings?.()
     const basePath = settings?.dataPath || settingsDataPath.value || ''
-    const images = originalImages.value.map((img: any) => String(img.imageUrl || '').split(',')[1] || '')
-    const cocoData = buildTrainCocoData(originalImages.value)
+    const images = trainDatasetResults.value.map((img: any) => String(img.imageUrl || '').split(',')[1] || '')
+    const cocoData = buildTrainCocoData(trainDatasetResults.value)
     const apiBase = config.public.apiBase || 'http://localhost:8000'
     const apiUrl = `${apiBase.replace(/\/$/, '')}/train/anomaly`
 
-
+    const runCountToSend = Math.max(1, Math.round(Number(trainRunCount.value || 1)))
+    
+    // 计算最终要发送给后端的 epoch
+    let additionalEpochs = Math.round(Number(trainConfig.value.epochs[0] || 10))
+    let finalEpochs = additionalEpochs
+    
+    if (trainStartMode.value === 'resume' && resumeMode.value === 'extended') {
+      // 完结续训：需要获取已完成的轮数并叠加
+      let completedEpochs = latestMonitorMetric.value?.epoch || 0
+      
+      // 如果 latestMonitorMetric 没有获取到，尝试直接从 groupMetrics 中推断
+      if (completedEpochs === 0) {
+        for (const tid in groupMetrics.value) {
+          const metrics = groupMetrics.value[tid]
+          if (metrics && metrics.length > 0) {
+            const lastEpoch = Number(metrics[metrics.length - 1].epoch)
+            if (lastEpoch > completedEpochs) completedEpochs = lastEpoch
+          }
+        }
+      }
+      
+      currentBaseEpoch.value = completedEpochs
+      finalEpochs = completedEpochs + additionalEpochs
+      
+      // 确保 finalEpochs 至少比 completedEpochs 大
+      if (finalEpochs <= completedEpochs) {
+        finalEpochs = completedEpochs + additionalEpochs
+      }
+    } else {
+      currentBaseEpoch.value = 0
+    }
 
     closeMonitorStream() 
     stopGroupPolling() // Ensure any existing polling is stopped
@@ -2104,6 +2170,7 @@ const startTraining = async () => {
       window.localStorage.removeItem(trainGroupIdStorageKey.value)
       window.localStorage.removeItem(trainTasksStorageKey.value)
       window.localStorage.removeItem(trainTaskUuidStorageKey.value)
+      window.localStorage.removeItem(trainDatasetVersionIdStorageKey.value)
     }
     
     await nextTick()
@@ -2114,9 +2181,14 @@ const startTraining = async () => {
       coco_data: cocoData,
       base_path: basePath,
       project_id: String(productId.value),
-      model_name: 'PatchCore',
-      num_augmentations: Math.round(Number(trainConfig.value.numAugmentations[0] || 100)),
-      max_concurrent: Math.round(Number(trainConfig.value.maxConcurrent[0] || 3))
+      model_name: String(trainModelName.value || 'PatchCore'),
+      train_epochs: finalEpochs,
+      batch_size: Math.round(Number(trainConfig.value.batchSize[0] || 8)),
+      learning_rate: Number(trainConfig.value.learningRate || 0.01),
+      parallel_train: trainConfig.value.parallelTrain || false,
+      label_names: selectedTrainLabelNames.value.length > 0 ? selectedTrainLabelNames.value : null,
+      resume_path: null,
+      resume_mode: trainStartMode.value === 'resume' ? resumeMode.value : null
     }
 
     const res = await fetch(apiUrl, {
@@ -2138,6 +2210,10 @@ const startTraining = async () => {
       }
     }
     const data = await res.json()
+    
+    if (trainStartMode.value === 'fresh') {
+      trainRunCount.value = runCountToSend + 1
+    }
 
     trainGroupId.value = data.group_id || ''
     trainTaskUuid.value = data.task_uuid || ''
@@ -2178,13 +2254,13 @@ const startTraining = async () => {
           productId: productId.value,
           taskId: t.task_id,
           labelName: t.label,
-          modelName: 'PatchCore',
+          modelName: trainModelName.value || 'PatchCore',
           status: 'pending',
           progress: 0,
-          totalEpochs: 0,
+          totalEpochs: finalEpochs,
           currentEpoch: 0,
-          batchSize: 0,
-          learningRate: 0,
+          batchSize: trainConfig.value.batchSize[0],
+          learningRate: getLearningRateValue(),
           startedAt: new Date()
         }).catch(console.error)
       }
@@ -2194,6 +2270,8 @@ const startTraining = async () => {
       await loadTaskSnapshot(trainTaskUuid.value)
     }
 
+    // 保持在训练页面，不自动跳转
+    // innerStep.value = 'monitor'
     monitorTaskId.value = 'all'
     activeMonitorTab.value = 'overview'
     startGroupPolling()
@@ -2316,6 +2394,44 @@ const resumeGroup = async () => {
   }
 }
 
+const presetsData = ref({
+  none: {
+    rotate: { enabled: false, angle: [30] },
+    brightness: { enabled: false, min: 0.8, max: 1.2 },
+    contrast: { enabled: false, min: 0.8, max: 1.2 },
+    blur: { enabled: false, ksize: [3] },
+    num_results: [1]
+  },
+  basic: {
+    rotate: { enabled: true, angle: [15] },
+    brightness: { enabled: true, min: 0.9, max: 1.1 },
+    contrast: { enabled: true, min: 0.9, max: 1.1 },
+    blur: { enabled: false, ksize: [3] },
+    num_results: [1]
+  },
+  standard: {
+    rotate: { enabled: true, angle: [45] },
+    brightness: { enabled: true, min: 0.8, max: 1.2 },
+    contrast: { enabled: true, min: 0.8, max: 1.2 },
+    blur: { enabled: true, ksize: [3] },
+    num_results: [1]
+  },
+  heavy: {
+    rotate: { enabled: true, angle: [90] },
+    brightness: { enabled: true, min: 0.6, max: 1.4 },
+    contrast: { enabled: true, min: 0.6, max: 1.4 },
+    blur: { enabled: true, ksize: [5] },
+    num_results: [1]
+  },
+  custom: {
+    rotate: { enabled: true, angle: [45] },
+    brightness: { enabled: true, min: 0.8, max: 1.2 },
+    contrast: { enabled: true, min: 0.8, max: 1.2 },
+    blur: { enabled: true, ksize: [3] },
+    num_results: [40]
+  }
+})
+
 const augmentConfig = computed({
   get: () => presetsData.value[currentPreset.value] || presetsData.value.none,
   set: (val) => {
@@ -2327,6 +2443,8 @@ const applyPreset = (type: 'none' | 'basic' | 'standard' | 'heavy' | 'custom') =
   currentPreset.value = type
 }
 
+const previewImage = ref<string | null>(null)
+const previewImageIndex = ref<number | null>(null)
 const previewShowAnnotations = ref(true)
 const previewZoom = ref(1)
 const previewPanX = ref(0)
@@ -2401,6 +2519,8 @@ const showDatasetNextImage = () => {
   previewImage.value = (config.public.apiBase || 'http://localhost:8000').replace(/\/$/, '') + datasetPreviewImages.value[datasetPreviewCurrentIndex.value].url
 }
 
+const selectedIndices = ref<Set<number>>(new Set())
+
 const toggleImageSelection = (index: number) => {
   if (selectedIndices.value.has(index)) {
     selectedIndices.value.delete(index)
@@ -2419,6 +2539,10 @@ const removeSelectedImages = () => {
     augmentedImageUrl.value = ''
   }
 }
+
+const MAX_AUGMENT_RESULTS = 100
+
+const previewImageSize = ref([100]) // Percentage 50-200%
 
 const activeAugmentations = computed(() => {
   const items = []
@@ -2447,6 +2571,13 @@ watch(activeAugmentations, (newVal) => {
   }
 })
 
+const sliceConfig = ref({
+  rows: [3],
+  cols: [3],
+  x: 'none',
+  y: 'none',
+})
+
 const parseDatasetConfig = (raw: string) => {
   try {
     const parsed = JSON.parse(raw)
@@ -2459,45 +2590,47 @@ const parseDatasetConfig = (raw: string) => {
   }
 }
 
-const applyDatasetVersion = async (v: any) => {
-  isRollingBack.value = true
-  selectedIndices.value.clear()
-  const cfg = parseDatasetConfig(v?.config || '')
-  if (!cfg) {
-    toast?.error(t('training.view.rollbackFailed'))
-    isRollingBack.value = false
-    return
-  }
-
-  try {
-    if (v.id) {
-      const loadResult = await window.electronAPI.loadDataset({ id: v.id, savePath: v.savePath })
-      if (loadResult.success) {
-        augmentedResults.value = loadResult.images.map((img: any) => ({
-          ...img,
-          annotations: img.annotations.map((ann: any) => {
-            const labelInfo = labelConfigs.value[ann.categoryId - 1] || {}
-            return {
-              ...ann,
-              color: labelInfo.color || '#3b82f6',
-              label: labelInfo.name || `Label ${ann.categoryId}`
-            }
-          })
-        }))
-        if (augmentedResults.value.length > 0) {
-          augmentedImageUrl.value = augmentedResults.value[0].imageUrl
-        }
-      } else {
-        console.warn('Failed to load physical data:', loadResult.error)
-        toast?.error(`${t('training.view.rollbackFailed')}: ${loadResult.error}`)
-      }
+const isRollingBack = ref(false)
+  
+  const applyDatasetVersion = async (v: any) => {
+    isRollingBack.value = true
+    selectedIndices.value.clear()
+    const cfg = parseDatasetConfig(v?.config || '')
+    if (!cfg) {
+      toast?.error(t('training.view.rollbackFailed'))
+      isRollingBack.value = false
+      return
     }
-  } catch (err: any) {
-    console.error('Error loading dataset version data:', err)
-    toast?.error(`${t('training.view.rollbackFailed')}: ${err.message}`)
-  }
 
-  if (cfg.sliceConfig) sliceConfig.value = JSON.parse(JSON.stringify(cfg.sliceConfig))
+    try {
+      if (v.id) {
+        const loadResult = await window.electronAPI.loadDataset({ id: v.id, savePath: v.savePath })
+        if (loadResult.success) {
+          augmentedResults.value = loadResult.images.map((img: any) => ({
+            ...img,
+            annotations: img.annotations.map((ann: any) => {
+              const labelInfo = labelConfigs.value[ann.categoryId - 1] || {}
+              return {
+                ...ann,
+                color: labelInfo.color || '#3b82f6',
+                label: labelInfo.name || `Label ${ann.categoryId}`
+              }
+            })
+          }))
+          if (augmentedResults.value.length > 0) {
+            augmentedImageUrl.value = augmentedResults.value[0].imageUrl
+          }
+        } else {
+          console.warn('Failed to load physical data:', loadResult.error)
+          toast?.error(`${t('training.view.rollbackFailed')}: ${loadResult.error}`)
+        }
+      }
+    } catch (err: any) {
+      console.error('Error loading dataset version data:', err)
+      toast?.error(`${t('training.view.rollbackFailed')}: ${err.message}`)
+    }
+
+    if (cfg.sliceConfig) sliceConfig.value = JSON.parse(JSON.stringify(cfg.sliceConfig))
   if (cfg.augmentConfig) {
     if (cfg.preset && cfg.preset !== 'custom' && cfg.preset !== 'none') {
       presetsData.value[cfg.preset] = JSON.parse(JSON.stringify(cfg.augmentConfig))
@@ -2517,148 +2650,6 @@ const applyDatasetVersion = async (v: any) => {
   nextTick(() => {
     isRollingBack.value = false
   })
-}
-
-const parseVersionIndex = (name: string) => {
-  const m = /^v(\d+)$/.exec((name || '').trim())
-  if (!m) return null
-  const n = Number(m[1])
-  return Number.isFinite(n) ? n : null
-}
-
-const getNextVersionName = (versions: any[]) => {
-  let max = 0
-  for (const v of versions || []) {
-    const n = parseVersionIndex(v?.versionName)
-    if (n != null) max = Math.max(max, n)
-  }
-  return `v${Math.max(1, max + 1)}`
-}
-
-const confirmDeleteVersion = (id: number) => {
-  deletingVersionId.value = id
-  showDeleteConfirm.value = true
-  isVersionSelectOpen.value = false
-}
-
-const handleDeleteVersion = async () => {
-  if (deletingVersionId.value == null) return
-  
-  try {
-    if (selectedDatasetVersionId.value === String(deletingVersionId.value)) {
-      selectedDatasetVersionId.value = ''
-      await nextTick()
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
-
-    await window.electronAPI.deleteDatasetVersion(deletingVersionId.value)
-    toast?.success(t('common.deleteSuccess'))
-    if (productId.value) {
-      datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
-    }
-  } catch (err: any) {
-    toast?.error(`${t('common.deleteFailed')}: ${err.message}`)
-  } finally {
-    showDeleteConfirm.value = false
-    deletingVersionId.value = null
-  }
-}
-
-const openSaveDialog = () => {
-  if (augmentedResults.value.length === 0) return
-  saveDisplayName.value = ''
-  saveVersionName.value = getNextVersionName(datasetVersions.value)
-  showSaveDialog.value = true
-}
-
-const closeSaveDialog = () => {
-  showSaveDialog.value = false
-}
-
-const confirmSaveDataset = async () => {
-  if (!saveDisplayName.value.trim()) {
-    toast?.error(t('training.view.nameRequired'))
-    return
-  }
-  if (!saveVersionName.value.trim()) {
-    toast?.error(t('training.view.versionRequired'))
-    return
-  }
-  await handleSaveDataset({ displayName: saveDisplayName.value.trim(), versionName: saveVersionName.value.trim() })
-}
-
-const handleSaveDataset = async (opts?: { displayName: string; versionName: string }) => {
-  if (augmentedResults.value.length === 0) return
-  if (!productId.value) return
-
-  try {
-    isSavingDataset.value = true
-    if (opts?.versionName) versionName.value = opts.versionName
-
-    const cocoData = {
-      images: augmentedResults.value.map((res, idx) => ({
-        id: idx + 1,
-        width: res.width,
-        height: res.height,
-        file_name: `image_${idx + 1}.jpg`
-      })),
-      annotations: augmentedResults.value.flatMap((res, resIdx) =>
-        res.annotations.map((ann: any, annIdx: number) => ({
-          id: resIdx * 1000 + annIdx + 1,
-          image_id: resIdx + 1,
-          category_id: ann.categoryId || 1,
-          bbox: ann.bbox || [0, 0, 0, 0],
-          area: ann.area || 0,
-          segmentation: ann.segmentation || [],
-          iscrowd: 0
-        }))
-      ),
-      categories: labelConfigs.value.map((l, idx) => ({
-        id: idx + 1,
-        name: l.name,
-        supercategory: 'none'
-      }))
-    }
-
-    const saveResult = await window.electronAPI.saveDataset(JSON.parse(JSON.stringify({
-      productId: productId.value,
-      versionName: opts?.versionName || versionName.value,
-      moduleName: 'data_augmentation',
-      images: augmentedResults.value,
-      cocoData
-    })))
-
-    if (saveResult.success) {
-      const savedVersion = await window.electronAPI.saveDatasetVersion(JSON.parse(JSON.stringify({
-        productId: productId.value,
-        displayName: opts?.displayName || '',
-        versionName: opts?.versionName || versionName.value,
-        moduleName: 'data_augmentation',
-        savePath: saveResult.path,
-        imageCount: augmentedResults.value.length,
-        config: JSON.stringify({
-          preset: currentPreset.value,
-          augmentConfig: augmentConfig.value,
-          sliceConfig: sliceConfig.value
-        })
-      })))
-      if (savedVersion?.id != null) lastSavedVersionId.value = savedVersion.id
-
-      isSaved.value = true
-      toast?.success(t('training.view.saveSuccess'))
-      
-      datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
-      versionName.value = getNextVersionName(datasetVersions.value)
-      selectedDatasetVersionId.value = ''
-      closeSaveDialog()
-    } else {
-      throw new Error(saveResult.error)
-    }
-  } catch (err: any) {
-    toast?.error(`${t('training.view.saveFailed')}: ${err.message}`)
-  } finally {
-    isSavingDataset.value = false
-  }
 }
 
 // Watch for changes after rollback to generate temporary version
@@ -2681,7 +2672,6 @@ watch(selectedDatasetVersionId, (id) => {
 
 const isXSelectOpen = ref(false)
 const isYSelectOpen = ref(false)
-const isVersionSelectOpen = ref(false)
 
 const isMatrixMode = computed(() => sliceConfig.value.x !== 'none' || sliceConfig.value.y !== 'none')
 
@@ -2735,8 +2725,10 @@ const previewGridCols = computed(() => {
 })
 
 const trainConfig = ref({
-  numAugmentations: [100],
-  maxConcurrent: [3]
+  epochs: [10],
+  batchSize: [8],
+  learningRate: 0.001,
+  parallelTrain: false
 })
 
 const enabledAugmentations = computed(() => {
@@ -3018,39 +3010,6 @@ const getLabelPosition = (ann: any) => {
   return { x: minX, y: minY - 2 }
 }
 
-const loadOriginalImages = async () => {
-  if (!productId.value || !window.electronAPI) return
-  
-  const files = await window.electronAPI.getProductImages(productId.value)
-  if (!files || files.length === 0) return
-  
-  const images: any[] = []
-  
-  for (const filePath of files) {
-    const url = await window.electronAPI.loadImage(filePath)
-    if (!url) continue
-    
-    const ann = await window.electronAPI.getAnnotations(productId.value, filePath)
-    let annotations: any[] = []
-    if (ann && ann.data) {
-      annotations = JSON.parse(ann.data).map((a: any, idx: number) => ({
-        ...a,
-        posId: a.posId ?? (idx + 1)
-      }))
-    }
-    
-    images.push({
-      imageUrl: url,
-      imagePath: filePath,
-      annotations,
-      width: 0,
-      height: 0
-    })
-  }
-  
-  originalImages.value = images
-}
-
 onMounted(async () => {
   if (window.electronAPI?.getSettings) {
     const settings = await window.electronAPI.getSettings()
@@ -3059,6 +3018,7 @@ onMounted(async () => {
 
   const qProductId = route.query.productId
   const qProductName = route.query.productName
+  const qImagePath = route.query.imagePath
   if (qProductId) productId.value = Number(qProductId)
   if (qProductName) productName.value = String(qProductName)
 
@@ -3067,31 +3027,154 @@ onMounted(async () => {
     trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
   }
 
-  // 加载原始图片和标注数据
-  await loadOriginalImages()
+  // 如果是从标注页面跳转过来的，强制跳转到第1个节点（augment）
+  if (qImagePath) {
+    innerStep.value = 'augment'
+  }
 
-  // Load product labels for COCO category_id mapping
+  // 加载图片
   if (productId.value && window.electronAPI) {
+    // 优先使用传入的imagePath，否则获取产品的所有图片
+    if (qImagePath) {
+      // 直接加载传入的图片路径
+      const url = await window.electronAPI.loadImage(qImagePath)
+      if (url) {
+        baseImageUrl.value = url
+        const img = new Image()
+        img.onload = () => {
+          baseImageSize.value = { width: img.width, height: img.height }
+        }
+        img.src = url
+      }
+      
+      // Load annotations
+      const ann = await window.electronAPI.getAnnotations(productId.value, qImagePath)
+      if (ann && ann.data) {
+        const loadedAnns = JSON.parse(ann.data)
+        currentAnnotations.value = loadedAnns.map((a: any, idx: number) => ({
+          ...a,
+          posId: a.posId ?? (idx + 1)
+        }))
+      }
+    } else {
+      // 获取产品的所有图片，取第一张
+      const files = await window.electronAPI.getProductImages(productId.value)
+      if (files && files.length > 0) {
+        const targetImagePath = files[0]
+        const url = await window.electronAPI.loadImage(targetImagePath)
+        baseImageUrl.value = url || ''
+        
+        if (url) {
+          const img = new Image()
+          img.onload = () => {
+            baseImageSize.value = { width: img.width, height: img.height }
+          }
+          img.src = url
+        }
+        
+        const ann = await window.electronAPI.getAnnotations(productId.value, targetImagePath)
+        if (ann && ann.data) {
+          const loadedAnns = JSON.parse(ann.data)
+          currentAnnotations.value = loadedAnns.map((a: any, idx: number) => ({
+            ...a,
+            posId: a.posId ?? (idx + 1)
+          }))
+        }
+      }
+    }
+
+    // Load product labels for COCO category_id mapping
     const products = await window.electronAPI.getProducts()
     const product = products.find(p => p.id === productId.value)
     if (product?.scheme) {
-      const schemeConfig = JSON.parse(product.scheme.config)
-      labelConfigs.value = schemeConfig.labels || []
+      const config = JSON.parse(product.scheme.config)
+      labelConfigs.value = config.labels || []
     }
-  }
 
-  const restored = await restoreActiveTrainingState()
-  if (restored) {
-    await loadOriginalImages()
+    // Load dataset versions
+    datasetVersions.value = await window.electronAPI.getDatasetVersions(productId.value)
+    versionName.value = getNextVersionName(datasetVersions.value)
+
+    const restored = await restoreActiveTrainingState()
+    if (restored) {
+      const key = innerStepStorageKey.value
+      if (key && typeof window !== 'undefined') window.localStorage.setItem(key, innerStep.value)
+    }
+
+    // Default to basic augmentation
+    applyPreset('basic')
   }
 })
+
+watch(() => route.query, async (newQuery) => {
+  const qImagePath = newQuery.imagePath
+  const qProductId = newQuery.productId
+  
+  if (qProductId) {
+    productId.value = Number(qProductId)
+    
+    // Load label configs from product scheme
+    if (window.electronAPI) {
+      const products = await window.electronAPI.getProducts()
+      const product = products.find(p => p.id === productId.value)
+      if (product?.scheme) {
+        const config = JSON.parse(product.scheme.config)
+        labelConfigs.value = config.labels || []
+      }
+    }
+  }
+  
+  if (qImagePath && window.electronAPI) {
+    const url = await window.electronAPI.loadImage(qImagePath)
+    if (url) {
+      baseImageUrl.value = url
+      const img = new Image()
+      img.onload = () => {
+        baseImageSize.value = { width: img.width, height: img.height }
+      }
+      img.src = url
+    }
+    
+    if (productId.value) {
+      const ann = await window.electronAPI.getAnnotations(productId.value, qImagePath)
+      if (ann && ann.data) {
+        const loadedAnns = JSON.parse(ann.data)
+        currentAnnotations.value = loadedAnns.map((a: any, idx: number) => ({
+          ...a,
+          posId: a.posId ?? (idx + 1)
+        }))
+      }
+    }
+  }
+}, { immediate: false })
 
 onBeforeUnmount(() => {
   closeMonitorStream()
   stopGroupPolling()
 })
 
+// 键盘事件处理
+const handleKeydown = (e: KeyboardEvent) => {
+  if (!previewImage.value) return
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    showPrevImage()
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault()
+    showNextImage()
+  } else if (e.key === 'Escape') {
+    previewImage.value = null
+    previewImageIndex.value = null
+  }
+}
 
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <template>
@@ -3100,7 +3183,33 @@ onBeforeUnmount(() => {
 
     <main class="flex-1 flex flex-col min-h-0 overflow-hidden bg-muted/20 p-8">
       <div class="max-w-[1400px] mx-auto w-full h-full flex flex-col space-y-6">
-        <div v-if="false" class="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden h-full p-4">
+        <div class="flex items-center justify-center gap-16 shrink-0">
+          <button
+            class="w-16 h-16 rounded-full border flex items-center justify-center text-xl font-bold"
+            :class="innerStep === 'augment' ? 'bg-primary text-primary-foreground border-primary' : ''"
+            @click="innerStep = 'augment'"
+          >
+            1
+          </button>
+          <div class="h-[2px] w-40 bg-border"></div>
+          <button
+            class="w-16 h-16 rounded-full border flex items-center justify-center text-lg font-bold"
+            :class="innerStep === 'train' ? 'bg-primary text-primary-foreground border-primary' : ''"
+            @click="innerStep = 'train'"
+          >
+            2
+          </button>
+          <div class="h-[2px] w-40 bg-border"></div>
+          <button
+            class="w-16 h-16 rounded-full border flex items-center justify-center text-xl font-bold"
+            :class="innerStep === 'monitor' ? 'bg-primary text-primary-foreground border-primary' : ''"
+            @click="innerStep = 'monitor'"
+          >
+            3
+          </button>
+        </div>
+
+        <div v-if="innerStep === 'monitor'" class="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden h-full p-4">
           <div class="flex items-center justify-between border-b shrink-0 bg-background px-4 rounded-t-xl">
             <div class="flex gap-6">
               <button 
@@ -3363,7 +3472,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="false" class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[400px,1fr] gap-6">
+        <div v-if="innerStep === 'augment'" class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[400px,1fr] gap-6">
           <aside class="border rounded-xl bg-background p-4 flex flex-col gap-4 overflow-hidden h-full min-h-[500px] md:min-h-0">
             <div class="flex items-center justify-between shrink-0">
               <h3 class="font-bold text-sm">{{ t('training.augmentConfig') }}</h3>
@@ -3757,35 +3866,123 @@ onBeforeUnmount(() => {
           </section>
         </div>
 
-        <div class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[360px,1fr] gap-6">
+        <div v-else-if="innerStep === 'train'" class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[360px,1fr] gap-6">
           <aside class="border rounded-xl bg-background p-4 flex flex-col gap-4 overflow-hidden h-full min-h-[500px] md:min-h-0">
             <div class="flex-1 overflow-y-auto pr-2 space-y-4">
               <div class="space-y-1">
-                 <div class="flex justify-between items-center">
-                   <Label>{{ t('training.train.numAugmentations') }}</Label>
-                   <Input
-                     type="number"
-                     v-model.number="trainConfig.numAugmentations[0]"
-                     :min="1"
-                     :max="1000"
-                     class="h-7 w-16 text-xs px-2 text-right"
-                   />
-                 </div>
-                 <Slider v-model="trainConfig.numAugmentations" :min="1" :max="1000" />
-               </div>
-               <div class="space-y-1">
-                 <div class="flex justify-between items-center">
-                   <Label>{{ t('training.train.maxConcurrent') }}</Label>
-                   <Input
-                     type="number"
-                     v-model.number="trainConfig.maxConcurrent[0]"
-                     :min="1"
-                     :max="10"
-                     class="h-7 w-16 text-xs px-2 text-right"
-                   />
-                 </div>
-                 <Slider v-model="trainConfig.maxConcurrent" :min="1" :max="10" />
-               </div>
+                <Label>{{ t('training.train.dataVersion') }}</Label>
+                <UiSelect v-model="trainDatasetVersionId" v-model:open="isTrainDatasetVersionOpen">
+                  <UiSelectTrigger class="h-9 text-xs bg-background w-full px-2 gap-2">
+                    <UiSelectValue :placeholder="t('training.train.dataVersionPlaceholder')" />
+                  </UiSelectTrigger>
+                  <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
+                    <UiSelectItem v-for="v in datasetVersions" :key="v.id" :value="String(v.id)" class="pr-2">
+                      <div class="flex items-center w-full gap-2">
+                        <span class="flex-1 min-w-0 truncate">{{ v.displayName ? `${v.displayName} (${v.versionName})` : v.versionName }}</span>
+                      </div>
+                    </UiSelectItem>
+                  </UiSelectContent>
+                </UiSelect>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div class="space-y-1">
+                  <Label class="text-xs">{{ t('training.train.modelName') }}</Label>
+                  <Input v-model="trainModelName" class="h-9 text-xs px-2" />
+                </div>
+                <div class="space-y-1">
+                  <Label class="text-xs">{{ t('training.train.taskId') }}</Label>
+                  <Input :model-value="trainTaskUuid || '-'" disabled class="h-9 text-xs px-2 font-mono" />
+                </div>
+              </div>
+
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.startMode') }}</Label>
+                <UiSelect v-model="trainStartMode" v-model:open="isTrainStartModeOpen">
+                  <UiSelectTrigger class="h-9 text-xs bg-background w-full px-2 gap-2">
+                    <UiSelectValue :placeholder="t('training.train.startModePlaceholder')" />
+                  </UiSelectTrigger>
+                  <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
+                    <UiSelectItem value="fresh">{{ t('training.train.startModeFresh') }}</UiSelectItem>
+                    <UiSelectItem value="resume">{{ t('training.train.startModeResume') }}</UiSelectItem>
+                  </UiSelectContent>
+                </UiSelect>
+                <div class="text-[10px] text-muted-foreground">{{ t('training.train.startModeHint') }}</div>
+              </div>
+
+              <!-- 续训子模式选择 -->
+              <div v-if="trainStartMode === 'resume'" class="space-y-3 p-3 border rounded-lg bg-muted/20 animate-in fade-in slide-in-from-top-1 duration-200">
+                <div class="space-y-1">
+                  <Label class="text-xs font-bold">{{ t('training.train.resumeMode') }}</Label>
+                  <UiSelect v-model="resumeMode" v-model:open="isResumeModeOpen">
+                    <UiSelectTrigger class="h-8 text-[11px] bg-background w-full px-2 gap-2">
+                      <UiSelectValue :placeholder="t('training.train.resumeMode')" />
+                    </UiSelectTrigger>
+                    <UiSelectContent class="z-[9999]">
+                      <UiSelectItem v-if="hasInterruptedTasks" value="interrupted" class="text-[11px]">{{ t('training.train.resumeModeInterrupted') }}</UiSelectItem>
+                      <UiSelectItem value="extended" class="text-[11px]">{{ t('training.train.resumeModeExtended') }}</UiSelectItem>
+                    </UiSelectContent>
+                  </UiSelect>
+                  <div class="text-[9px] text-muted-foreground leading-tight mt-1">{{ t('training.train.resumeModeHint') }}</div>
+                </div>
+              </div>
+
+              <div class="space-y-1">
+                <div class="flex justify-between items-center">
+                  <Label>{{ trainStartMode === 'resume' && resumeMode === 'extended' ? t('training.train.epochsAdditional') : t('training.train.epochs') }}</Label>
+                  <Input 
+                    type="number" 
+                    v-model.number="trainConfig.epochs[0]" 
+                    :min="1" 
+                    :max="200" 
+                    class="h-7 w-16 text-xs px-2 text-right" 
+                  />
+                </div>
+                <Slider v-model="trainConfig.epochs" :min="1" :max="200" />
+                <div v-if="trainStartMode === 'resume' && resumeMode === 'interrupted'" class="text-[9px] text-amber-600 dark:text-amber-400">
+                  {{ t('training.train.resumeModeHint') }}
+                </div>
+              </div>
+              <div class="space-y-1">
+                <div class="flex justify-between items-center">
+                  <Label>{{ t('training.train.batchSize') }}</Label>
+                  <Input 
+                    type="number" 
+                    v-model.number="trainConfig.batchSize[0]" 
+                    :min="1" 
+                    :max="64" 
+                    class="h-7 w-16 text-xs px-2 text-right" 
+                  />
+                </div>
+                <Slider v-model="trainConfig.batchSize" :min="1" :max="64" />
+              </div>
+
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.learningRate') }}</Label>
+                <Input type="number" v-model="trainConfig.learningRate" step="0.0001" class="h-9 text-xs px-2" />
+              </div>
+
+              <div class="flex items-center justify-between">
+                <Label class="text-xs">{{ t('training.train.parallelTrain') }}</Label>
+                <Switch v-model="trainConfig.parallelTrain" />
+              </div>
+
+              <div class="space-y-1">
+                <Label class="text-xs">{{ t('training.train.labelSelection') }}</Label>
+                <UiSelect v-model="labelSelectionValue" v-model:open="isLabelSelectOpen">
+                  <UiSelectTrigger class="h-9 text-xs">
+                    <UiSelectValue :placeholder="t('training.train.allCategories')" />
+                  </UiSelectTrigger>
+                  <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[240px]">
+                    <UiSelectItem value="all">
+                      {{ t('training.train.allCategories') }}
+                    </UiSelectItem>
+                    <UiSelectItem v-for="label in labelConfigs" :key="label.name" :value="label.name">
+                      {{ label.name }}
+                    </UiSelectItem>
+                  </UiSelectContent>
+                </UiSelect>
+              </div>
 
             </div>
 
@@ -3797,7 +3994,7 @@ onBeforeUnmount(() => {
                 </UiButton>
               </template>
               <template v-else>
-                <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || originalImages.length === 0">
+                <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || trainDatasetResults.length === 0">
                   {{ isTrainingStarting ? t('training.train.starting') : t('training.train.start') }}
                 </UiButton>
               </template>
@@ -3828,6 +4025,79 @@ onBeforeUnmount(() => {
             <div class="flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar">
               <!-- Overview Tab -->
               <div v-if="activeMonitorTab === 'overview'" class="space-y-6 animate-in fade-in duration-300">
+                <!-- KPI Cards -->
+                <div class="grid grid-cols-4 gap-4 shrink-0">
+                  <!-- Task Progress -->
+                  <div class="group border bg-gradient-to-br from-background to-muted/20 p-5 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between h-[120px] relative ">
+                    <div class="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+                      <Activity class="w-12 h-12 text-primary" />
+                    </div>
+                    <div class="flex justify-between items-start relative z-10">
+                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.progress') }}</span>
+                    </div>
+                    <div class="space-y-2.5 relative z-10">
+                      <div class="flex items-baseline gap-1.5">
+                        <span class="text-3xl font-black tabular-nums tracking-tight text-primary">{{ monitorTaskId && monitorTaskId !== 'all' ? normalizeProgressPercent(trainTasks.find(t => t.task_id === monitorTaskId)?.progress, trainTasks.find(t => t.task_id === monitorTaskId)?.status) : normalizeProgressPercent(monitorGroupProgress, monitorGroupStatus) }}</span>
+                        <span class="text-xs text-muted-foreground font-bold">%</span>
+                      </div>
+                      <Progress :model-value="monitorTaskId && monitorTaskId !== 'all' ? normalizeProgressPercent(trainTasks.find(t => t.task_id === monitorTaskId)?.progress, trainTasks.find(t => t.task_id === monitorTaskId)?.status) : normalizeProgressPercent(monitorGroupProgress, monitorGroupStatus)" class="h-2 rounded-full overflow-hidden bg-primary/10" />
+                    </div>
+                  </div>
+
+                  <!-- Task Status -->
+                  <div class="group border rounded-2xl bg-gradient-to-br from-background to-muted/20 p-5 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between h-[120px] relative overflow-hidden">
+                    <div class="flex justify-between items-start relative z-10">
+                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.status') }}</span>
+                      <div class="flex items-center gap-1.5">
+                        <div class="w-2 h-2 rounded-full animate-pulse-slow" :class="getStatusClass(currentTaskStatus)"></div>
+                      </div>
+                    </div>
+                    <div class="relative z-10">
+                      <div class="text-2xl font-black tracking-tight text-foreground capitalize truncate">
+                        {{ t('training.monitor.statusList.' + (currentStatusDisplay || 'pending')) }}
+                      </div>
+                      <div class="mt-2 text-[10px] text-muted-foreground flex items-center gap-1.5 font-medium">
+                        <span class="w-1.5 h-1.5 rounded-full bg-primary/30"></span>
+                        {{ t('training.monitor.groupLabel') }}: {{ t('training.monitor.statusList.' + (groupStatusDisplay || 'pending')) }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Threshold KPI -->
+                  <div class="group border rounded-2xl bg-gradient-to-br from-background to-muted/20 p-5 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between h-[120px] relative overflow-hidden">
+                    <div class="flex justify-between items-start relative z-10">
+                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.threshold') }}</span>
+                      <TrendingDown class="w-4 h-4 text-green-500/40" />
+                    </div>
+                    <div class="space-y-1 relative z-10">
+                      <div class="text-3xl font-black tracking-tight text-primary tabular-nums font-mono">
+                        {{ latestMonitorMetric?.threshold ? formatMetricNumber(latestMonitorMetric.threshold) : '-' }}
+                      </div>
+                      <div class="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
+                        <Zap class="w-3 h-3 text-amber-500/60" />
+                        {{ t('training.monitor.calibratedThreshold') }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Stage Info -->
+                  <div class="group border rounded-2xl bg-gradient-to-br from-background to-muted/20 p-5 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between h-[120px] relative overflow-hidden">
+                    <div class="flex justify-between items-start relative z-10">
+                      <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{{ t('training.monitor.stage') }}</span>
+                      <GitCommit class="w-4 h-4 text-blue-500/40" />
+                    </div>
+                    <div class="space-y-1 relative z-10">
+                      <div class="flex items-baseline gap-1.5">
+                        <span class="text-3xl font-black tracking-tight text-primary tabular-nums">{{ latestMonitorMetric?.stage || '-' }}</span>
+                      </div>
+                      <div class="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
+                        <Layers class="w-3 h-3 text-blue-500/60" />
+                        {{ t('training.monitor.samples') }}: {{ latestMonitorMetric?.num_samples || latestMonitorMetric?.total_samples || '-' }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- Sub-tasks Progress List -->
                 <div class="flex-1 min-h-0 flex flex-col border rounded-2xl bg-background/50 backdrop-blur-sm overflow-hidden shadow-sm">
                   <div class="px-5 py-4 border-b bg-muted/20 flex items-center justify-between shrink-0">

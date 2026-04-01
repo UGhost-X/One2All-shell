@@ -1,0 +1,71 @@
+from pypylon import pylon
+import cv2
+
+def connect_my_camera():
+    camera_ip = "192.168.110.10"
+    save_path = "captured.jpg"
+
+    tl_factory = pylon.TlFactory.GetInstance()
+    device_info = pylon.DeviceInfo()
+    device_info.SetPropertyValue("IpAddress", camera_ip)
+    device_info.SetPropertyValue("DeviceClass", "BaslerGigE")
+
+    camera = pylon.InstantCamera(tl_factory.CreateDevice(device_info))
+    camera.Open()
+    nodemap = camera.GetNodeMap()
+
+    # ✅ 缩小分辨率（ROI），从中心裁取 1368x912，约 1.2MB
+    nodemap.GetNode("OffsetX").SetValue(0)
+    nodemap.GetNode("OffsetY").SetValue(0)
+    nodemap.GetNode("Width").SetValue(2000)
+    nodemap.GetNode("Height").SetValue(2000)
+    
+    payload = nodemap.GetNode("PayloadSize").GetValue()
+    print(f"当前 PayloadSize: {payload / 1024 / 1024:.1f} MB")
+
+    nodemap.GetNode("GevStreamChannelSelector").SetValue(0)
+    nodemap.GetNode("GevSCFTD").SetValue(500000)
+    nodemap.GetNode("GevSCPD").SetValue(5000)
+    
+    # 增加数据包大小和帧保留设置
+    try:
+        nodemap.GetNode("GevSCPSPacketSize").SetValue(8192)  # 增大 packet size
+        print(f"✅ PacketSize 设置为: {nodemap.GetNode('GevSCPSPacketSize').GetValue()}")
+    except Exception as e:
+        print(f"⚠️ 无法设置 PacketSize: {e}")
+    
+    # 增加缓冲区数量
+    camera.MaxNumBuffer = 20
+    print(f"✅ MaxNumBuffer 设置为: {camera.MaxNumBuffer}")
+
+    converter = pylon.ImageFormatConverter()
+    converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+    converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+
+    # 开始抓图，增加重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        camera.StartGrabbingMax(1)
+        res = camera.RetrieveResult(20000, pylon.TimeoutHandling_ThrowException)
+
+        if res.GrabSucceeded():
+            print(f"✅ 抓图成功！尺寸: {res.Width} x {res.Height}")
+            converted = converter.Convert(res)
+            img = converted.GetArray()
+            cv2.imwrite(save_path, img)
+            print(f"✅ 图片已保存: {save_path}")
+            res.Release()
+            break
+        else:
+            print(f"❌ 抓图失败 (尝试 {attempt + 1}/{max_retries}): {res.ErrorDescription}")
+            res.Release()
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(0.5)  # 短暂等待后重试
+            else:
+                print("⚠️ 已达到最大重试次数")
+  
+     camera.Close()
+
+if __name__ == '__main__':
+    connect_my_camera()

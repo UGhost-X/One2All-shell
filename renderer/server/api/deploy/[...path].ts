@@ -452,11 +452,21 @@ export default defineEventHandler(async (event) => {
       }
 
       const result = await inferenceRes.json()
-      const convertedResult = {
+
+      // 支持多工件预测结果格式
+      const convertedResult: any = {
         results: result.results || [],
         processing_time: result.processing_time || 0,
         total_detections: result.total_detections || 0,
         anomaly_count: result.anomaly_count || 0
+      }
+
+      // 如果存在多工件结果，添加到返回数据中
+      if (result.workpieces && Array.isArray(result.workpieces)) {
+        convertedResult.workpieces = result.workpieces
+        convertedResult.total_workpieces = result.total_workpieces || result.workpieces.length
+        convertedResult.total_rois_all = result.total_rois_all || 0
+        convertedResult.multi_workpiece = result.multi_workpiece || true
       }
 
       return {

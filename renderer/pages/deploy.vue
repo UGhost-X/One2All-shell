@@ -3,7 +3,7 @@ import { computed, ref, onMounted, onUnmounted, inject, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { Play, Square, Trash2, RefreshCw, Server, Box, Loader2, Zap, FolderOpen, CheckCircle, XCircle, Clock, ImageIcon, BarChart3, FileText, X, Database, Plus, Minus } from 'lucide-vue-next'
+import { Play, Square, Trash2, RefreshCw, Server, Box, Loader2, Zap, FolderOpen, CheckCircle, XCircle, Clock, ImageIcon, BarChart3, FileText, X, Plus, Minus } from 'lucide-vue-next'
 import Switch from '@/components/ui/switch/Switch.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
 import UiButton from '@/components/ui/button/Button.vue'
@@ -34,7 +34,7 @@ const productName = ref('')
 const apiBase = ref('')
 
 const loadSettings = async () => {
-  if (window.electronAPI) {
+  if (typeof window !== 'undefined' && window.electronAPI) {
     const settings = await window.electronAPI.getSettings()
     if (settings?.backendMode === 'remote' && settings?.backendUrl) {
       const url = new URL(settings.backendUrl)
@@ -48,7 +48,9 @@ const loadSettings = async () => {
     apiBase.value = 'localhost'
   }
 }
-loadSettings()
+if (typeof window !== 'undefined') {
+  loadSettings()
+}
 
 interface DeployableModel {
   task_uuid: string
@@ -101,6 +103,34 @@ const inferenceCanvasResultRef = ref<HTMLCanvasElement | null>(null)
 const selectedInferenceService = ref('')
 const isInferring = ref(false)
 const inferenceResult = ref<any>(null)
+
+interface WorkpieceResult {
+  workpieceId: number
+  workpieceKey: string
+  bbox: [number, number, number, number]
+  results: Array<{
+    label: string
+    score: number
+    bbox: [number, number, number, number]
+    isAnomaly?: boolean
+    error?: number
+    threshold?: number
+    alignmentStrategy?: string
+  }>
+  strategy: string
+  hasAnomaly: boolean
+}
+
+interface InferenceSummary {
+  totalWorkpieces: number
+  anomalyWorkpieces: number
+  totalRois: number
+  anomalyRois: number
+}
+
+const workpieceResults = ref<WorkpieceResult[]>([])
+const inferenceSummary = ref<InferenceSummary | null>(null)
+
 const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }>>([])
 const classificationResults = ref<Array<{ label: string; score: number }>>([])
 const inferenceServiceOpen = ref(false)
@@ -120,27 +150,7 @@ const autoRefreshLogs = ref(true)
 const logsRefreshInterval = ref<number | null>(null)
 const activeLogPolling = ref<string[]>([])
 
-// 内存库展示相关
-interface MemoryBankInfo {
-  category: string
-  positive_count: number
-  negative_count: number
-  positive_samples?: string[]
-  negative_samples?: string[]
-}
 
-interface ServiceMemoryBanks {
-  service_id: string
-  task_uuid: string
-  banks: MemoryBankInfo[]
-}
-
-const memoryBanks = ref<ServiceMemoryBanks[]>([])
-const isLoadingMemoryBanks = ref(false)
-const selectedMemoryBankService = ref<string>('')
-const memoryBankModalOpen = ref(false)
-const currentMemoryBank = ref<MemoryBankInfo | null>(null)
-const currentBankType = ref<'positive' | 'negative'>('positive')
 
 const loadServiceLog = async (serviceId: string, incremental = false) => {
   if (!serviceId) return
@@ -391,7 +401,7 @@ const loadServices = async () => {
     })
 
     await loadAllServiceLogs()
-    await loadMemoryBanks()
+
 
     // 只将新出现的服务添加到日志轮询
     services.value.forEach(s => {
@@ -406,52 +416,7 @@ const loadServices = async () => {
   }
 }
 
-const loadMemoryBanks = async () => {
-  if (services.value.length === 0) {
-    memoryBanks.value = []
-    return
-  }
-  isLoadingMemoryBanks.value = true
-  try {
-    const banks: ServiceMemoryBanks[] = []
-    for (const service of services.value) {
-      if (service.status !== 'running') continue
-      try {
-        const res = await fetch(`/api/deploy/http/service/${service.service_id}/memory_banks`)
-        if (res.ok) {
-          const data = await res.json()
-          if (data.banks) {
-            banks.push({
-              service_id: service.service_id,
-              task_uuid: service.task_uuid,
-              banks: data.banks
-            })
-          }
-        }
-      } catch (err) {
-        console.warn(`Failed to load memory banks for service ${service.service_id}:`, err)
-      }
-    }
-    memoryBanks.value = banks
-  } catch (err) {
-    console.error('Failed to load memory banks:', err)
-  } finally {
-    isLoadingMemoryBanks.value = false
-  }
-}
 
-const openMemoryBankModal = (serviceId: string, bank: MemoryBankInfo, type: 'positive' | 'negative') => {
-  selectedMemoryBankService.value = serviceId
-  currentMemoryBank.value = bank
-  currentBankType.value = type
-  memoryBankModalOpen.value = true
-}
-
-const closeMemoryBankModal = () => {
-  memoryBankModalOpen.value = false
-  currentMemoryBank.value = null
-  selectedMemoryBankService.value = ''
-}
 
 const startService = async (taskUuid: string, labels?: string[]) => {
   startingUuid.value = taskUuid
@@ -627,6 +592,8 @@ const handleInferenceFileChange = async (e: Event) => {
   inferenceImageUrl.value = dataUrl
   inferenceFile.value = file
   inferenceResult.value = null
+  workpieceResults.value = []
+  inferenceSummary.value = null
   detectionResults.value = []
   classificationResults.value = []
   if (input) input.value = ''
@@ -651,6 +618,8 @@ const runInference = async () => {
 
   isInferring.value = true
   inferenceResult.value = null
+  workpieceResults.value = []
+  inferenceSummary.value = null
   detectionResults.value = []
   classificationResults.value = []
 
@@ -658,7 +627,7 @@ const runInference = async () => {
     const formData = new FormData()
     formData.append('file', inferenceFile.value!)
     formData.append('service_id', selectedInferenceService.value)
-    
+
     const res = await fetch('/api/deploy/inference', {
       method: 'POST',
       body: formData
@@ -668,9 +637,60 @@ const runInference = async () => {
 
     if (res.ok) {
       inferenceResult.value = data
-      
+
+      // 处理多工件预测结果格式
+      if (data.workpieces && Array.isArray(data.workpieces)) {
+        workpieceResults.value = data.workpieces.map((wp: any) => ({
+          workpieceId: wp.workpiece_id,
+          workpieceKey: wp.workpiece_key,
+          bbox: wp.bbox || [0, 0, 0, 0],
+          results: (wp.results || []).map((r: any) => ({
+            label: r.category || t('deploy.unknown'),
+            score: (r.anomaly_score || 0) * 100,
+            bbox: r.bbox || r.bbox_clipped || [0, 0, 0, 0],
+            isAnomaly: r.is_anomaly || false,
+            error: r.error || 0,
+            threshold: r.threshold || 0,
+            alignmentStrategy: r.alignment_strategy || 'ORB'
+          })),
+          strategy: wp.strategy || 'unknown',
+          hasAnomaly: wp.has_anomaly || false
+        }))
+
+        if (data.summary) {
+          inferenceSummary.value = {
+            totalWorkpieces: data.summary.total_workpieces || 0,
+            anomalyWorkpieces: data.summary.anomaly_workpieces || 0,
+            totalRois: data.summary.total_rois || 0,
+            anomalyRois: data.summary.anomaly_rois || 0
+          }
+        }
+
+        // 合并所有工件的检测结果用于绘制
+        const allResults: Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }> = []
+        workpieceResults.value.forEach(wp => {
+          wp.results.forEach(r => {
+            allResults.push({
+              ...r,
+              label: `${wp.workpieceKey}: ${r.label}`
+            })
+          })
+        })
+        detectionResults.value = allResults
+
+        toast?.success(t('deploy.multiWorkpieceDetected', {
+          workpieces: workpieceResults.value.length,
+          anomaly: inferenceSummary.value?.anomalyWorkpieces || 0
+        }))
+
+        if (inferenceImageUrl.value && detectionResults.value.length > 0) {
+          setTimeout(() => {
+            drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
+          }, 100)
+        }
+      }
       // 处理 /predict_roi 返回格式 - results 是数组，每个元素是一个标注框的检测结果
-      if (data.result?.results && Array.isArray(data.result.results)) {
+      else if (data.result?.results && Array.isArray(data.result.results)) {
         const roiResults = data.result.results
         detectionResults.value = roiResults.map((r: any) => ({
           label: r.category || t('deploy.unknown'),
@@ -1063,138 +1083,14 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <Separator />
 
-          <!-- 内存库展示 -->
-          <div class="space-y-4">
-            <div class="flex items-center justify-between">
-              <h2 class="text-lg font-semibold flex items-center gap-2">
-                <Database class="h-5 w-5" />
-                {{ t('deploy.memoryBanks') }}
-              </h2>
-              <UiButton variant="outline" size="sm" @click="loadMemoryBanks" :disabled="isLoadingMemoryBanks">
-                <RefreshCw class="h-4 w-4 mr-2" :class="{ 'animate-spin': isLoadingMemoryBanks }" />
-                {{ t('deploy.refresh') }}
-              </UiButton>
-            </div>
-
-            <div v-if="isLoadingMemoryBanks" class="flex items-center justify-center py-8">
-              <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-
-            <div v-else-if="memoryBanks.length === 0" class="text-center py-8 text-muted-foreground">
-              {{ t('deploy.noMemoryBanks') }}
-            </div>
-
-            <div v-else class="grid gap-4">
-              <div
-                v-for="serviceBank in memoryBanks"
-                :key="serviceBank.service_id"
-                class="border rounded-lg bg-card overflow-hidden"
-              >
-                <div class="flex items-center gap-4 p-3 bg-muted/50 border-b text-sm">
-                  <span><span class="text-muted-foreground">服务ID:</span> <span class="font-mono">{{ serviceBank.service_id }}</span></span>
-                  <span><span class="text-muted-foreground">任务UUID:</span> <span class="font-mono">{{ serviceBank.task_uuid }}</span></span>
-                </div>
-                <div class="p-3">
-                  <div class="grid gap-2">
-                    <div
-                      v-for="bank in serviceBank.banks"
-                      :key="bank.category"
-                      class="border rounded p-3 bg-muted/30"
-                    >
-                      <div class="flex items-center justify-between mb-2">
-                        <span class="font-semibold text-sm">{{ bank.category }}</span>
-                      </div>
-                      <div class="grid grid-cols-2 gap-2">
-                        <button
-                          @click="openMemoryBankModal(serviceBank.service_id, bank, 'positive')"
-                          class="flex items-center justify-between p-2 rounded bg-green-50 hover:bg-green-100 border border-green-200 transition-colors"
-                        >
-                          <div class="flex items-center gap-2">
-                            <Database class="h-4 w-4 text-green-600" />
-                            <span class="text-xs font-medium text-green-700">{{ t('deploy.positiveLibrary') }}</span>
-                          </div>
-                          <span class="text-xs font-bold text-green-700">{{ bank.positive_count }}</span>
-                        </button>
-                        <button
-                          @click="openMemoryBankModal(serviceBank.service_id, bank, 'negative')"
-                          class="flex items-center justify-between p-2 rounded bg-orange-50 hover:bg-orange-100 border border-orange-200 transition-colors"
-                        >
-                          <div class="flex items-center gap-2">
-                            <Database class="h-4 w-4 text-orange-600" />
-                            <span class="text-xs font-medium text-orange-700">{{ t('deploy.negativeLibrary') }}</span>
-                          </div>
-                          <span class="text-xs font-bold text-orange-700">{{ bank.negative_count }}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
 
         </template>
       </div>
 
     </main>
 
-    <!-- 内存库详情对话框 -->
-    <div v-if="memoryBankModalOpen" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <UiCard class="w-full max-w-4xl h-[80vh] shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col">
-        <UiCardHeader class="pb-4 shrink-0">
-          <div class="flex items-center justify-between">
-            <UiCardTitle class="text-lg flex items-center gap-2">
-              <Database class="h-5 w-5" :class="currentBankType === 'positive' ? 'text-green-600' : 'text-orange-600'" />
-              {{ currentBankType === 'positive' ? t('deploy.positiveLibrary') : t('deploy.negativeLibrary') }} - {{ currentMemoryBank?.category }}
-            </UiCardTitle>
-            <UiButton variant="ghost" size="icon" class="h-8 w-8" @click="closeMemoryBankModal">
-              <X class="h-4 w-4" />
-            </UiButton>
-          </div>
-          <UiCardDescription>
-            {{ t('deploy.memoryBankDescription', { count: currentBankType === 'positive' ? currentMemoryBank?.positive_count : currentMemoryBank?.negative_count }) }}
-          </UiCardDescription>
-        </UiCardHeader>
 
-        <UiCardContent class="flex-1 overflow-hidden py-4">
-          <div class="h-full overflow-auto bg-muted/50 rounded-lg border p-4">
-            <div v-if="currentBankType === 'positive' && currentMemoryBank?.positive_samples">
-              <div class="grid grid-cols-4 gap-2">
-                <div
-                  v-for="(sample, idx) in currentMemoryBank.positive_samples"
-                  :key="idx"
-                  class="aspect-square rounded border bg-white flex items-center justify-center text-xs text-muted-foreground"
-                >
-                  {{ sample }}
-                </div>
-              </div>
-            </div>
-            <div v-else-if="currentBankType === 'negative' && currentMemoryBank?.negative_samples">
-              <div class="grid grid-cols-4 gap-2">
-                <div
-                  v-for="(sample, idx) in currentMemoryBank.negative_samples"
-                  :key="idx"
-                  class="aspect-square rounded border bg-white flex items-center justify-center text-xs text-muted-foreground"
-                >
-                  {{ sample }}
-                </div>
-              </div>
-            </div>
-            <div v-else class="flex items-center justify-center h-full text-muted-foreground">
-              {{ t('deploy.noSamples') }}
-            </div>
-          </div>
-        </UiCardContent>
-
-        <UiCardFooter class="pt-4 shrink-0">
-          <UiButton variant="outline" class="w-full" @click="closeMemoryBankModal">
-            {{ t('common.close') }}
-          </UiButton>
-        </UiCardFooter>
-      </UiCard>
-    </div>
 
     <!-- 日志查看对话框 -->
     <div v-if="showLogModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">

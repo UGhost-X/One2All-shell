@@ -272,7 +272,9 @@
       "noLabels": "No categories available",
       "selectedLabelsCount": "{count} categories selected",
       "allLabelsSelected": "Train on all categories if none selected",
-      "allCategories": "All Categories"
+      "allCategories": "All Categories",
+      "numAugmentations": "Augmentation Count",
+      "maxConcurrent": "Concurrent Count"
     },
     "monitor": {
       "currentTask": "Current Task",
@@ -435,6 +437,7 @@
     "noResults": "No inference results",
     "targetDetected": "Detected {count} targets",
     "anomalyDetected": "Detected {count} targets, {anomaly} anomalies",
+    "multiWorkpieceDetected": "Detected {workpieces} workpieces, {anomaly} anomalies",
     "inferenceComplete": "Inference complete",
     "inferenceFailed": "Inference failed",
     "unknown": "Unknown",

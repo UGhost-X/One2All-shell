@@ -1,0 +1,58 @@
+{
+  "appId": "com.one2all.shell",
+  "productName": "One2All Shell",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "electron/**/*",
+    "renderer/.output/public/**/*",
+    "prisma/schema.prisma",
+    "prisma/dev.db",
+    "prisma/migrations/**/*",
+    "package.json",
+    "!node_modules/**/test/**",
+    "!node_modules/**/tests/**",
+    "!node_modules/**/example/**",
+    "!node_modules/**/examples/**",
+    "!node_modules/**/docs/**",
+    "!node_modules/**/*.md",
+    "!node_modules/**/*.map",
+    "!node_modules/.cache/**",
+    "!node_modules/.pnpm/**",
+    "!**/*.map",
+    "!**/.git",
+    "!**/.github",
+    "!**/dist",
+    "!**/build",
+    "!**/test",
+    "!**/tests",
+    "!**/docs",
+    "!**/log",
+    "!**/logs"
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "prisma/**/*",
+    "node_modules/@prisma/client/**/*",
+    "node_modules/.prisma/**/*"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "renderer/public/favicon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  },
+  "npmRebuild": false,
+  "nodeGypRebuild": false,
+  "buildDependenciesFromSource": false
+}

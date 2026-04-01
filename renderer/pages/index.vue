@@ -1695,8 +1695,59 @@ const runInference = async () => {
 
     if (data.status === 'success' && data.result) {
       const result = data.result
-      
-      if (result.results && Array.isArray(result.results)) {
+
+      // 处理多工件预测结果格式
+      if (result.workpieces && Array.isArray(result.workpieces) && result.workpieces.length > 0) {
+        const allResults: Array<{
+          label: string
+          score: number
+          bbox: [number, number, number, number]
+          segmentation?: number[]
+          isAnomaly?: boolean
+          error?: number
+          threshold?: number
+          alignmentStrategy?: string
+          visible: boolean
+          anomaly_type?: string
+          category?: string
+          pos_id?: string
+          workpieceId?: number
+          workpieceKey?: string
+        }> = []
+
+        result.workpieces.forEach((wp: any, idx: number) => {
+          const wpResults = (wp.results || []).map((r: any) => ({
+            label: `wp${String(idx).padStart(2, '0')}: ${r.category || '未知'}`,
+            score: (r.anomaly_score || r.score || 0) * 100,
+            bbox: r.bbox || r.bbox_clipped || [0, 0, 0, 0],
+            segmentation: r.segmentation_in_pred || r.segmentation || [],
+            isAnomaly: r.is_anomaly || r.isAnomaly || false,
+            error: r.error || 0,
+            threshold: r.threshold || 0,
+            alignmentStrategy: r.alignment_strategy || wp.alignment_strategy || 'ORB',
+            visible: true,
+            anomaly_type: r.anomaly_type || '',
+            category: r.category || '',
+            pos_id: r.pos_id,
+            workpieceId: wp.workpiece_id || idx,
+            workpieceKey: wp.workpiece_key || `wp${idx}`
+          }))
+          allResults.push(...wpResults)
+        })
+
+        detectionResults.value = allResults
+
+        const totalWorkpieces = result.total_workpieces || result.workpieces.length
+        const totalRoisAll = result.total_rois_all || allResults.length
+        const anomalyCount = result.anomaly_count || allResults.filter((r: any) => r.isAnomaly).length
+
+        if (detectionResults.value.length > 0) {
+          const maxScore = Math.max(...detectionResults.value.map(r => r.score))
+          predictionConfidence.value = maxScore
+        }
+        showToast(`检测到 ${totalWorkpieces} 个工件，${totalRoisAll} 个目标，异常: ${anomalyCount} 个`, 'info')
+      }
+      else if (result.results && Array.isArray(result.results)) {
         const roiResults = result.results
         detectionResults.value = roiResults.map((r: any) => ({
           label: r.category || '未知',
@@ -2340,21 +2391,7 @@ onBeforeUnmount(() => {
                   <CameraIcon v-else class="h-4 w-4 text-primary" />
                   {{ selectedProductHasImage && selectedProductHasAnnotation ? (isInferring ? '识别中...' : '拍照识别') : '添加产品图' }}
                 </UiButton>
-                <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold col-span-2" @click="importImage">
-                  <Upload class="h-4 w-4 text-primary" />
-                  {{ t('dashboard.import') }}
-                </UiButton>
-                <UiButton
-                  variant="default"
-                  size="sm"
-                  class="h-14 flex flex-col gap-1 text-[10px] font-bold bg-primary/90 hover:bg-primary"
-                  :disabled="isInferring"
-                  @click="captureAndInfer"
-                >
-                  <Loader2 v-if="isInferring" class="h-4 w-4 animate-spin" />
-                  <CameraIcon v-else class="h-4 w-4" />
-                  {{ isInferring ? '识别中...' : '拍照识别' }}
-                </UiButton>
+
                 <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold" @click="startInference">
                   <Wand2 class="h-4 w-4" />
                   选择图片推理

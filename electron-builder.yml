@@ -1,0 +1,28 @@
+appId: com.one2all.shell
+productName: One2All Shell
+directories:
+  output: dist
+files:
+  - electron/**/*
+  - renderer/.output/public/**/*
+  - prisma/schema.prisma
+  - prisma/dev.db
+  - prisma/migrations/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - prisma/**/*
+  - node_modules/@prisma/client/**/*
+  - node_modules/prisma/**/*
+extraResources:
+  - from: node_modules/.prisma
+    to: node_modules/.prisma
+  - from: node_modules/@prisma/client/runtime
+    to: node_modules/@prisma/client/runtime
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+npmRebuild: false
+nodeGypRebuild: false
