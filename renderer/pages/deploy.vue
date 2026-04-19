@@ -23,15 +23,16 @@ const config = useRuntimeConfig()
 const toast = inject<any>('toast')
 
 interface Product {
-  id: number
+  id: string
   name: string
   model: string
 }
 
 const products = ref<Product[]>([])
-const productId = ref<number | null>(null)
+const productId = ref<string | null>(null)
 const productName = ref('')
 const apiBase = ref('')
+const isInitialized = ref(false)
 
 const loadSettings = async () => {
   if (typeof window !== 'undefined' && window.electronAPI) {
@@ -50,6 +51,27 @@ const loadSettings = async () => {
 }
 if (typeof window !== 'undefined') {
   loadSettings()
+}
+
+const backendPort = '8000'
+const getBackendUrl = (path: string) => `http://${apiBase.value}:${backendPort}${path}`
+
+const getInferenceUrl = async (inferenceUrl?: string) => {
+  if (!inferenceUrl) return ''
+  if (!apiBase.value) {
+    await loadSettings()
+  }
+  let url = inferenceUrl.replace('0.0.0.0', 'localhost')
+  if (url.includes('localhost') || url.includes('127.0.0.1')) {
+    const base = `http://${apiBase.value}:${backendPort}`
+    if (apiBase.value) {
+      try {
+        const urlObj = new URL(base)
+        url = url.replace('localhost', urlObj.hostname).replace('127.0.0.1', urlObj.hostname)
+      } catch {}
+    }
+  }
+  return url
 }
 
 interface DeployableModel {
@@ -164,7 +186,7 @@ const loadServiceLog = async (serviceId: string, incremental = false) => {
   }
 
   try {
-    const res = await fetch(`/api/deploy/http/service/${serviceId}/logs?lines=${logLines.value}&from_line=${fromLine}`)
+    const res = await fetch(getBackendUrl(`/deploy/http/service/${serviceId}/logs?lines=${logLines.value}&from_line=${fromLine}`))
     if (res.ok) {
       const data = await res.json()
       const newLogs = data.logs || ''
@@ -192,6 +214,12 @@ const loadServiceLog = async (serviceId: string, incremental = false) => {
           nextLine: nextLine
         }
       }
+    } else if (res.status === 404) {
+      // 服务不存在，停止轮询
+      removeServiceLogPolling(serviceId)
+      if (!incremental) {
+        serviceLogs.value[serviceId] = { content: t('deploy.serviceNotFound'), loading: false, nextLine: 0 }
+      }
     } else {
       if (!incremental) {
         serviceLogs.value[serviceId] = { content: t('deploy.loadLogsFailed'), loading: false, nextLine: 0 }
@@ -199,6 +227,8 @@ const loadServiceLog = async (serviceId: string, incremental = false) => {
     }
   } catch (err: any) {
     console.error('Failed to load service logs:', err)
+    // 网络错误，停止轮询
+    removeServiceLogPolling(serviceId)
     if (!incremental) {
       serviceLogs.value[serviceId] = { content: t('deploy.loadLogsFailed'), loading: false, nextLine: 0 }
     }
@@ -325,8 +355,8 @@ const loadProducts = async () => {
 }
 
 const onProductChange = (id: string) => {
-  productId.value = id ? Number(id) : null
-  const product = products.value.find(p => p.id === productId.value)
+  productId.value = id || null
+  const product = products.value.find(p => String(p.id) === String(productId.value))
   productName.value = product?.name || ''
   loadDeployableModels()
   loadServices()
@@ -345,12 +375,35 @@ const loadDeployableModels = async () => {
   }
   isLoadingModels.value = true
   try {
-    const url = `/api/deploy/models/${productId.value}`
+    const url = getBackendUrl(`/project/${productId.value}/models`)
+    console.log('[Deploy] Loading models for product:', productId.value, 'URL:', url)
     const res = await fetch(url)
     const data = await res.json()
-    const models = data.models || []
-    
-    for (const model of models) {
+    const allModels = data.models || []
+
+    const modelMap = new Map<string, DeployableModel>()
+    for (const model of allModels) {
+      if (!modelMap.has(model.task_uuid)) {
+        modelMap.set(model.task_uuid, {
+          task_uuid: model.task_uuid,
+          labels: [],
+          model_paths: {},
+          onnx_status: model.onnx_status || {},
+          created_at: model.created_at
+        })
+      }
+      const existingModel = modelMap.get(model.task_uuid)!
+      if (model.labels && Array.isArray(model.labels)) {
+        existingModel.labels = [...new Set([...existingModel.labels, ...model.labels])]
+      }
+      if (model.model_paths) {
+        Object.assign(existingModel.model_paths, model.model_paths)
+      }
+    }
+
+    const uniqueModels = Array.from(modelMap.values())
+
+    for (const model of uniqueModels) {
       try {
         const records = await window.electronAPI.getTrainingRecordsByTaskUuid(model.task_uuid)
         if (records && records.length > 0) {
@@ -360,8 +413,8 @@ const loadDeployableModels = async () => {
         console.warn('[Deploy] Failed to get training record for', model.task_uuid, e)
       }
     }
-    
-    deployableModels.value = models.sort((a: DeployableModel, b: DeployableModel) => {
+
+    deployableModels.value = uniqueModels.sort((a: DeployableModel, b: DeployableModel) => {
       const timeA = a.created_at ? new Date(a.created_at).getTime() : 0
       const timeB = b.created_at ? new Date(b.created_at).getTime() : 0
       return timeB - timeA
@@ -381,7 +434,9 @@ const loadServices = async () => {
   }
   isLoadingServices.value = true
   try {
-    const res = await fetch(`/api/deploy/http/services?project_id=${productId.value}&include_health=true`)
+    const url = getBackendUrl(`/deploy/http/services?project_id=${productId.value}&include_health=true`)
+    console.log('[Deploy] Loading services for product:', productId.value, 'URL:', url)
+    const res = await fetch(url)
     const data = await res.json()
     const previousServiceIds = new Set(services.value.map(s => s.service_id))
     // 去重：根据 service_id 去重
@@ -427,7 +482,7 @@ const startService = async (taskUuid: string, labels?: string[]) => {
     for (const svc of existingServices) {
       if (svc.status === 'running' || svc.status === 'starting') {
         try {
-          await fetch(`/api/deploy/stop/${svc.service_id}`, { method: 'POST' })
+          await fetch(getBackendUrl(`/deploy/http/service/${svc.service_id}/stop`), { method: 'POST' })
           removeServiceLogPolling(svc.service_id)
           delete serviceLogs.value[svc.service_id]
         } catch (e) {
@@ -436,7 +491,7 @@ const startService = async (taskUuid: string, labels?: string[]) => {
       }
     }
     
-    const res = await fetch(`/api/deploy/start`, {
+    const res = await fetch(getBackendUrl('/deploy/http'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -448,7 +503,7 @@ const startService = async (taskUuid: string, labels?: string[]) => {
     })
     const data = await res.json()
 
-    if (data.status === 'success') {
+    if (data.success) {
       toast?.success(t('deploy.messages.startSuccess', { port: data.port }))
       await loadServices()
       startServicesPolling()
@@ -466,7 +521,7 @@ const startService = async (taskUuid: string, labels?: string[]) => {
 const stopService = async (serviceId: string) => {
   stoppingId.value = serviceId
   try {
-    const res = await fetch(`/api/deploy/stop/${serviceId}`, { method: 'POST' })
+    const res = await fetch(getBackendUrl(`/deploy/http/service/${serviceId}/stop`), { method: 'POST' })
     const data = await res.json()
     if (data.success) {
       toast?.success(t('deploy.messages.stopSuccess'))
@@ -498,16 +553,18 @@ const stopService = async (serviceId: string) => {
 const deleteService = async (serviceId: string) => {
   deletingId.value = serviceId
   try {
-    const res = await fetch(`/api/deploy/${serviceId}`, {
+    const res = await fetch(getBackendUrl(`/deploy/http/service/${serviceId}`), {
       method: 'DELETE'
     })
-    const data = await res.json()
-    if (data.status === 'success') {
+
+    if (res.ok || res.status === 404) {
       toast?.success(t('deploy.messages.deleteSuccess'))
-      await loadServices()
+      const serviceIndex = services.value.findIndex(s => s.service_id === serviceId)
+      if (serviceIndex > -1) {
+        services.value.splice(serviceIndex, 1)
+      }
       removeServiceLogPolling(serviceId)
       delete serviceLogs.value[serviceId]
-      // 删除后检查是否还有需要轮询的服务
       const hasServicesToCheck = services.value.some(s =>
         s.status !== 'running' && s.status !== 'stopped'
       )
@@ -515,11 +572,17 @@ const deleteService = async (serviceId: string) => {
         stopServicesPolling()
       }
     } else {
+      const data = await res.json().catch(() => ({}))
       toast?.error(data.message || t('deploy.messages.deleteFailed'))
     }
   } catch (err) {
     console.error('Failed to delete service:', err)
-    toast?.error(t('deploy.messages.deleteFailed'))
+    const serviceIndex = services.value.findIndex(s => s.service_id === serviceId)
+    if (serviceIndex > -1) {
+      services.value.splice(serviceIndex, 1)
+    }
+    removeServiceLogPolling(serviceId)
+    delete serviceLogs.value[serviceId]
   } finally {
     deletingId.value = null
   }
@@ -552,7 +615,7 @@ const loadServiceLogs = async () => {
   if (!logServiceId.value) return
   isLoadingLogs.value = true
   try {
-    const res = await fetch(`/api/deploy/http/service/${logServiceId.value}/logs?lines=${logLines.value}`)
+    const res = await fetch(getBackendUrl(`/deploy/http/service/${logServiceId.value}/logs?lines=${logLines.value}`))
     if (res.ok) {
       const data = await res.json()
       logContent.value = data.logs || ''
@@ -628,7 +691,8 @@ const runInference = async () => {
     formData.append('file', inferenceFile.value!)
     formData.append('service_id', selectedInferenceService.value)
 
-    const res = await fetch('/api/deploy/inference', {
+    const inferenceUrl = await getInferenceUrl(selectedService.inference_url)
+    const res = await fetch(`${inferenceUrl}/predict`, {
       method: 'POST',
       body: formData
     })
@@ -799,7 +863,7 @@ let servicesPollInterval: ReturnType<typeof setInterval> | null = null
 // 检查单个服务健康状态
 const checkServiceHealth = async (serviceId: string) => {
   try {
-    const res = await fetch(`/api/deploy/http/service/${serviceId}/health`)
+    const res = await fetch(getBackendUrl(`/deploy/http/service/${serviceId}/health`))
     if (res.ok) {
       const data = await res.json()
       // 更新本地服务状态
@@ -856,20 +920,35 @@ const stopServicesPolling = () => {
 }
 
 onMounted(async () => {
+  if (isInitialized.value) return
+  isInitialized.value = true
+
   await loadProducts()
-  
+
   const qProductId = route.query.productId
   const qProductName = route.query.productName
+  console.log('[Deploy] onMounted - route.query.productId:', qProductId)
+
   if (qProductId) {
-    productId.value = Number(qProductId)
+    productId.value = String(qProductId)
     productName.value = String(qProductName || '')
-  } else if (products.value.length > 0) {
-    // 自动选择第一个项目
-    const firstProduct = products.value[0]
-    productId.value = firstProduct.id
-    productName.value = firstProduct.name
+  } else {
+    const savedProductId = localStorage.getItem('selectedProductId')
+    if (savedProductId) {
+      productId.value = savedProductId
+      const product = products.value.find(p => String(p.id) === savedProductId)
+      if (product) {
+        productName.value = product.name
+      }
+    } else if (products.value.length > 0) {
+      const firstProduct = products.value[0]
+      productId.value = String(firstProduct.id)
+      productName.value = firstProduct.name
+    }
   }
-  
+
+  console.log('[Deploy] onMounted - final productId:', productId.value)
+
   if (productId.value) {
     await loadDeployableModels()
     await loadServices()
@@ -883,6 +962,25 @@ onMounted(async () => {
 onUnmounted(() => {
   stopServicesPolling()
   stopLogsAutoRefresh()
+})
+
+watch(() => route.query.productId, async (newProductId) => {
+  console.log('[Deploy] Route productId changed:', newProductId, 'Current:', productId.value)
+  if (newProductId) {
+    const newId = String(newProductId)
+    if (newId !== productId.value) {
+      console.log('[Deploy] Switching to product:', newId)
+      productId.value = newId
+      const product = products.value.find(p => String(p.id) === newId)
+      productName.value = product?.name || ''
+      await loadDeployableModels()
+      await loadServices()
+      startServicesPolling()
+      if (autoRefreshLogs.value) {
+        startLogsAutoRefresh()
+      }
+    }
+  }
 })
 </script>
 
@@ -1035,11 +1133,11 @@ onUnmounted(() => {
                       <UiSelectValue />
                     </UiSelectTrigger>
                     <UiSelectContent class="w-[140px]">
-                      <UiSelectItem :value="50">50</UiSelectItem>
-                      <UiSelectItem :value="100">100</UiSelectItem>
-                      <UiSelectItem :value="200">200</UiSelectItem>
-                      <UiSelectItem :value="500">500</UiSelectItem>
-                      <UiSelectItem :value="1000">1000</UiSelectItem>
+                      <UiSelectItem value="50">50</UiSelectItem>
+                      <UiSelectItem value="100">100</UiSelectItem>
+                      <UiSelectItem value="200">200</UiSelectItem>
+                      <UiSelectItem value="500">500</UiSelectItem>
+                      <UiSelectItem value="1000">1000</UiSelectItem>
                     </UiSelectContent>
                   </UiSelect>
                 </div>
@@ -1120,11 +1218,11 @@ onUnmounted(() => {
                   <UiSelectValue />
                 </UiSelectTrigger>
                 <UiSelectContent class="w-[140px]">
-                  <UiSelectItem :value="50">50</UiSelectItem>
-                  <UiSelectItem :value="100">100</UiSelectItem>
-                  <UiSelectItem :value="200">200</UiSelectItem>
-                  <UiSelectItem :value="500">500</UiSelectItem>
-                  <UiSelectItem :value="1000">1000</UiSelectItem>
+                  <UiSelectItem value="50">50</UiSelectItem>
+                  <UiSelectItem value="100">100</UiSelectItem>
+                  <UiSelectItem value="200">200</UiSelectItem>
+                  <UiSelectItem value="500">500</UiSelectItem>
+                  <UiSelectItem value="1000">1000</UiSelectItem>
                 </UiSelectContent>
               </UiSelect>
             </div>

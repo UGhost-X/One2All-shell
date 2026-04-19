@@ -9,9 +9,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteProduct: (id) => ipcRenderer.invoke('db:delete-product', id),
   getCameras: () => ipcRenderer.invoke('db:get-cameras'),
   addCamera: (camera) => ipcRenderer.invoke('db:add-camera', camera),
-  deleteCamera: (id) => ipcRenderer.invoke('db:delete-camera', id),
+  deleteCamera: (id, isNetworkCamera, dbId) => ipcRenderer.invoke('db:delete-camera', { id, isNetworkCamera, dbId }),
   updateCamera: (id, data) => ipcRenderer.invoke('db:update-camera', { id, data }),
   getSystemCameras: () => ipcRenderer.invoke('camera:get-system-cameras'),
+  // Network Camera API
+  connectCamera: (cameraId, params) => ipcRenderer.invoke('camera:connect', { cameraId, ...params }),
+  disconnectCamera: (cameraId) => ipcRenderer.invoke('camera:disconnect', cameraId),
+  captureFromCamera: (cameraId, savePath) => ipcRenderer.invoke('camera:capture', cameraId, savePath),
+  getCameraStatus: (cameraId) => ipcRenderer.invoke('camera:get-status', cameraId),
+  updateCameraParameters: (cameraId, params) => ipcRenderer.invoke('camera:update-parameters', { cameraId, ...params }),
   // Annotation Schemes
   getSchemes: () => ipcRenderer.invoke('db:get-schemes'),
   saveScheme: (scheme) => ipcRenderer.invoke('db:save-scheme', scheme),

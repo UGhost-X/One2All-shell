@@ -15,7 +15,7 @@ provide('toast', {
 
 <template>
   <div>
-    <NuxtPage />
+    <NuxtPage keepalive />
     <Toast ref="toastRef" />
   </div>
 </template>

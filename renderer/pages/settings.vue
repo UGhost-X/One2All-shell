@@ -229,7 +229,7 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
                   <Label>{{ t('settings.dataDir') }}</Label>
                 </div>
                 <div class="flex gap-2">
-                  <Input 
+                  <Input
                     v-model="dataPath"
                     readonly
                     class="font-mono text-xs"

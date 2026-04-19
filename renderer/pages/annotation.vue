@@ -69,10 +69,10 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
-const productId = ref<number | null>(null)
+const productId = ref<string | null>(null)
 const imagePath = ref<string | null>(null)
 const productName = ref<string>('')
-const activeSchemeId = ref<number | null>(null)
+const activeSchemeId = ref<string | null>(null)
 
 const showLabelPanel = ref(true)
 
@@ -149,14 +149,19 @@ const bindScheme = async (schemeId: number) => {
     if (scheme) {
       activeSchemeId.value = scheme.id
       const config = JSON.parse(scheme.config)
+      // 确保工件主体始终存在
+      const hasWorkpieceBody = config.labels?.some((l: LabelConfig) => isWorkpieceBodyLabel(l.id))
+      if (!hasWorkpieceBody) {
+        config.labels = [{ id: 'workpiece-body', name: '工件主体', type: 'rect', color: '#3b82f6' }, ...(config.labels || [])]
+      }
       labelConfigs.splice(0, labelConfigs.length, ...config.labels)
       if (config.customColors) {
         customColors.splice(0, customColors.length, ...config.customColors)
       } else {
         customColors.splice(0, customColors.length)
       }
-      activeLabelId.value = null
-      activeTool.value = 'select'
+      activeLabelId.value = labelConfigs[0]?.id || null
+      activeTool.value = labelConfigs[0]?.type || 'select'
     }
     showSchemeModal.value = false
   } catch (err) {
@@ -212,10 +217,23 @@ const confirmDeleteScheme = async () => {
 }
 
 const labelConfigs = reactive<LabelConfig[]>([
-  { id: '1', name: 'Label A', type: 'rect', color: '#3b82f6' },
-  { id: '2', name: 'Label B', type: 'polygon', color: '#ef4444' },
-  { id: '3', name: 'Label C', type: 'rect', color: '#10b981' },
+  { id: 'workpiece-body', name: '工件主体', type: 'rect', color: '#3b82f6' },
 ])
+
+const isWorkpieceBodyLabel = (labelId: string) => labelId === 'workpiece-body'
+
+const currentImageData = computed(() => {
+  return images[currentImgIndex.value]
+})
+
+const hasWorkpieceBodyAnnotation = computed(() => {
+  return currentImageData.value?.annotations.some(a => isWorkpieceBodyLabel(a.labelId)) ?? false
+})
+
+// 是否显示主体标注框（仅当选择主体label时显示）
+const showWorkpieceBodyAnnotation = computed(() => {
+  return isWorkpieceBodyLabel(activeLabelId.value || '')
+})
 const activeLabelId = ref<string | null>(null)
 
 const isEditingLabel = ref(false)
@@ -357,7 +375,7 @@ const saveLabelConfig = async () => {
           if (obj.labelId === editingLabel.id) {
             obj.set({
               stroke: editingLabel.color,
-              fill: `${editingLabel.color}1A`
+              fill: 'transparent'
             })
           }
         })
@@ -381,6 +399,9 @@ const saveLabelConfig = async () => {
 }
 
 const removeLabel = async (id: string) => {
+  if (isWorkpieceBodyLabel(id)) {
+    return
+  }
   const index = labelConfigs.findIndex(c => c.id === id)
   if (index !== -1) {
     labelConfigs.splice(index, 1)
@@ -440,7 +461,7 @@ onMounted(async () => {
   const qImagePath = route.query.imagePath
   const qProductName = route.query.productName
   
-  if (qProductId) productId.value = Number(qProductId)
+  if (qProductId) productId.value = String(qProductId)
   if (qImagePath) imagePath.value = String(qImagePath)
   if (qProductName) productName.value = String(qProductName)
 
@@ -452,6 +473,11 @@ onMounted(async () => {
     if (product?.scheme) {
       activeSchemeId.value = product.scheme.id
       const config = JSON.parse(product.scheme.config)
+      // 确保工件主体始终存在
+      const hasWorkpieceBody = config.labels?.some((l: LabelConfig) => isWorkpieceBodyLabel(l.id))
+      if (!hasWorkpieceBody) {
+        config.labels = [{ id: 'workpiece-body', name: '工件主体', type: 'rect', color: '#3b82f6' }, ...(config.labels || [])]
+      }
       labelConfigs.splice(0, labelConfigs.length, ...config.labels)
       // Auto-select first label if available
       if (labelConfigs.length > 0) {
@@ -580,17 +606,48 @@ watch(() => route.query, async (newQuery) => {
   const qProductId = newQuery.productId
   const qImagePath = newQuery.imagePath
   const qProductName = newQuery.productName
-  
+
   if (qProductId) {
-    productId.value = Number(qProductId)
+    const newProductId = String(qProductId)
+
+    if (newProductId !== productId.value) {
+      productId.value = newProductId
+      images.splice(0, images.length)
+      currentImgIndex.value = 0
+
+      if (window.electronAPI) {
+        await fetchSchemes()
+        const products = await window.electronAPI.getProducts()
+        const product = products.find(p => p.id === productId.value)
+        if (product?.scheme) {
+          activeSchemeId.value = product.scheme.id
+          const config = JSON.parse(product.scheme.config)
+          const hasWorkpieceBody = config.labels?.some((l: LabelConfig) => isWorkpieceBodyLabel(l.id))
+          if (!hasWorkpieceBody) {
+            config.labels = [{ id: 'workpiece-body', name: '工件主体', type: 'rect', color: '#3b82f6' }, ...(config.labels || [])]
+          }
+          labelConfigs.splice(0, labelConfigs.length, ...config.labels)
+          if (config.customColors) {
+            customColors.splice(0, customColors.length, ...config.customColors)
+          } else {
+            customColors.splice(0, customColors.length)
+          }
+          activeLabelId.value = labelConfigs[0]?.id || null
+          activeTool.value = labelConfigs[0]?.type || 'select'
+        } else {
+          showSchemeModal.value = true
+        }
+      }
+    }
+
     productName.value = String(qProductName || '')
-    
+
     if (qImagePath) {
       imagePath.value = String(qImagePath)
-      
+
       const normalize = (p: string) => (p || '').replace(/\\/g, '/').toLowerCase()
       const targetPath = normalize(imagePath.value)
-      
+
       const existingImg = images.find(img => normalize(img.fullPath || '') === targetPath)
       if (existingImg) {
         const idx = images.indexOf(existingImg)
@@ -602,9 +659,9 @@ watch(() => route.query, async (newQuery) => {
       } else if (window.electronAPI) {
         const savedAnnotations = await window.electronAPI.getAnnotations(productId.value, imagePath.value)
         const annData = savedAnnotations ? JSON.parse(savedAnnotations.data) : []
-        
+
         const dataUrl = await window.electronAPI.loadImage(imagePath.value)
-        
+
         images.unshift({
           url: dataUrl || '',
           fullPath: imagePath.value,
@@ -612,6 +669,11 @@ watch(() => route.query, async (newQuery) => {
           annotations: annData
         })
         currentImgIndex.value = 0
+
+        await nextTick()
+        if (fCanvas.value) {
+          await loadImage(currentImgIndex.value)
+        }
       }
     }
   }
@@ -1106,6 +1168,12 @@ const finishDrawing = () => {
   const config = labelConfigs.find(c => c.id === activeLabelId.value)
   if (!config) return
 
+  // 如果正在添加工件主体标注但已存在，则取消
+  if (isWorkpieceBodyLabel(config.id) && hasWorkpieceBodyAnnotation.value) {
+    cancelDrawing()
+    return
+  }
+
   isDrawing = false
   isFirstPointEnlarged = false
   if (dashAnimationFrame !== null) {
@@ -1138,9 +1206,9 @@ const finishDrawing = () => {
       top: tempObj.top,
       width: tempObj.width,
       height: tempObj.height,
-      fill: `${color}1A`,
+      fill: 'transparent',
       stroke: color,
-      strokeWidth: 0.5,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1154,8 +1222,8 @@ const finishDrawing = () => {
       labelId: config.id as any,
       cornerColor: '#fff',
       cornerStrokeColor: color,
-      cornerSize: 8,
-      cornerStyle: 'rect',
+      cornerSize: 4,
+      cornerStyle: 'circle',
       transparentCorners: false,
       padding: 5,
     } as any)
@@ -1182,9 +1250,9 @@ const finishDrawing = () => {
     if (activeLine) fCanvas.value!.remove(activeLine)
     
     const poly = new Polygon(polygonPoints, {
-      fill: `${color}1A`,
+      fill: 'transparent',
       stroke: color,
-      strokeWidth: 0.1,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1196,8 +1264,8 @@ const finishDrawing = () => {
       evented: true,
       cornerColor: '#fff',
       cornerStrokeColor: color,
-      cornerSize: 8,
-      cornerStyle: 'rect',
+      cornerSize: 4,
+      cornerStyle: 'circle',
       transparentCorners: false,
       padding: 5,
       id: id as any,
@@ -1236,9 +1304,9 @@ const finishDrawing = () => {
         top: tempObj.top,
         width: w,
         height: h,
-        fill: `${color}1A`,
+        fill: 'transparent',
         stroke: color,
-        strokeWidth: 0.5,
+        strokeWidth: 1,
         lockMovementX: false,
         lockMovementY: false,
         lockScalingX: false,
@@ -1252,8 +1320,8 @@ const finishDrawing = () => {
         labelId: config.id as any,
         cornerColor: '#fff',
         cornerStrokeColor: color,
-        cornerSize: 8,
-        cornerStyle: 'rect',
+        cornerSize: 4,
+        cornerStyle: 'circle',
         transparentCorners: false,
         padding: 5,
       } as any)
@@ -1268,8 +1336,15 @@ const finishDrawing = () => {
 
   if (newAnn) {
     images[currentImgIndex.value].annotations.push(newAnn)
+
+    // 如果添加的是主体标注，保持选中主体label以显示标注框
+    if (isWorkpieceBodyLabel(newAnn.labelId)) {
+      nextTick(() => {
+        redrawCurrentAnnotations()
+      })
+    }
   }
-  
+
   tempObj = null
   startPoint = null
   fCanvas.value.renderAll()
@@ -1336,15 +1411,28 @@ const loadImage = async (index: number) => {
 
 const drawAnnotation = (ann: Annotation) => {
   if (!fCanvas.value) return
+
+  // 如果选择主体label，只显示主体标注
+  if (showWorkpieceBodyAnnotation.value) {
+    if (!isWorkpieceBodyLabel(ann.labelId)) {
+      return
+    }
+  } else {
+    // 如果没选择主体label，隐藏主体标注
+    if (isWorkpieceBodyLabel(ann.labelId)) {
+      return
+    }
+  }
+
   if (ann.type === 'rect') {
     const rect = new Rect({
       left: ann.points[0],
       top: ann.points[1],
       width: ann.points[2],
       height: ann.points[3],
-      fill: `${ann.color}1A`,
+      fill: 'transparent',
       stroke: ann.color,
-      strokeWidth: 0.1,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1358,8 +1446,8 @@ const drawAnnotation = (ann: Annotation) => {
       labelId: ann.labelId as any,
       cornerColor: '#fff',
       cornerStrokeColor: ann.color,
-      cornerSize: 12,
-      cornerStyle: 'rect',
+      cornerSize: 4,
+      cornerStyle: 'circle',
       transparentCorners: false,
       padding: 5,
     } as any)
@@ -1373,9 +1461,9 @@ const drawAnnotation = (ann: Annotation) => {
       top: cy - h / 2,
       width: w,
       height: h,
-      fill: `${ann.color}1A`,
+      fill: 'transparent',
       stroke: ann.color,
-      strokeWidth: 0.1,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1390,8 +1478,8 @@ const drawAnnotation = (ann: Annotation) => {
       angle: angle,
       cornerColor: '#fff',
       cornerStrokeColor: ann.color,
-      cornerSize: 12,
-      cornerStyle: 'rect',
+      cornerSize: 4,
+      cornerStyle: 'circle',
       transparentCorners: false,
       padding: 5,
     } as any)
@@ -1410,9 +1498,9 @@ const drawAnnotation = (ann: Annotation) => {
     }
 
     const poly = new Polygon(points.length > 0 ? points : (ann.points as any), {
-      fill: `${ann.color}1A`,
+      fill: 'transparent',
       stroke: ann.color,
-      strokeWidth: 0.1,
+      strokeWidth: 1,
       lockMovementX: false,
       lockMovementY: false,
       lockScalingX: false,
@@ -1424,8 +1512,8 @@ const drawAnnotation = (ann: Annotation) => {
       evented: true,
       cornerColor: '#fff',
       cornerStrokeColor: ann.color,
-      cornerSize: 12,
-      cornerStyle: 'rect',
+      cornerSize: 4,
+      cornerStyle: 'circle',
       transparentCorners: false,
       padding: 5,
       id: ann.id as any,
@@ -1444,10 +1532,32 @@ const deleteAnnotation = (id: string) => {
   const obj = fCanvas.value.getObjects().find((o: any) => o.id === id)
   if (obj) {
     fCanvas.value.remove(obj)
-    const currentAnns = images[currentImgIndex.value].annotations
-    const index = currentAnns.findIndex(a => a.id === id)
-    if (index !== -1) currentAnns.splice(index, 1)
-    fCanvas.value.renderAll()
+  }
+  // 从数据中删除（无论是否在画布上显示）
+  const currentAnns = images[currentImgIndex.value].annotations
+  const index = currentAnns.findIndex(a => a.id === id)
+  if (index !== -1) {
+    currentAnns.splice(index, 1)
+    // 如果删除的是主体标注，需要重绘画布
+    if (isWorkpieceBodyLabel(currentAnns[index]?.labelId)) {
+      nextTick(() => {
+        redrawCurrentAnnotations()
+      })
+    }
+  }
+  selectedId.value = null
+  fCanvas.value.renderAll()
+}
+
+// --- Annotation Click Handler ---
+const handleAnnotationClick = (ann: Annotation) => {
+  selectedId.value = ann.id
+  // 如果点击的是工件主体标注，设置activeLabelId为工件主体labelId以显示标注框
+  if (isWorkpieceBodyLabel(ann.labelId)) {
+    activeLabelId.value = ann.labelId
+  } else {
+    // 如果点击的是其他标注，切换到对应的label
+    activeLabelId.value = ann.labelId
   }
 }
 
@@ -1460,7 +1570,7 @@ const highlightAnnotation = (id: string | null) => {
       if (obj.id === id) {
         // Apply glow effect
         obj.set({
-          strokeWidth: 0.1,
+          strokeWidth: 1,
           shadow: {
             color: obj.stroke,
             blur: 15,
@@ -1475,7 +1585,7 @@ const highlightAnnotation = (id: string | null) => {
       } else {
         // Reset to normal
         obj.set({
-          strokeWidth: 0.1,
+          strokeWidth: 1,
           shadow: null
         })
       }
@@ -1555,9 +1665,11 @@ watch(activeLabelId, () => {
   const config = labelConfigs.find(c => c.id === activeLabelId.value)
   if (!config) {
     activeTool.value = 'select'
-    return
+  } else {
+    activeTool.value = config.type
   }
-  activeTool.value = config.type
+  // 切换label时重绘标注，以显示/隐藏主体标注框
+  redrawCurrentAnnotations()
 })
 
 watch(showLabelPanel, async () => {
@@ -1673,48 +1785,88 @@ watch(showLabelPanel, async () => {
 
           <!-- Label List -->
           <div class="flex-1 overflow-y-auto custom-scrollbar p-2" @click.self="activeLabelId = null">
-            <div class="space-y-2" @click.self="activeLabelId = null">
-              <div 
-                v-for="config in labelConfigs" 
-                :key="config.id"
-                class="group relative flex items-center gap-3 p-2 rounded-xl transition-all cursor-pointer border-1 overflow-hidden mr-1.5 ml-1.5"
-                :class="[
-                  activeLabelId === config.id 
-                    ? 'shadow-md scale-[1.02] translate-x-1 z-10' 
-                    : 'border-transparent hover:scale-[1.01]'
-                ]"
-                :style="{ 
-                  borderColor: activeLabelId === config.id ? config.color : 'transparent',
-                  backgroundColor: `${config.color}15`,
-                  backdropFilter: 'blur(4px)'
-                }"
-                @click.stop="activeLabelId = config.id"
-              >
-                <!-- Type-based Marker -->
-                <div
-                  class="absolute -left-[2px] -top-[2px] -bottom-[2px] w-5 transition-all duration-300 z-10"
-                  :style="{
-                    backgroundColor: config.color,
-                    clipPath: config.type === 'rect'
-                      ? (activeLabelId === config.id ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(0 0, 60% 50%, 0 100%)')
-                      : config.type === 'rbbox'
-                      ? (activeLabelId === config.id ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(0 0, 60% 50%, 0 100%)')
-                      : (activeLabelId === config.id ? 'polygon(0 0, 100% 0, 25% 50%, 100% 100%, 0 100%)' : 'polygon(0 0, 70% 0, 15% 50%, 70% 100%, 0 100%)')
+            <div class="space-y-4" @click.self="activeLabelId = null">
+              <!-- 工件主体标注区域 - 始终显示 -->
+              <div class="space-y-2" @click.stop>
+                <div class="text-[10px] font-bold uppercase tracking-wider px-2" :class="hasWorkpieceBodyAnnotation ? 'text-green-500' : 'text-amber-500'">
+                  {{ hasWorkpieceBodyAnnotation ? '工件主体（已标注）' : '请先标注工件主体' }}
+                </div>
+                <div 
+                  v-for="config in labelConfigs.filter(c => isWorkpieceBodyLabel(c.id))" 
+                  :key="config.id"
+                  class="group relative flex items-center gap-3 p-2 rounded-xl transition-all cursor-pointer border-1 overflow-hidden mr-1.5 ml-1.5"
+                  :class="[
+                    activeLabelId === config.id 
+                      ? 'shadow-md scale-[1.02] translate-x-1 z-10' 
+                      : 'border-transparent hover:scale-[1.01]'
+                  ]"
+                  :style="{ 
+                    borderColor: activeLabelId === config.id ? config.color : 'transparent',
+                    backgroundColor: `${config.color}15`,
+                    backdropFilter: 'blur(4px)'
                   }"
-                ></div>
-
-                <div class="flex-1 min-w-0 ml-4">
-                  <div class="flex items-center justify-between">
+                  @click.stop="activeLabelId = config.id"
+                >
+                  <div
+                    class="absolute -left-[2px] -top-[2px] -bottom-[2px] w-5 transition-all duration-300 z-10"
+                    :style="{
+                      backgroundColor: config.color,
+                      clipPath: 'polygon(0 0, 100% 50%, 0 100%)'
+                    }"
+                  ></div>
+                  <div class="flex-1 min-w-0 ml-4">
                     <span class="text-xs font-bold truncate transition-colors" :class="{ 'text-foreground': activeLabelId === config.id, 'text-muted-foreground': activeLabelId !== config.id }">
                       {{ config.name }}
                     </span>
-                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <UiButton variant="ghost" size="icon" class="h-6 w-6 rounded-md" :title="t('annotation.edit')" @click.stop="editLabel(config)">
-                        <Settings2 class="h-3.5 w-3.5" />
-                      </UiButton>
-                      <UiButton variant="ghost" size="icon" class="h-6 w-6 rounded-md hover:bg-destructive/10 hover:text-destructive" :title="t('annotation.deleteLabel')" @click.stop="removeLabel(config.id)">
-                        <Trash2 class="h-3.5 w-3.5" />
-                      </UiButton>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 普通标注区域 -->
+              <div v-if="hasWorkpieceBodyAnnotation" class="space-y-2" @click.stop>
+                <div class="text-[10px] font-bold uppercase text-muted-foreground tracking-wider px-2">
+                  类型标注
+                </div>
+                <div 
+                  v-for="config in labelConfigs.filter(c => !isWorkpieceBodyLabel(c.id))" 
+                  :key="config.id"
+                  class="group relative flex items-center gap-3 p-2 rounded-xl transition-all cursor-pointer border-1 overflow-hidden mr-1.5 ml-1.5"
+                  :class="[
+                    activeLabelId === config.id 
+                      ? 'shadow-md scale-[1.02] translate-x-1 z-10' 
+                      : 'border-transparent hover:scale-[1.01]'
+                  ]"
+                  :style="{ 
+                    borderColor: activeLabelId === config.id ? config.color : 'transparent',
+                    backgroundColor: `${config.color}15`,
+                    backdropFilter: 'blur(4px)'
+                  }"
+                  @click.stop="activeLabelId = config.id"
+                >
+                  <div
+                    class="absolute -left-[2px] -top-[2px] -bottom-[2px] w-5 transition-all duration-300 z-10"
+                    :style="{
+                      backgroundColor: config.color,
+                      clipPath: config.type === 'rect'
+                        ? (activeLabelId === config.id ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(0 0, 60% 50%, 0 100%)')
+                        : config.type === 'rbbox'
+                        ? (activeLabelId === config.id ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(0 0, 60% 50%, 0 100%)')
+                        : (activeLabelId === config.id ? 'polygon(0 0, 100% 0, 25% 50%, 100% 100%, 0 100%)' : 'polygon(0 0, 70% 0, 15% 50%, 70% 100%, 0 100%)')
+                    }"
+                  ></div>
+                  <div class="flex-1 min-w-0 ml-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-bold truncate transition-colors" :class="{ 'text-foreground': activeLabelId === config.id, 'text-muted-foreground': activeLabelId !== config.id }">
+                        {{ config.name }}
+                      </span>
+                      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <UiButton variant="ghost" size="icon" class="h-6 w-6 rounded-md" :title="t('annotation.edit')" @click.stop="editLabel(config)">
+                          <Settings2 class="h-3.5 w-3.5" />
+                        </UiButton>
+                        <UiButton variant="ghost" size="icon" class="h-6 w-6 rounded-md hover:bg-destructive/10 hover:text-destructive" :title="t('annotation.deleteLabel')" @click.stop="removeLabel(config.id)">
+                          <Trash2 class="h-3.5 w-3.5" />
+                        </UiButton>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1862,7 +2014,7 @@ watch(showLabelPanel, async () => {
             :key="ann.id"
             class="group p-3 rounded-xl border-2 transition-all cursor-pointer bg-background shadow-sm"
             :class="selectedId === ann.id ? 'border-primary bg-primary/5' : 'border-border/50 hover:border-primary/30'"
-            @click="selectedId = ann.id"
+            @click="handleAnnotationClick(ann)"
           >
             <div class="flex items-center gap-3">
               <div class="h-3 w-3 rounded-full shrink-0 shadow-sm" :style="{ backgroundColor: ann.color }"></div>

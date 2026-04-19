@@ -7,34 +7,39 @@ declare global {
       isAlwaysOnTop: () => Promise<boolean>
       getProducts: () => Promise<any[]>
       addProduct: (product: any) => Promise<any>
-      deleteProduct: (id: number) => Promise<void>
+      deleteProduct: (id: string) => Promise<void>
       getCameras: () => Promise<any[]>
       addCamera: (camera: any) => Promise<any>
-      deleteCamera: (id: number) => Promise<void>
-      updateCamera: (id: number, data: any) => Promise<any>
+      deleteCamera: (id: string) => Promise<void>
+      updateCamera: (id: string, data: any) => Promise<any>
       getSystemCameras: () => Promise<Array<{ id: string; name: string; deviceId: string; isSystemCamera: boolean }>>
+      // Network Camera API
+      connectCamera: (cameraId: string, params?: { exposureTime?: number; gain?: number; offsetX?: number; offsetY?: number; width?: number; height?: number }) => Promise<{ success: boolean; message?: string; error?: string; status?: any }>
+      disconnectCamera: (cameraId: string) => Promise<{ success: boolean; message?: string; error?: string }>
+      captureFromCamera: (cameraId: string, savePath?: string) => Promise<{ success: boolean; data?: any; error?: string }>
+      getCameraStatus: (cameraId: string) => Promise<{ success: boolean; status?: any; error?: string }>
       // Annotation Schemes
       getSchemes: () => Promise<any[]>
       saveScheme: (scheme: any) => Promise<any>
-      deleteScheme: (id: number) => Promise<void>
-      bindScheme: (productId: number, schemeId: number) => Promise<any>
+      deleteScheme: (id: string) => Promise<void>
+      bindScheme: (productId: string, schemeId: string) => Promise<any>
       // Annotation Results
-      getAnnotations: (productId: number, imagePath: string) => Promise<any>
-      saveAnnotations: (productId: number, imagePath: string, data: string) => Promise<any>
+      getAnnotations: (productId: string, imagePath: string) => Promise<any>
+      saveAnnotations: (productId: string, imagePath: string, data: string) => Promise<any>
       openFile: () => Promise<null | { path: string; data: string }>
       selectDirectory: () => Promise<string | null>
       getSettings: () => Promise<any>
       saveSettings: (settings: any) => Promise<any>
-      saveImage: (data: { productId: number; fileName: string; dataUrl: string }) => Promise<string>
+      saveImage: (data: { productId: string; fileName: string; dataUrl: string }) => Promise<string>
       loadImage: (path: string) => Promise<string | null>
-      getProductImages: (productId: number) => Promise<string[]>
-      saveDataset: (data: { productId: number; versionName: string; moduleName: string; images: any[]; cocoData: any }) => Promise<any>
-      loadDataset: (params: { id?: number | string; savePath?: string }) => Promise<any>
+      getProductImages: (productId: string) => Promise<string[]>
+      saveDataset: (data: { productId: string; versionName: string; moduleName: string; images: any[]; cocoData: any }) => Promise<any>
+      loadDataset: (params: { id?: string; savePath?: string }) => Promise<any>
       saveDatasetVersion: (data: any) => Promise<any>
-      getDatasetVersions: (productId: number) => Promise<any[]>
-      deleteDatasetVersion: (id: number | string) => Promise<any>
+      getDatasetVersions: (productId: string) => Promise<any[]>
+      deleteDatasetVersion: (id: string) => Promise<any>
       saveTrainingRecord: (data: TrainingRecordData) => Promise<any>
-      getTrainingRecords: (productId: number) => Promise<TrainingRecord[]>
+      getTrainingRecords: (productId: string) => Promise<TrainingRecord[]>
       getTrainingRecord: (taskId: string, labelName?: string) => Promise<TrainingRecord | null>
       getTrainingRecordsByTaskUuid: (taskUuid: string) => Promise<TrainingRecord[]>
       deleteTrainingRecord: (taskId: string, labelName?: string) => Promise<any>
@@ -43,7 +48,7 @@ declare global {
 }
 
 interface TrainingRecordData {
-  productId: number
+  productId: string
   taskId: string
   labelName?: string
   modelName?: string
@@ -61,9 +66,9 @@ interface TrainingRecordData {
 }
 
 interface TrainingRecord extends TrainingRecordData {
-  id: number
+  id: string
   taskUuid: string
-  datasetVersionId?: number
+  datasetVersionId?: string
   labelNames: string
   config: string
   latestIter?: number
@@ -73,8 +78,4 @@ interface TrainingRecord extends TrainingRecordData {
   logs?: string
   startTime?: Date
   endTime?: Date
-  hasBestModel: boolean
-  logPath?: string
-  createdAt: Date
-  updatedAt: Date
 }

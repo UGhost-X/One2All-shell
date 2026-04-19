@@ -3,12 +3,87 @@ const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
 const util = require('util');
-const { PrismaClient } = require('@prisma/client');
+const http = require('http');
+const log = require('electron-log');
+
+log.transports.file.level = 'info';
+log.transports.file.maxSize = 5 * 1024 * 1024;
 
 const execAsync = util.promisify(exec);
 
 let mainWindow;
-const prisma = new PrismaClient();
+let staticServer = null;
+
+const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
+
+const dbPath = isDev
+  ? path.join(__dirname, '../prisma/dev.db')
+  : path.join(process.resourcesPath, 'prisma/dev.db');
+
+const prismaGeneratedPath = isDev
+  ? path.join(__dirname, '../prisma/generated/client')
+  : path.join(process.resourcesPath, 'prisma/generated/client');
+
+const { PrismaClient } = require(prismaGeneratedPath);
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: `file:${dbPath}`
+    }
+  }
+});
+
+function startStaticServer(publicPath) {
+  return new Promise((resolve) => {
+    const mimeTypes = {
+      '.html': 'text/html',
+      '.js': 'text/javascript',
+      '.css': 'text/css',
+      '.json': 'application/json',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.ico': 'image/x-icon',
+      '.svg': 'image/svg+xml',
+    };
+
+    staticServer = http.createServer((req, res) => {
+      let filePath = path.join(publicPath, req.url === '/' ? 'index.html' : req.url);
+      const ext = path.extname(filePath);
+      const contentType = mimeTypes[ext] || 'application/octet-stream';
+
+      fs.readFile(filePath, (err, content) => {
+        if (err) {
+          if (err.code === 'ENOENT') {
+            fs.readFile(path.join(publicPath, 'index.html'), (err2, content2) => {
+              if (err2) {
+                res.writeHead(500);
+                res.end('Server Error');
+              } else {
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end(content2);
+              }
+            });
+          } else {
+            res.writeHead(500);
+            res.end('Server Error');
+          }
+        } else {
+          res.writeHead(200, { 'Content-Type': contentType });
+          res.end(content);
+        }
+      });
+    });
+
+    staticServer.listen(0, '127.0.0.1', () => {
+      const port = staticServer.address().port;
+      resolve(port);
+    });
+  });
+}
+
+// 网络相机服务配置 - 将在 initCameraService 中从设置获取
+let cameraServiceUrl = '';
+let cameraServiceReady = false;
 
 // 存储上一次打开的路径
 const configPath = path.join(app.getPath('userData'), 'app-config.json');
@@ -33,25 +108,28 @@ function saveConfig() {
   }
 }
 
-function createWindow() {
+function createWindow(staticPort) {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    title: 'One2All 视觉检测平台',
+    icon: path.join(__dirname, '../renderer/public/favicon.ico'),
+    backgroundColor: '#E0E0E0',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      webSecurity: false,
+      contextIsolation: true,
+      nodeIntegration: false,
     },
   });
 
-  // 隐藏菜单栏
   Menu.setApplicationMenu(null);
-
-  const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:3001');
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/.output/public/index.html'));
+    mainWindow.loadURL(`http://127.0.0.1:${staticPort}`);
   }
 
   mainWindow.on('closed', function () {
@@ -59,8 +137,89 @@ function createWindow() {
   });
 }
 
+async function checkCameraServiceHealth() {
+  if (!cameraServiceUrl) {
+    return false;
+  }
+  const healthUrl = `${cameraServiceUrl}/camera/list`;
+
+
+  return new Promise((resolve) => {
+    const urlObj = new URL(healthUrl);
+    const options = {
+      hostname: urlObj.hostname,
+      port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+      path: urlObj.pathname,
+      method: 'GET',
+      timeout: 10000
+    };
+
+
+    const req = http.request(options, (res) => {
+      resolve(res.statusCode === 200);
+    });
+
+    req.on('error', (err) => {
+      resolve(false);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+
+    req.end();
+  });
+}
+
+async function initCameraService(backendUrl) {
+
+  cameraServiceUrl = backendUrl;
+  const isReady = await checkCameraServiceHealth();
+  cameraServiceReady = isReady;
+
+  return isReady;
+}
+
+async function makeCameraApiRequest(endpoint, options = {}) {
+  const url = `${cameraServiceUrl}${endpoint}`;
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, {
+      method: options.method || 'GET',
+      headers: options.headers || {}
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          resolve(json);
+        } catch (e) {
+          resolve(data);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.setTimeout(60000, () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+
+    if (options.body) {
+      req.write(options.body);
+    }
+    req.end();
+  });
+}
+
 app.whenReady().then(async () => {
-  createWindow();
+  let staticPort = 0;
+  if (!isDev) {
+    const publicPath = path.join(process.resourcesPath, 'renderer/.output/public');
+    staticPort = await startStaticServer(publicPath);
+  }
+  createWindow(staticPort);
 
   let defaultDataPath = path.join(app.getPath('documents'), 'One2All', 'Data');
 
@@ -87,7 +246,7 @@ app.whenReady().then(async () => {
         backendIp: settings.backendIp,
         backendUrl: settings.backendUrl,
         backendPort: settings.backendPort,
-        imageSettings: settings.imageSettings ? JSON.parse(settings.imageSettings) : { exposure: 67, gain: 1.2 }
+        imageSettings: settings.imageSettings ? JSON.parse(settings.imageSettings) : { exposure: 6084, gain: 1.2, offsetX: 0, offsetY: 0 }
       };
     } catch (err) {
       console.error('Failed to load settings from database:', err);
@@ -98,7 +257,7 @@ app.whenReady().then(async () => {
         backendIp: 'localhost',
         backendUrl: 'http://localhost:8000',
         backendPort: '8000',
-        imageSettings: { exposure: 67, gain: 1.2 }
+        imageSettings: { exposure: 6084, gain: 1.2, offsetX: 0, offsetY: 0 }
       };
     }
   }
@@ -287,26 +446,272 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('db:get-cameras', async () => {
-    return await prisma.camera.findMany();
+    const dbCameras = await prisma.camera.findMany();
+
+    for (const cam of dbCameras) {
+      const config = cam.config ? JSON.parse(cam.config) : {};
+      if (config.width && config.height) {
+        cam.resolution = `${config.width}x${config.height}`;
+      }
+    }
+
+    if (cameraServiceReady) {
+      try {
+        const response = await makeCameraApiRequest('/camera/list');
+        if (response.success && response.cameras) {
+          const serviceCameraIds = new Set(response.cameras.map(c => c.camera_id));
+
+          for (const cam of response.cameras) {
+            const existingCam = dbCameras.find(c => c.name === cam.camera_id);
+            if (existingCam) {
+              existingCam.status = cam.connected ? 'online' : 'offline';
+              existingCam.ip = cam.ip_address;
+              if (cam.resolution) {
+                existingCam.resolution = cam.resolution;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to get cameras from service:', err);
+      }
+    }
+
+    return dbCameras;
   });
 
   ipcMain.handle('db:add-camera', async (event, camera) => {
+    const cameraData = {
+      name: camera.name || camera.cameraId || 'Unnamed Camera',
+      ip: camera.ip || '127.0.0.1',
+      status: camera.status || 'offline',
+      config: camera.config || null,
+      isNetworkCamera: camera.isNetworkCamera || false
+    };
+
+    if (cameraServiceReady && camera.isNetworkCamera) {
+      try {
+        const params = new URLSearchParams();
+        params.append('camera_id', cameraData.name);
+        params.append('ip_address', cameraData.ip);
+        if (camera.width) params.append('width', String(camera.width));
+        if (camera.height) params.append('height', String(camera.height));
+        if (camera.exposureTime) params.append('exposure_time', String(camera.exposureTime));
+        if (camera.gain) params.append('gain', String(camera.gain));
+        if (camera.offsetX) params.append('offset_x', String(camera.offsetX));
+        if (camera.offsetY) params.append('offset_y', String(camera.offsetY));
+
+        const response = await makeCameraApiRequest('/camera/create', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: params.toString()
+        });
+
+        if (response.success) {
+          const dbRecord = await prisma.camera.create({
+            data: cameraData
+          });
+          return { ...dbRecord, serviceId: response.camera_id };
+        }
+      } catch (err) {
+        console.error('Failed to add camera to service:', err);
+      }
+    }
     return await prisma.camera.create({
-      data: camera
+      data: cameraData
     });
   });
 
-  ipcMain.handle('db:delete-camera', async (event, id) => {
+  ipcMain.handle('db:delete-camera', async (event, { id, isNetworkCamera, dbId }) => {
+    if (cameraServiceReady && isNetworkCamera) {
+      try {
+        const response = await makeCameraApiRequest(`/camera/${id}/remove`, {
+          method: 'POST'
+        });
+        if (response.success) {
+          // 同时删除数据库记录
+          await prisma.camera.delete({ where: { id: dbId } }).catch(() => {});
+          return response;
+        }
+      } catch (err) {
+        console.error('Failed to delete camera from service:', err);
+      }
+    }
     return await prisma.camera.delete({
-      where: { id }
+      where: { id: dbId || id }
     });
   });
 
   ipcMain.handle('db:update-camera', async (event, { id, data }) => {
+    if (cameraServiceReady && data.isNetworkCamera) {
+      try {
+        const params = new URLSearchParams();
+        if (data.ip) params.append('ip_address', data.ip);
+        if (data.width) params.append('width', String(data.width));
+        if (data.height) params.append('height', String(data.height));
+
+        const response = await makeCameraApiRequest(`/camera/${id}/config`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: params.toString()
+        });
+
+        if (response.success) {
+          return response;
+        }
+      } catch (err) {
+        console.error('Failed to update camera config:', err);
+      }
+    }
     return await prisma.camera.update({
       where: { id },
       data
     });
+  });
+
+  ipcMain.handle('camera:connect', async (event, { cameraId, exposureTime, gain, offsetX, offsetY, width, height }) => {
+
+    if (cameraServiceReady) {
+      try {
+        const params = new URLSearchParams();
+        if (exposureTime !== undefined && exposureTime !== null) params.append('exposure_time', String(Math.round(exposureTime)));
+        if (gain !== undefined && gain !== null) params.append('gain', String(Math.round(gain)));
+        if (offsetX !== undefined && offsetX !== null) params.append('offset_x', String(Math.round(offsetX)));
+        if (offsetY !== undefined && offsetY !== null) params.append('offset_y', String(Math.round(offsetY)));
+        if (width !== undefined && width !== null) params.append('width', String(Math.round(width)));
+        if (height !== undefined && height !== null) params.append('height', String(Math.round(height)));
+
+        const response = await makeCameraApiRequest(`/camera/${cameraId}/connect`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: params.toString()
+        });
+
+        const camera = await prisma.camera.findFirst({
+          where: { name: cameraId }
+        });
+        if (camera) {
+          const existingConfig = camera.config ? JSON.parse(camera.config) : {};
+          const updatedConfig = {
+            ...existingConfig,
+            exposureTime,
+            gain,
+            offsetX,
+            offsetY,
+            width,
+            height
+          };
+          await prisma.camera.update({
+            where: { id: camera.id },
+            data: { config: JSON.stringify(updatedConfig) }
+          });
+        }
+
+        return response;
+      } catch (err) {
+        log.error('Failed to connect camera:', err);
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: 'Camera service not available' };
+  });
+
+  ipcMain.handle('camera:disconnect', async (event, cameraId) => {
+    if (cameraServiceReady) {
+      try {
+        const response = await makeCameraApiRequest(`/camera/${cameraId}/disconnect`, {
+          method: 'POST'
+        });
+        return response;
+      } catch (err) {
+        console.error('Failed to disconnect camera:', err);
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: 'Camera service not available' };
+  });
+
+  ipcMain.handle('camera:capture', async (event, cameraId, savePath) => {
+    if (cameraServiceReady) {
+      try {
+        const query = savePath ? `?save_path=${encodeURIComponent(savePath)}&return_base64=true` : '?return_base64=true';
+        const response = await makeCameraApiRequest(`/camera/${cameraId}/capture${query}`, {
+          method: 'POST'
+        });
+        return response;
+      } catch (err) {
+        console.error('Failed to capture from camera:', err);
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: 'Camera service not available' };
+  });
+
+  ipcMain.handle('camera:get-status', async (event, cameraId) => {
+    if (cameraServiceReady) {
+      try {
+        const response = await makeCameraApiRequest(`/camera/${cameraId}/status`);
+        return response;
+      } catch (err) {
+        console.error('Failed to get camera status:', err);
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: 'Camera service not available' };
+  });
+
+  ipcMain.handle('camera:update-parameters', async (event, { cameraId, exposureTime, gain, offsetX, offsetY, width, height }) => {
+    if (cameraServiceReady) {
+      try {
+        const params = new URLSearchParams();
+        if (exposureTime !== undefined && exposureTime !== null) params.append('exposure_time', String(exposureTime));
+        if (gain !== undefined && gain !== null) params.append('gain', String(gain));
+        if (offsetX !== undefined && offsetX !== null) params.append('offset_x', String(offsetX));
+        if (offsetY !== undefined && offsetY !== null) params.append('offset_y', String(offsetY));
+        if (width !== undefined && width !== null) params.append('width', String(width));
+        if (height !== undefined && height !== null) params.append('height', String(height));
+
+        const response = await makeCameraApiRequest(`/camera/${cameraId}/parameters`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: params.toString()
+        });
+
+        const camera = await prisma.camera.findFirst({
+          where: { name: cameraId }
+        });
+        if (camera) {
+          const existingConfig = camera.config ? JSON.parse(camera.config) : {};
+          const updatedConfig = {
+            ...existingConfig,
+            exposureTime,
+            gain,
+            offsetX,
+            offsetY,
+            width,
+            height
+          };
+          await prisma.camera.update({
+            where: { id: camera.id },
+            data: { config: JSON.stringify(updatedConfig) }
+          });
+        }
+
+        return response;
+      } catch (err) {
+        console.error('Failed to update camera parameters:', err);
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: 'Camera service not available' };
   });
 
   // 文件选择器 IPC 处理器
@@ -356,11 +761,25 @@ app.whenReady().then(async () => {
       if (!fs.existsSync(productDir)) {
         fs.mkdirSync(productDir, { recursive: true });
       }
-      
+
+      // 检查产品是否已有图片，如果有则删除旧图片
+      const product = await prisma.product.findUnique({
+        where: { id: productId },
+        select: { lastImagePath: true }
+      });
+
+      if (product?.lastImagePath && fs.existsSync(product.lastImagePath)) {
+        try {
+          fs.unlinkSync(product.lastImagePath);
+        } catch (deleteErr) {
+          console.error('Failed to delete old image:', deleteErr);
+        }
+      }
+
       const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
       const buffer = Buffer.from(base64Data, 'base64');
       const filePath = path.join(productDir, fileName);
-      
+
       fs.writeFileSync(filePath, buffer);
 
       // 更新数据库中的产品图片路径
@@ -448,8 +867,7 @@ app.whenReady().then(async () => {
       let finalPath = savePath;
       
       if (!finalPath && id) {
-        const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
-        const version = await prisma.datasetVersion.findUnique({ where: { id: numericId } });
+        const version = await prisma.datasetVersion.findUnique({ where: { id } });
         if (version) {
           if (version.savePath) {
             finalPath = version.savePath;
@@ -558,10 +976,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('db:delete-dataset-version', async (event, id) => {
     try {
-      const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
-      
       const version = await prisma.datasetVersion.findUnique({
-        where: { id: numericId }
+        where: { id }
       });
 
       if (version) {
@@ -778,11 +1194,17 @@ app.whenReady().then(async () => {
     }
   });
 
+  // 所有 IPC handler 注册完成后，初始化相机服务
+  initCameraService(appSettings.backendUrl);
+
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(staticPort);
   });
 });
 
 app.on('window-all-closed', function () {
+  if (staticServer) {
+    staticServer.close();
+  }
   if (process.platform !== 'darwin') app.quit();
 });

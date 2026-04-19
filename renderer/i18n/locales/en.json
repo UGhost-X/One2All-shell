@@ -1,6 +1,6 @@
 {
   "common": {
-    "appName": "One2All Console",
+    "appName": "琦航AI视觉检测",
     "home": "Home",
     "dashboard": "Dashboard",
     "dataAnnotation": "Data Annotation",
@@ -315,6 +315,7 @@
       "epochProgress": "Epoch Progress",
       "metricHistory": "Metric History",
       "clearLogs": "Clear Logs",
+      "stopMonitoring": "Stop Monitoring",
       "stageLabels": {
         "featureExtraction": "Feature Extraction",
         "coresetSampling": "Coreset Sampling",
@@ -449,6 +450,7 @@
     "refreshLogs": "Refresh",
     "noLogs": "No logs available",
     "loadLogsFailed": "Failed to load logs",
+    "serviceNotFound": "Service not found or deleted",
     "memoryBanks": "Memory Banks",
     "noMemoryBanks": "No memory bank information",
     "positiveLibrary": "Positive Library",

@@ -2,7 +2,9 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
+  output     = "./generated/client"
+  engineType = "library"
 }
 
 datasource db {
@@ -11,19 +13,19 @@ datasource db {
 }
 
 model Product {
-  id            Int      @id @default(autoincrement())
+  id            String   @id @default(uuid())
   name          String
   model         String
   lastImagePath String?
   scheme        AnnotationScheme? @relation(fields: [schemeId], references: [id])
-  schemeId      Int?
+  schemeId      String?
   annotations   Annotation[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
 
 model AnnotationScheme {
-  id          Int       @id @default(autoincrement())
+  id          String    @id @default(uuid())
   name        String    @unique
   config      String    // JSON string containing labels, colors, types
   products    Product[]
@@ -32,8 +34,8 @@ model AnnotationScheme {
 }
 
 model Annotation {
-  id          Int      @id @default(autoincrement())
-  productId   Int
+  id          String   @id @default(uuid())
+  productId   String
   product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   imagePath   String   // The path of the image being annotated
   data        String   // JSON string of all annotation objects for this image
@@ -45,8 +47,8 @@ model Annotation {
 }
 
 model DatasetVersion {
-  id          Int      @id @default(autoincrement())
-  productId   Int
+  id          String   @id @default(uuid())
+  productId   String
   displayName String   @default("")
   versionName String
   moduleName  String   @default("data_augmentation")
@@ -54,24 +56,25 @@ model DatasetVersion {
   imageCount  Int
   config      String   // JSON string of augmentation config used
   createdAt   DateTime @default(now())
-  
+
   @@index([productId])
 }
 
 model Camera {
-  id        Int      @id @default(autoincrement())
-  name      String
-  ip        String
-  status    String   @default("offline")
-  config    String?  // JSON string or additional info
-  isEnabled Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String   @id @default(uuid())
+  name            String
+  ip              String
+  status          String   @default("offline")
+  config          String?  // JSON string or additional info
+  isEnabled       Boolean  @default(true)
+  isNetworkCamera Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model TrainingRecord {
-  id              Int       @id @default(autoincrement())
-  productId       Int
+  id              String    @id @default(uuid())
+  productId       String
   taskUuid        String
   labelName       String
   modelName       String
@@ -91,7 +94,7 @@ model TrainingRecord {
   outputPath      String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
-  
+
   @@unique([taskUuid, labelName])
   @@index([productId])
   @@index([taskUuid])
@@ -106,7 +109,7 @@ model AppSettings {
   backendIp     String   @default("localhost")
   backendUrl    String   @default("http://localhost:8000")
   backendPort   String   @default("8000")
-  imageSettings String?  @default("{\"exposure\":67,\"gain\":1.2}")
+  imageSettings String?  @default("{\"exposure\":6084,\"gain\":1.2}")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }

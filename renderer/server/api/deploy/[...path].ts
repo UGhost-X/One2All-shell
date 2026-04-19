@@ -442,14 +442,21 @@ export default defineEventHandler(async (event) => {
         inferenceFormData.append('file', blob, originalFilename)
         inferenceFormData.append('service_id', service_id)
           
+        
         const inferenceRes = await fetch(`${inferenceUrl}/predict`, {
           method: 'POST',
           body: inferenceFormData
         })
-      if (!inferenceRes.ok) {
-        const errorData = await inferenceRes.json().catch(() => ({}))
-        throw new Error(errorData.error || `推理请求失败: ${inferenceRes.status}`)
-      }
+                
+        if (!inferenceRes.ok) {
+          const errorText = await inferenceRes.text().catch(() => '{}')
+          console.error('Inference error response:', errorText)
+          let errorData = {}
+          try {
+            errorData = JSON.parse(errorText)
+          } catch {}
+          throw new Error(errorData.error || `推理请求失败: ${inferenceRes.status}`)
+        }
 
       const result = await inferenceRes.json()
 
@@ -842,9 +849,7 @@ export default defineEventHandler(async (event) => {
       const host = getInferenceHost()
       const inferenceUrl = `http://${host}:${service.port}`
       const targetUrl = `${inferenceUrl}/negative_banks/${posId || 'default'}/add`
-      
-      console.log('[Add Negative] Service:', serviceId, 'Port:', service.port, 'Target:', targetUrl)
-      
+            
       const inferenceFormData = new FormData()
       const blob = new Blob([new Uint8Array(await imageFile.arrayBuffer())], { type: imageFile.type })
       inferenceFormData.append('file', blob, imageFile.name)
@@ -854,7 +859,6 @@ export default defineEventHandler(async (event) => {
         body: inferenceFormData
       })
       
-      console.log('[Add Negative] Response status:', addRes.status)
       
       if (!addRes.ok) {
         const errorText = await addRes.text().catch(() => '')

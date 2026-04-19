@@ -1,0 +1,115 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider   = "prisma-client-js"
+  output     = "./generated/client"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Product {
+  id            String            @id @default(uuid())
+  name          String
+  model         String
+  lastImagePath String?
+  scheme        AnnotationScheme? @relation(fields: [schemeId], references: [id])
+  schemeId      String?
+  annotations   Annotation[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+}
+
+model AnnotationScheme {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  config    String // JSON string containing labels, colors, types
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Annotation {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  imagePath String // The path of the image being annotated
+  data      String // JSON string of all annotation objects for this image
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([imagePath])
+}
+
+model DatasetVersion {
+  id          String   @id @default(uuid())
+  productId   String
+  displayName String   @default("")
+  versionName String
+  moduleName  String   @default("data_augmentation")
+  savePath    String
+  imageCount  Int
+  config      String // JSON string of augmentation config used
+  createdAt   DateTime @default(now())
+
+  @@index([productId])
+}
+
+model Camera {
+  id              String   @id @default(uuid())
+  name            String
+  ip              String
+  status          String   @default("offline")
+  config          String? // JSON string or additional info
+  isEnabled       Boolean  @default(true)
+  isNetworkCamera Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model TrainingRecord {
+  id           String    @id @default(uuid())
+  productId    String
+  taskUuid     String
+  labelName    String
+  modelName    String
+  config       String
+  status       String    @default("pending")
+  progress     Float     @default(0)
+  totalEpochs  Int?
+  currentEpoch Int?
+  batchSize    Int?
+  learningRate Float?
+  latestIter   Int?
+  metrics      String    @default("[]")
+  logs         String    @default("[]")
+  startTime    DateTime?
+  endTime      DateTime?
+  hasBestModel Boolean   @default(false)
+  outputPath   String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([taskUuid, labelName])
+  @@index([productId])
+  @@index([taskUuid])
+  @@index([status])
+}
+
+model AppSettings {
+  id            Int      @id @default(1)
+  dataPath      String
+  locale        String   @default("zh")
+  backendMode   String   @default("local")
+  backendIp     String   @default("localhost")
+  backendUrl    String   @default("http://localhost:8000")
+  backendPort   String   @default("8000")
+  imageSettings String?  @default("{\"exposure\":6084,\"gain\":1.2}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}

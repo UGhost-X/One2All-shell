@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { 
-  Pin, 
-  PinOff, 
-  Image as ImageIcon, 
-  List, 
-  BarChart3, 
-  Settings2, 
-  Camera, 
-  Video, 
-  CameraIcon, 
-  Upload, 
-  Plus, 
-  Trash2, 
+import {
+  Pin,
+  PinOff,
+  Image as ImageIcon,
+  List,
+  BarChart3,
+  Settings2,
+  Camera,
+  Video,
+  CameraIcon,
+  Upload,
+  Plus,
+  Trash2,
   RotateCcw,
   RotateCw,
   RefreshCcw,
@@ -28,14 +28,15 @@ import {
   Loader2,
   Eye,
   EyeOff,
-  ChevronDown,
   ChevronRight,
-  CheckCircle2,
-  AlertCircle,
-  MapPin,
   Sparkles,
   Square,
-  Database
+  Wifi,
+  Plug,
+  Unplug,
+  Aperture,
+  Package,
+  Usb
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
@@ -327,16 +328,24 @@ const captureScreenshot = async () => {
 }
 
 // Interactive Settings
-const exposureValue = ref(67)
-const gainValue = ref(1.2)
+const exposureValue = ref(117)  // 52*117 = 6084，默认约6ms
+const gainValue = ref(588)
+const offsetXValue = ref(0)
+const offsetYValue = ref(0)
+const widthValue = ref<number | null>(null)
+const heightValue = ref<number | null>(null)
 
 const loadImageSettings = async () => {
   if (window.electronAPI?.getSettings) {
     try {
       const settings = await window.electronAPI.getSettings()
       if (settings?.imageSettings) {
-        exposureValue.value = settings.imageSettings.exposure ?? 67
-        gainValue.value = settings.imageSettings.gain ?? 1.2
+        exposureValue.value = settings.imageSettings.exposure ? Math.round(settings.imageSettings.exposure / 52) : 117
+        gainValue.value = settings.imageSettings.gain ?? 588
+        offsetXValue.value = settings.imageSettings.offsetX ?? 0
+        offsetYValue.value = settings.imageSettings.offsetY ?? 0
+        widthValue.value = settings.imageSettings.width ?? null
+        heightValue.value = settings.imageSettings.height ?? null
       }
     } catch (err) {
       console.error('Failed to load image settings:', err)
@@ -351,8 +360,12 @@ const saveImageSettings = async () => {
       await window.electronAPI.saveSettings({
         ...currentSettings,
         imageSettings: {
-          exposure: exposureValue.value,
-          gain: gainValue.value
+          exposure: exposureValue.value * 52,
+          gain: gainValue.value,
+          offsetX: offsetXValue.value,
+          offsetY: offsetYValue.value,
+          width: widthValue.value,
+          height: heightValue.value
         }
       })
     } catch (err) {
@@ -372,6 +385,28 @@ watch(gainValue, () => {
   if (isLiveStreaming.value) {
     updateCameraSettings()
   }
+  saveImageSettings()
+})
+
+watch(offsetXValue, () => {
+  if (isLiveStreaming.value) {
+    updateCameraSettings()
+  }
+  saveImageSettings()
+})
+
+watch(offsetYValue, () => {
+  if (isLiveStreaming.value) {
+    updateCameraSettings()
+  }
+  saveImageSettings()
+})
+
+watch(widthValue, () => {
+  saveImageSettings()
+})
+
+watch(heightValue, () => {
   saveImageSettings()
 })
 
@@ -454,9 +489,9 @@ const fetchInitialData = async () => {
 const fetchInferenceServices = async () => {
   try {
     const projectId = selectedProductId.value || ''
-    const url = projectId 
-      ? `/api/deploy/http/services?project_id=${projectId}&include_health=true`
-      : '/api/deploy/http/services?include_health=true'
+    const url = projectId
+      ? getBackendUrl(`/deploy/http/services?project_id=${projectId}&include_health=true`)
+      : getBackendUrl('/deploy/http/services?include_health=true')
     const res = await fetch(url)
     const data = await res.json()
     inferenceServices.value = (data.services || []).filter((s: any) => s.status === 'running')
@@ -468,22 +503,25 @@ const fetchInferenceServices = async () => {
 
 onMounted(async () => {
   if (window.electronAPI) {
+    await loadCameraServiceUrl()
     await loadImageSettings()
     await fetchInitialData()
     await fetchInferenceServices()
 
     const savedProductId = localStorage.getItem('selectedProductId')
     if (savedProductId) {
-      const id = parseInt(savedProductId, 10)
+      const id = savedProductId
       const productExists = products.value.find(p => p.id === id)
       if (productExists) {
-        handleSelectProduct(id)
+        await handleSelectProduct(id)
       } else if (products.value.length > 0) {
-        handleSelectProduct(products.value[0].id)
+        await handleSelectProduct(products.value[0].id)
       }
     } else if (products.value.length > 0 && !selectedProductId.value) {
-      handleSelectProduct(products.value[0].id)
+      await handleSelectProduct(products.value[0].id)
     }
+
+    restoreSelectedCamera()
   }
   document.addEventListener('fullscreenchange', syncFullscreenState)
 })
@@ -563,7 +601,7 @@ const confirmDeleteProductAction = async () => {
   productToDelete.value = null
 }
 
-const removeProduct = async (id: number) => {
+const removeProduct = async (id: string) => {
   // Legacy method kept for compatibility if needed, but we prefer openDeleteModal
   if (window.electronAPI) {
     await window.electronAPI.deleteProduct(id)
@@ -573,10 +611,37 @@ const removeProduct = async (id: number) => {
 
 // Camera Actions
 const systemCameras = ref<Array<{ id: string; name: string; deviceId: string; isSystemCamera: boolean }>>([])
+const showCameraTypeModal = ref(false)
 const showCameraModal = ref(false)
 const selectedSystemCamera = ref<string>('')
 const cameraIpInput = ref('')
 const isLoadingSystemCameras = ref(false)
+
+// Network Camera
+const showNetworkCameraModal = ref(false)
+const networkCameraId = ref('')
+const networkCameraIp = ref('192.168.110.10')
+const networkCameraWidth = ref<number | null>(null)
+const networkCameraHeight = ref<number | null>(null)
+const networkCameraExposure = ref<number | null>(null)
+const networkCameraGain = ref<number | null>(null)
+const networkCameraOffsetX = ref<number | null>(null)
+const networkCameraOffsetY = ref<number | null>(null)
+const isConnectingCamera = ref(false)
+const cameraPreviewUrl = ref('')
+
+// Camera Config Edit
+const showCameraConfigModal = ref(false)
+const editingCamera = ref<any>(null)
+const editingCameraConfig = ref({
+  ip: '',
+  width: null as number | null,
+  height: null as number | null,
+  exposureTime: null as number | null,
+  gain: null as number | null,
+  offsetX: null as number | null,
+  offsetY: null as number | null
+})
 
 const fetchSystemCameras = async () => {
   if (!window.electronAPI?.getSystemCameras) return
@@ -591,11 +656,25 @@ const fetchSystemCameras = async () => {
   }
 }
 
+const openCameraTypeModal = () => {
+  showCameraTypeModal.value = true
+}
+
 const openCameraModal = async () => {
+  showCameraTypeModal.value = false
   await fetchSystemCameras()
   selectedSystemCamera.value = ''
   cameraIpInput.value = ''
   showCameraModal.value = true
+}
+
+const openNetworkCameraModal = () => {
+  showCameraTypeModal.value = false
+  networkCameraId.value = ''
+  networkCameraIp.value = '192.168.110.10'
+  networkCameraWidth.value = null
+  networkCameraHeight.value = null
+  showNetworkCameraModal.value = true
 }
 
 const handleAddCamera = async () => {
@@ -632,9 +711,247 @@ const handleAddCamera = async () => {
   }
 }
 
-const handleRemoveCamera = async (id: number) => {
+const handleAddNetworkCamera = async () => {
+  if (!window.electronAPI) return
+  if (!networkCameraId.value.trim()) {
+    showToast('请输入相机ID', 'error')
+    return
+  }
+
+  const newCam = {
+    cameraId: networkCameraId.value.trim(),
+    name: networkCameraId.value.trim(),
+    ip: networkCameraIp.value.trim(),
+    status: 'offline',
+    width: networkCameraWidth.value,
+    height: networkCameraHeight.value,
+    exposureTime: networkCameraExposure.value,
+    gain: networkCameraGain.value,
+    offsetX: networkCameraOffsetX.value,
+    offsetY: networkCameraOffsetY.value,
+    isNetworkCamera: true,
+    config: JSON.stringify({
+      ipAddress: networkCameraIp.value.trim(),
+      width: networkCameraWidth.value,
+      height: networkCameraHeight.value,
+      exposureTime: networkCameraExposure.value,
+      gain: networkCameraGain.value,
+      offsetX: networkCameraOffsetX.value,
+      offsetY: networkCameraOffsetY.value,
+      isNetworkCamera: true
+    })
+  }
+
+  try {
+    await window.electronAPI.addCamera(newCam)
+    await fetchInitialData()
+    showNetworkCameraModal.value = false
+    showToast('网络相机添加成功', 'info')
+  } catch (err) {
+    console.error('Failed to add network camera:', err)
+    showToast('添加网络相机失败', 'error')
+  }
+}
+
+const handleConnectCamera = async (camera: any) => {
+  if (!camera.isNetworkCamera) {
+    showToast('USB相机无需连接操作', 'info')
+    return
+  }
+  if (!window.electronAPI?.connectCamera) return
+  isConnectingCamera.value = true
+  try {
+    const cameraId = camera.name
+    const config = camera.config ? JSON.parse(camera.config) : {}
+    const result = await window.electronAPI.connectCamera(cameraId, {
+      exposureTime: exposureValue.value * 52,
+      gain: gainValue.value,
+      offsetX: offsetXValue.value,
+      offsetY: offsetYValue.value,
+      width: widthValue.value || config.width,
+      height: heightValue.value || config.height,
+    })
+
+    if (result.success) {
+      showToast('相机连接成功', 'info')
+      await fetchInitialData()
+      selectedCameraId.value = camera.id
+      saveSelectedCamera()
+      loadCameraSettingsToForm(camera)
+    } else {
+      showToast(result.error || '连接失败', 'error')
+    }
+  } catch (err) {
+    console.error('Failed to connect camera:', err)
+    showToast('连接相机失败', 'error')
+  } finally {
+    isConnectingCamera.value = false
+  }
+}
+
+const handleDisconnectCamera = async (camera: any) => {
+  if (!camera.isNetworkCamera) {
+    showToast('USB相机无需断开操作', 'info')
+    return
+  }
+  if (!window.electronAPI?.disconnectCamera) return
+  try {
+    const cameraId = camera.name
+    const result = await window.electronAPI.disconnectCamera(cameraId)
+    if (result.success) {
+      showToast('相机已断开', 'info')
+      await fetchInitialData()
+    } else {
+      showToast(result.error || '断开失败', 'error')
+    }
+  } catch (err) {
+    console.error('Failed to disconnect camera:', err)
+    showToast('断开相机失败', 'error')
+  }
+}
+
+const handleCaptureFromCamera = async (camera: any) => {
+  if (!camera.isNetworkCamera) {
+    showToast('请使用主界面的拍照功能拍摄USB相机', 'info')
+    return
+  }
+  if (!window.electronAPI?.captureFromCamera) return
+  if (!selectedProductId.value) {
+    showToast('请先选择一个产品', 'error')
+    return
+  }
+
+  try {
+    const timestamp = new Date().getTime()
+    const cameraId = camera.name
+    const fileName = `capture_${cameraId}_${timestamp}.jpg`
+
+    if (window.electronAPI?.updateCameraParameters) {
+      const actualExposure = exposureValue.value * 52
+      const config = camera.config ? JSON.parse(camera.config) : {}
+      await window.electronAPI.updateCameraParameters(cameraId, {
+        exposureTime: Math.round(actualExposure),
+        gain: Math.round(gainValue.value),
+        offsetX: Math.round(offsetXValue.value),
+        offsetY: Math.round(offsetYValue.value),
+        width: config.width,
+        height: config.height
+      })
+    }
+
+    const result = await window.electronAPI.captureFromCamera(cameraId)
+
+
+    let base64Data = null
+    if (result.success && result.data) {
+      base64Data = result.data.image_base64 || result.data.base64 || result.data.image || result.data
+    }
+
+    if (base64Data) {
+      const dataUrl = typeof base64Data === 'string'
+        ? `data:image/jpeg;base64,${base64Data}`
+        : `data:image/jpeg;base64,${base64Data}`
+
+      if (selectedProductHasImage.value && selectedProductHasAnnotation.value) {
+        await runCaptureInference(dataUrl)
+      } else {
+        const savedPath = await window.electronAPI.saveImage({
+          productId: selectedProductId.value,
+          fileName,
+          dataUrl
+        })
+
+        mainViewUrl.value = dataUrl
+        mainViewState.value = 'image'
+
+        const pid = selectedProductId.value
+        await fetchInitialData()
+        if (pid) {
+          selectedProductAnnotations.value = { placeholder: true }
+          await nextTick()
+          const updatedProduct = products.value.find(p => p.id === pid)
+          if (updatedProduct?.lastImagePath) {
+            try {
+              const annotations = await window.electronAPI.getAnnotations(pid, updatedProduct.lastImagePath)
+              selectedProductAnnotations.value = annotations
+            } catch {
+              selectedProductAnnotations.value = { placeholder: true }
+            }
+          }
+        }
+        showToast('拍照成功', 'info')
+      }
+    } else {
+      console.error('Capture failed - no base64 data:', result)
+      showToast(result.error || result.message || '拍照失败', 'error')
+    }
+  } catch (err) {
+    console.error('Failed to capture from camera:', err)
+    showToast('拍照失败', 'error')
+  }
+}
+
+const cameraServiceUrl = ref('')
+
+const loadCameraServiceUrl = async () => {
+  if (window.electronAPI?.getSettings) {
+    try {
+      const settings = await window.electronAPI.getSettings()
+      if (settings?.backendUrl) {
+        cameraServiceUrl.value = settings.backendUrl
+      }
+    } catch (err) {
+      console.error('Failed to load camera service URL:', err)
+    }
+  }
+}
+
+const startCameraPreview = async (camera: any) => {
+  if (!camera.isNetworkCamera) {
+    showToast('USB相机预览请在主界面使用实况功能', 'info')
+    return
+  }
+  if (!cameraServiceUrl.value) {
+    await loadCameraServiceUrl()
+  }
+  if (cameraServiceUrl.value) {
+    const cameraId = camera.name
+    cameraPreviewUrl.value = `${cameraServiceUrl.value}/camera/${cameraId}/preview`
+  }
+}
+
+const stopCameraPreview = () => {
+  cameraPreviewUrl.value = ''
+}
+
+const backendPort = '8000'
+const getBackendUrl = (path: string) => {
+  const base = cameraServiceUrl.value.endsWith('/') ? cameraServiceUrl.value.slice(0, -1) : cameraServiceUrl.value
+  return `${base}${path}`
+}
+
+const getInferenceUrl = async (inferenceUrl?: string) => {
+  if (!inferenceUrl) return ''
+  if (!cameraServiceUrl.value) {
+    await loadCameraServiceUrl()
+  }
+  let url = inferenceUrl.replace('0.0.0.0', 'localhost')
+  if (url.includes('localhost') || url.includes('127.0.0.1')) {
+    const base = cameraServiceUrl.value.endsWith('/') ? cameraServiceUrl.value.slice(0, -1) : cameraServiceUrl.value
+    if (base) {
+      try {
+        const urlObj = new URL(base)
+        url = url.replace('localhost', urlObj.hostname).replace('127.0.0.1', urlObj.hostname)
+      } catch {}
+    }
+  }
+  return url
+}
+
+const handleRemoveCamera = async (camera: any) => {
   if (window.electronAPI) {
-    await window.electronAPI.deleteCamera(id)
+    const cameraId = camera.isNetworkCamera ? camera.name : camera.id
+    await window.electronAPI.deleteCamera(cameraId, camera.isNetworkCamera, camera.id)
     await fetchInitialData()
   }
 }
@@ -646,11 +963,55 @@ const toggleCameraEnabled = async (cam: any) => {
   }
 }
 
-const selectedProductId = ref<number | null>(null)
+const openCameraConfig = (cam: any) => {
+  editingCamera.value = cam
+  const config = cam.config ? JSON.parse(cam.config) : {}
+  editingCameraConfig.value = {
+    ip: cam.ip || '',
+    width: config.width || null,
+    height: config.height || null,
+    exposureTime: config.exposureTime ? Math.round(config.exposureTime / 52) : null,
+    gain: config.gain || null,
+    offsetX: config.offsetX !== undefined ? config.offsetX : null,
+    offsetY: config.offsetY !== undefined ? config.offsetY : null
+  }
+  showCameraConfigModal.value = true
+}
 
-const handleSelectProduct = async (id: number) => {
+const saveCameraConfig = async () => {
+  if (!editingCamera.value || !window.electronAPI) return
+
+  try {
+    const config = {
+      ...JSON.parse(editingCamera.value.config || '{}'),
+      width: editingCameraConfig.value.width,
+      height: editingCameraConfig.value.height,
+      exposureTime: editingCameraConfig.value.exposureTime ? editingCameraConfig.value.exposureTime * 52 : null,
+      gain: editingCameraConfig.value.gain,
+      offsetX: editingCameraConfig.value.offsetX,
+      offsetY: editingCameraConfig.value.offsetY
+    }
+
+    await window.electronAPI.updateCamera(editingCamera.value.id, {
+      ip: editingCameraConfig.value.ip,
+      config: JSON.stringify(config)
+    })
+
+    showCameraConfigModal.value = false
+    await fetchInitialData()
+    showToast('相机配置已保存', 'info')
+  } catch (err) {
+    console.error('Failed to save camera config:', err)
+    showToast('保存相机配置失败', 'error')
+  }
+}
+
+const selectedProductId = ref<string | null>(null)
+
+const handleSelectProduct = async (id: string) => {
   selectedProductId.value = id
   localStorage.setItem('selectedProductId', String(id))
+  clearResults()
   const product = products.value.find(p => p.id === id)
 
   if (product?.lastImagePath && window.electronAPI?.loadImage) {
@@ -674,6 +1035,7 @@ const handleSelectProduct = async (id: number) => {
   }
 
   await fetchProductAnnotations()
+  restoreSelectedCamera()
 }
 
 const handleEditProduct = (product: any) => {
@@ -734,6 +1096,7 @@ const liveVideoRef = ref<HTMLVideoElement | null>(null)
 const liveStream = ref<MediaStream | null>(null)
 const isLiveStreaming = ref(false)
 const isLiveInferring = ref(false)
+const liveNetworkCamera = ref<any>(null)
 const isLiveInferenceProcessing = ref(false)
 const liveInferenceInterval = ref<number | null>(null)
 const liveInferenceIntervalMs = ref(1000)
@@ -768,6 +1131,9 @@ const stopLiveInference = () => {
 
 const stopLive = async () => {
   stopLiveInference()
+  if (cameraPreviewUrl.value) {
+    stopCameraPreview()
+  }
   if (liveStream.value) {
     liveStream.value.getTracks().forEach(track => track.stop())
     liveStream.value = null
@@ -775,6 +1141,7 @@ const stopLive = async () => {
   if (liveVideoRef.value) {
     liveVideoRef.value.srcObject = null
   }
+  liveNetworkCamera.value = null
   isLiveStreaming.value = false
   clearResults()
 
@@ -811,16 +1178,32 @@ const startLive = async () => {
     return
   }
 
-  const enabledCameras = cameras.value.filter(c => c.isEnabled !== false)
-  if (enabledCameras.length === 0) {
-    showToast('没有可用的相机，请先添加并启用相机', 'error')
+  if (!selectedCameraId.value) {
+    showToast('请先在相机设置中选择一个相机', 'error')
     return
   }
 
-  let targetCamera = enabledCameras.find(c => c.id === selectedCameraId.value)
+  const targetCamera = cameras.value.find(c => c.id === selectedCameraId.value)
   if (!targetCamera) {
-    targetCamera = enabledCameras[0]
-    selectedCameraId.value = targetCamera.id
+    showToast('请先在相机设置中选择一个相机', 'error')
+    return
+  }
+
+  if (targetCamera.isEnabled === false) {
+    showToast('当前相机已禁用，请先启用相机', 'error')
+    return
+  }
+
+  if (targetCamera.isNetworkCamera) {
+    if (targetCamera.status !== 'online') {
+      showToast('网络相机未连接，请先连接相机', 'error')
+      return
+    }
+    startCameraPreview(targetCamera)
+    liveNetworkCamera.value = targetCamera
+    mainViewState.value = 'live'
+    isLiveStreaming.value = true
+    return
   }
 
   try {
@@ -849,6 +1232,31 @@ const startLive = async () => {
 }
 
 const updateCameraSettings = async () => {
+  const targetCamera = liveNetworkCamera.value || cameras.value.find(c => c.id === selectedCameraId.value)
+  if (targetCamera && targetCamera.isNetworkCamera) {
+    if (window.electronAPI?.updateCameraParameters) {
+      try {
+        const cameraId = targetCamera.name
+        const actualExposure = exposureValue.value * 52
+        const config = targetCamera.config ? JSON.parse(targetCamera.config) : {}
+        const response = await window.electronAPI.updateCameraParameters(cameraId, {
+          exposureTime: Math.round(actualExposure),
+          gain: Math.round(gainValue.value),
+          offsetX: Math.round(offsetXValue.value),
+          offsetY: Math.round(offsetYValue.value),
+          width: config.width,
+          height: config.height
+        })
+        if (isLiveStreaming.value && cameraPreviewUrl.value) {
+          cameraPreviewUrl.value = `${cameraServiceUrl.value}/camera/${cameraId}/preview?t=${Date.now()}`
+        }
+      } catch (err) {
+        console.error('Failed to update network camera parameters:', err)
+      }
+    }
+    return
+  }
+
   if (!liveStream.value) return
 
   const videoTrack = liveStream.value.getVideoTracks()[0]
@@ -872,12 +1280,12 @@ const updateCameraSettings = async () => {
     if (capabilities.iso) {
       const min = capabilities.iso.min || 100
       const max = capabilities.iso.max || 6400
-      const normalizedValue = gainValue.value / 4
+      const normalizedValue = gainValue.value / 1957
       settings.iso = Math.round(min + normalizedValue * (max - min))
     } else if (capabilities.brightness) {
       const min = capabilities.brightness.min || 0
       const max = capabilities.brightness.max || 255
-      settings.brightness = min + (gainValue.value / 4) * (max - min)
+      settings.brightness = min + (gainValue.value / 1957) * (max - min)
     }
 
     if (Object.keys(settings).length > 0) {
@@ -912,46 +1320,70 @@ const runLiveInference = async () => {
     formData.append('service_id', selectedInferenceService.value)
     formData.append('file', blob, 'live.jpg')
 
-    const res = await fetch('/api/deploy/inference', {
+    const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
+    const inferenceUrl = await getInferenceUrl(selectedService?.inference_url)
+    const res = await fetch(`${inferenceUrl}/predict`, {
       method: 'POST',
       body: formData
     })
 
     const data = await res.json()
+    const result = data.status === 'success' && data.result ? data.result : data
 
-    if (data.status === 'success' && data.result) {
-      const result = data.result
-
-      if (result.results && Array.isArray(result.results)) {
-        const roiResults = result.results
-        liveDetectionResults.value = roiResults.map((r: any) => ({
-          label: r.category || '未知',
-          score: (r.anomaly_score || 0) * 100,
-          bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
-          segmentation: r.segmentation_in_pred || r.segmentation || [],
-          isAnomaly: r.is_anomaly || false,
-          visible: true
-        }))
-        if (liveDetectionResults.value.length > 0) {
-          livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
-        }
-      } else if (result.detections && Array.isArray(result.detections)) {
-        liveDetectionResults.value = result.detections.map((d: any) => ({
-          label: d.label || d.class || '未知',
-          score: (d.score || d.confidence || d.probability || 0) * 100,
-          bbox: d.bbox || d.box || [0, 0, 0, 0],
-          segmentation: d.segmentation || [],
-          isAnomaly: d.is_anomaly || false,
-          visible: true
-        }))
-        if (liveDetectionResults.value.length > 0) {
-          livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
-        }
+    if (result.workpiece_results && Array.isArray(result.workpiece_results)) {
+      const allResults = result.workpiece_results.flatMap((wp: any) => wp.results || [])
+      liveDetectionResults.value = allResults.map((r: any) => ({
+        label: r.category || r.label || '未知',
+        score: (r.anomaly_score || r.score || 0) * 100,
+        bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
+        segmentation: r.segmentation_in_pred || r.segmentation || [],
+        isAnomaly: r.is_anomaly || r.anomaly === true || false,
+        visible: true
+      }))
+      if (liveDetectionResults.value.length > 0) {
+        livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
       }
-
-      await nextTick()
-      drawLiveDetectionBoxes()
+    } else if (result.workpieces && Array.isArray(result.workpieces)) {
+      const allResults = result.workpieces.flatMap((wp: any) => wp.results || [])
+      liveDetectionResults.value = allResults.map((r: any) => ({
+        label: r.category || r.label || '未知',
+        score: (r.anomaly_score || r.score || 0) * 100,
+        bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
+        segmentation: r.segmentation_in_pred || r.segmentation || [],
+        isAnomaly: r.is_anomaly || r.anomaly === true || false,
+        visible: true
+      }))
+      if (liveDetectionResults.value.length > 0) {
+        livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
+      }
+    } else if (result.results && Array.isArray(result.results)) {
+      liveDetectionResults.value = result.results.map((r: any) => ({
+        label: r.category || '未知',
+        score: (r.anomaly_score || 0) * 100,
+        bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
+        segmentation: r.segmentation_in_pred || r.segmentation || [],
+        isAnomaly: r.is_anomaly || false,
+        visible: true
+      }))
+      if (liveDetectionResults.value.length > 0) {
+        livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
+      }
+    } else if (result.detections && Array.isArray(result.detections)) {
+      liveDetectionResults.value = result.detections.map((d: any) => ({
+        label: d.label || d.class || '未知',
+        score: (d.score || d.confidence || d.probability || 0) * 100,
+        bbox: d.bbox || d.box || [0, 0, 0, 0],
+        segmentation: d.segmentation || [],
+        isAnomaly: d.is_anomaly || false,
+        visible: true
+      }))
+      if (liveDetectionResults.value.length > 0) {
+        livePredictionConfidence.value = Math.max(...liveDetectionResults.value.map(r => r.score))
+      }
     }
+
+    await nextTick()
+    drawLiveDetectionBoxes()
   } catch (err) {
     console.error('Live inference error:', err)
   } finally {
@@ -989,22 +1421,63 @@ const toggleLiveInference = async () => {
 
 const selectedCameraId = ref<number | null>(null)
 
+const saveSelectedCamera = () => {
+  if (selectedCameraId.value) {
+    localStorage.setItem('selectedCameraId', String(selectedCameraId.value))
+  }
+}
+
+const loadCameraSettingsToForm = (camera: any) => {
+  const config = camera?.config ? JSON.parse(camera.config) : {}
+  if (config.width) widthValue.value = config.width
+  if (config.height) heightValue.value = config.height
+  if (config.offsetX !== undefined) offsetXValue.value = config.offsetX
+  if (config.offsetY !== undefined) offsetYValue.value = config.offsetY
+  if (config.exposureTime) exposureValue.value = Math.round(config.exposureTime / 52)
+  if (config.gain !== undefined) gainValue.value = Math.round(Math.max(0, Math.min(1957, config.gain)))
+}
+
+const restoreSelectedCamera = () => {
+  const savedCameraId = localStorage.getItem('selectedCameraId')
+  if (savedCameraId) {
+    const id = parseInt(savedCameraId, 10)
+    const camera = cameras.value.find(c => c.id === id)
+    if (camera) {
+      selectedCameraId.value = id
+      loadCameraSettingsToForm(camera)
+    }
+  }
+}
+
 const takeCapture = async () => {
   if (!selectedProductId.value) {
     alert('请先选择一个产品')
     return
   }
 
-  const enabledCameras = cameras.value.filter(c => c.isEnabled !== false)
-  if (enabledCameras.length === 0) {
-    showToast('没有可用的相机，请先添加并启用相机', 'error')
+  if (!selectedCameraId.value) {
+    showToast('请先在相机设置中选择一个相机', 'error')
     return
   }
 
-  let targetCamera = enabledCameras.find(c => c.id === selectedCameraId.value)
+  const targetCamera = cameras.value.find(c => c.id === selectedCameraId.value)
   if (!targetCamera) {
-    targetCamera = enabledCameras[0]
-    selectedCameraId.value = targetCamera.id
+    showToast('请先在相机设置中选择一个相机', 'error')
+    return
+  }
+
+  if (targetCamera.isEnabled === false) {
+    showToast('当前相机已禁用，请先启用相机', 'error')
+    return
+  }
+
+  if (targetCamera.isNetworkCamera) {
+    if (targetCamera.status !== 'online') {
+      showToast('网络相机未连接，请先连接相机', 'error')
+      return
+    }
+    await handleCaptureFromCamera(targetCamera)
+    return
   }
 
   let stream: MediaStream | null = null
@@ -1034,11 +1507,11 @@ const takeCapture = async () => {
       if (capabilities.iso) {
         const min = capabilities.iso.min || 100
         const max = capabilities.iso.max || 6400
-        settings.iso = Math.round(min + (gainValue.value / 4) * (max - min))
+        settings.iso = Math.round(min + (gainValue.value / 1957) * (max - min))
       } else if (capabilities.brightness) {
         const min = capabilities.brightness.min || 0
         const max = capabilities.brightness.max || 255
-        settings.brightness = min + (gainValue.value / 4) * (max - min)
+        settings.brightness = min + (gainValue.value / 1957) * (max - min)
       }
 
       if (Object.keys(settings).length > 0) {
@@ -1117,50 +1590,49 @@ const runCaptureInference = async (dataUrl: string) => {
     formData.append('service_id', inferenceServices.value[0]?.service_id || '')
     formData.append('file', blob, 'capture.jpg')
 
-    const res = await fetch('/api/deploy/inference', {
+    const selectedService = inferenceServices.value.find(s => s.service_id === inferenceServices.value[0]?.service_id)
+    const inferenceUrl = await getInferenceUrl(selectedService?.inference_url)
+    const res = await fetch(`${inferenceUrl}/predict`, {
       method: 'POST',
       body: formData,
       signal: inferenceAbortController.signal
     })
 
     const data = await res.json()
+    const result = data.status === 'success' && data.result ? data.result : data
+    let allResults: any[] = []
 
-    if (data.status === 'success' && data.result) {
-      const result = data.result
-
-      if (result.results && Array.isArray(result.results)) {
-        const roiResults = result.results
-        detectionResults.value = roiResults.map((r: any) => ({
-          label: r.category || '未知',
-          score: (r.anomaly_score || 0) * 100,
-          bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
-          segmentation: r.segmentation_in_pred || r.segmentation || [],
-          isAnomaly: r.is_anomaly || false,
-          visible: true
-        }))
-        if (detectionResults.value.length > 0) {
-          predictionConfidence.value = Math.max(...detectionResults.value.map(r => r.score))
-        }
-      } else if (result.detections && Array.isArray(result.detections)) {
-        detectionResults.value = result.detections.map((d: any) => ({
-          label: d.label || d.class || '未知',
-          score: (d.score || d.confidence || d.probability || 0) * 100,
-          bbox: d.bbox || d.box || [0, 0, 0, 0],
-          segmentation: d.segmentation || [],
-          isAnomaly: d.is_anomaly || false,
-          visible: true
-        }))
-        if (detectionResults.value.length > 0) {
-          predictionConfidence.value = Math.max(...detectionResults.value.map(r => r.score))
-        }
-      }
-
-      mainViewUrl.value = dataUrl
-      mainViewState.value = 'image'
-      showToast('拍照识别完成', 'info')
-    } else {
-      showToast('推理失败：' + (data.message || '未知错误'), 'error')
+    if (result.workpiece_results && Array.isArray(result.workpiece_results)) {
+      allResults = result.workpiece_results.flatMap((wp: any) => wp.results || [])
+    } else if (result.workpieces && Array.isArray(result.workpieces)) {
+      allResults = result.workpieces.flatMap((wp: any) => wp.results || [])
+    } else if (result.results && Array.isArray(result.results)) {
+      allResults = result.results
+    } else if (result.detections && Array.isArray(result.detections)) {
+      allResults = result.detections
     }
+
+    if (allResults.length > 0) {
+      detectionResults.value = allResults.map((r: any) => ({
+        label: r.category || r.label || '未知',
+        score: (r.anomaly_score || r.score || 0) * 100,
+        bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
+        segmentation: r.segmentation_in_pred || r.segmentation || [],
+        isAnomaly: r.is_anomaly || r.anomaly === true || false,
+        visible: true,
+        pos_id: r.pos_id,
+        anomaly_type: r.anomaly_type || (r.is_anomaly ? 'anomaly' : 'normal'),
+        category: r.category
+      }))
+      predictionConfidence.value = Math.max(...detectionResults.value.map(r => r.score), 0)
+    } else {
+      detectionResults.value = []
+      predictionConfidence.value = null
+    }
+
+    mainViewUrl.value = dataUrl
+    mainViewState.value = 'image'
+    showToast('拍照识别完成', 'info')
   } catch (err) {
     console.error('Capture inference error:', err)
     showToast('拍照识别失败', 'error')
@@ -1243,7 +1715,7 @@ const exposureSliderValue = computed({
   get: () => [exposureValue.value],
   set: (v: number[]) => {
     const next = Number(v?.[0] ?? 0)
-    exposureValue.value = Math.max(0, Math.min(200, Math.round(next)))
+    exposureValue.value = Math.max(1, Math.min(100, Math.round(next)))
   },
 })
 
@@ -1251,21 +1723,30 @@ const gainSliderValue = computed({
   get: () => [gainValue.value],
   set: (v: number[]) => {
     const next = Number(v?.[0] ?? 0)
-    gainValue.value = Number(Math.max(0, Math.min(4, next)).toFixed(1))
+    gainValue.value = Math.round(Math.max(0, Math.min(1957, next)))
   },
 })
 
-const handleExposureInput = (value: string | number) => {
-  const val = typeof value === 'number' ? value : parseInt(String(value))
-  if (!isNaN(val)) {
-    exposureValue.value = Math.max(0, Math.min(200, val))
-  }
-}
+const offsetXSliderValue = computed({
+  get: () => [offsetXValue.value],
+  set: (v: number[]) => {
+    const next = Number(v?.[0] ?? 0)
+    offsetXValue.value = Math.round(next / 4) * 4
+  },
+})
+
+const offsetYSliderValue = computed({
+  get: () => [offsetYValue.value],
+  set: (v: number[]) => {
+    const next = Number(v?.[0] ?? 0)
+    offsetYValue.value = Math.round(next / 2) * 2
+  },
+})
 
 const handleGainInput = (value: string | number) => {
   const val = typeof value === 'number' ? value : parseFloat(String(value))
   if (!isNaN(val)) {
-    gainValue.value = Number(Math.max(0, Math.min(4, val)).toFixed(1))
+    gainValue.value = Math.round(Math.max(0, Math.min(1957, val)))
   }
 }
 
@@ -1286,6 +1767,8 @@ const groupedDetectionResults = computed(() => {
     const type = rawType === 'normal' ? 'OK' : 'NG'
     const cat = item.category || '未知类别'
     const pos = item.pos_id !== undefined ? String(item.pos_id) : '未知位置'
+
+    if (cat === '工件主体') return
 
     if (!groups[type]) {
       groups[type] = {}
@@ -1355,8 +1838,6 @@ const clearResults = () => {
   }
 }
 
-const isAddingToNegativeLibrary = ref(false)
-
 const cropImageBySegmentation = (imageUrl: string, segmentation: number[]): Promise<Blob> => {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -1413,45 +1894,6 @@ const cropImageBySegmentation = (imageUrl: string, segmentation: number[]): Prom
     img.onerror = () => reject(new Error('Failed to load image'))
     img.src = imageUrl
   })
-}
-
-const addToNegativeLibrary = async (item: any, index: number) => {
-  if (!selectedInferenceService.value) {
-    showToast('请先选择推理服务', 'error')
-    return
-  }
-  if (!mainViewUrl.value) {
-    showToast('没有可用的图像', 'error')
-    return
-  }
-  
-  isAddingToNegativeLibrary.value = true
-  try {
-    const roiBlob = await cropImageBySegmentation(mainViewUrl.value, item.segmentation || [])
-    const formData = new FormData()
-    formData.append('file', roiBlob, 'roi.jpg')
-    formData.append('service_id', selectedInferenceService.value)
-    formData.append('category', item.category || item.label || '')
-    formData.append('pos_id', String(item.pos_id || ''))
-    
-    const res = await fetch('/api/deploy/roi/negative', {
-      method: 'POST',
-      body: formData
-    })
-    
-    const data = await res.json()
-    
-    if (res.ok && data.status === 'success') {
-      showToast('已添加到反例库', 'info')
-    } else {
-      showToast(data.message || '添加到反例库失败', 'error')
-    }
-  } catch (err: any) {
-    console.error('Failed to add to negative library:', err)
-    showToast(err.message || '添加到反例库失败', 'error')
-  } finally {
-    isAddingToNegativeLibrary.value = false
-  }
 }
 
 const openInferenceModal = () => {
@@ -1545,11 +1987,11 @@ const captureAndInfer = async () => {
       if (capabilities.iso) {
         const min = capabilities.iso.min || 100
         const max = capabilities.iso.max || 6400
-        settings.iso = Math.round(min + (gainValue.value / 4) * (max - min))
+        settings.iso = Math.round(min + (gainValue.value / 1957) * (max - min))
       } else if (capabilities.brightness) {
         const min = capabilities.brightness.min || 0
         const max = capabilities.brightness.max || 255
-        settings.brightness = min + (gainValue.value / 4) * (max - min)
+        settings.brightness = min + (gainValue.value / 1957) * (max - min)
       }
 
       if (Object.keys(settings).length > 0) {
@@ -1684,20 +2126,70 @@ const runInference = async () => {
       return
     }
     formData.append('file', blob, 'image.jpg')
-    
-    const res = await fetch('/api/deploy/inference', {
+
+    const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
+    const inferenceUrl = await getInferenceUrl(selectedService?.inference_url)
+    const res = await fetch(`${inferenceUrl}/predict`, {
       method: 'POST',
       body: formData,
       signal: inferenceAbortController?.signal
     })
 
     const data = await res.json()
+    const result = data.status === 'success' && data.result ? data.result : data
 
-    if (data.status === 'success' && data.result) {
-      const result = data.result
+    // 处理多工件预测结果格式
+    if (result.workpiece_results && Array.isArray(result.workpiece_results) && result.workpiece_results.length > 0) {
+        const allResults: Array<{
+          label: string
+          score: number
+          bbox: [number, number, number, number]
+          segmentation?: number[]
+          isAnomaly?: boolean
+          error?: number
+          threshold?: number
+          alignmentStrategy?: string
+          visible: boolean
+          anomaly_type?: string
+          category?: string
+          pos_id?: string
+          workpieceId?: number
+          workpieceKey?: string
+        }> = []
 
-      // 处理多工件预测结果格式
-      if (result.workpieces && Array.isArray(result.workpieces) && result.workpieces.length > 0) {
+        result.workpiece_results.forEach((wp: any, idx: number) => {
+          const wpResults = (wp.results || []).map((r: any) => ({
+            label: `wp${String(idx).padStart(2, '0')}: ${r.category || '未知'}`,
+            score: (r.anomaly_score || r.score || 0) * 100,
+            bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || [0, 0, 0, 0],
+            segmentation: r.segmentation_in_pred || r.segmentation || [],
+            isAnomaly: r.is_anomaly || r.isAnomaly || false,
+            error: r.error || 0,
+            threshold: r.threshold || 0,
+            alignmentStrategy: r.alignment_strategy || wp.alignment_strategy || 'ORB',
+            visible: true,
+            anomaly_type: r.anomaly_type || '',
+            category: r.category || '',
+            pos_id: r.pos_id,
+            workpieceId: wp.workpiece_id || idx,
+            workpieceKey: wp.workpiece_key || `wp${idx}`
+          }))
+          allResults.push(...wpResults)
+        })
+
+        detectionResults.value = allResults
+
+        const totalWorkpieces = result.total_workpieces || result.workpiece_results.length
+        const totalRoisAll = result.total_rois_all || allResults.length
+        const anomalyCount = result.anomaly_count || allResults.filter((r: any) => r.isAnomaly).length
+
+        if (detectionResults.value.length > 0) {
+          const maxScore = Math.max(...detectionResults.value.map(r => r.score))
+          predictionConfidence.value = maxScore
+        }
+        showToast(`检测到 ${totalWorkpieces} 个工件，${totalRoisAll} 个目标，异常: ${anomalyCount} 个`, 'info')
+      }
+      else if (result.workpieces && Array.isArray(result.workpieces) && result.workpieces.length > 0) {
         const allResults: Array<{
           label: string
           score: number
@@ -1782,7 +2274,6 @@ const runInference = async () => {
           const maxScore = Math.max(...detectionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
-        showToast(`检测到 ${detectionResults.value.length} 个目标`, 'info')
       }
       // 处理分类结果
       else if (result.classifications && Array.isArray(result.classifications)) {
@@ -1794,7 +2285,6 @@ const runInference = async () => {
           const maxScore = Math.max(...predictionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
-        showToast('推理完成', 'info')
       } else if (result.predictions && Array.isArray(result.predictions)) {
         predictionResults.value = result.predictions.map((p: any) => ({
           label: p.label || p.name || '未知',
@@ -1804,7 +2294,6 @@ const runInference = async () => {
           const maxScore = Math.max(...predictionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
-        showToast('推理完成', 'info')
       } else if (Array.isArray(result)) {
         predictionResults.value = result.map((r: any) => ({
           label: r.label || r.class || '未知',
@@ -1814,13 +2303,7 @@ const runInference = async () => {
           const maxScore = Math.max(...predictionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
-        showToast('推理完成', 'info')
-      } else {
-        showToast('推理结果格式不正确', 'error')
-      }
-    } else {
-      showToast(data.message || '推理失败', 'error')
-    }
+      } 
   } catch (err: any) {
     if (err.name === 'AbortError' || err.name === 'DOMException') {
       return
@@ -1851,38 +2334,18 @@ const drawDetectionBoxes = () => {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-  const lineWidth = 1
+  // const lineWidth = Math.max(2, Math.floor(canvas.width / 400))
+  const fontSize = Math.max(48, Math.min(24, Math.floor(canvas.width / 50)))
 
   detectionResults.value.forEach((det, index) => {
+    if (det.label==='工件主体') return
     if (det.visible === false) return
 
     const [x, y, w, h] = det.bbox
-    let color = `hsl(${(index * 60) % 360}, 70%, 50%)`
-    if (det.isAnomaly === true) {
-      color = 'hsl(0, 70%, 50%)'
-    } else if (det.isAnomaly === false) {
-      color = 'hsl(120, 70%, 50%)'
-    }
-
-    const isHighlighted = highlightedIndex.value === index
-    let currentColor = color
-    let glowColor = ''
-
-    if (isHighlighted) {
-      const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2
-      const alpha = 0.5 + breatheIntensity * 0.5
-
-      if (det.isAnomaly === true) {
-        currentColor = `rgba(239, 68, 68, ${alpha})`
-        glowColor = 'rgba(239, 68, 68,'
-      } else if (det.isAnomaly === false) {
-        currentColor = `rgba(34, 197, 94, ${alpha})`
-        glowColor = 'rgba(34, 197, 94,'
-      } else {
-        currentColor = `rgba(100, 100, 100, ${alpha})`
-        glowColor = 'rgba(100, 100, 100,'
-      }
-    }
+    const isNG = det.isAnomaly === true
+    const boxColor = isNG ? 'rgba(239, 68, 68, 0.8)' : 'rgba(34, 197, 94, 0.8)'
+    const textColor = isNG ? '#ef4444' : '#22c55e'
+    const labelText = isNG ? 'NG' : 'OK'
 
     const hasSegmentation = det.segmentation && det.segmentation.length >= 8
 
@@ -1892,101 +2355,32 @@ const drawDetectionBoxes = () => {
         points.push([det.segmentation![i], det.segmentation![i + 1]])
       }
 
-      if (isHighlighted) {
-        const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2
-        const glowAlpha = breatheIntensity * 0.4
-        const glowSize = 8 + breatheIntensity * 6
+      // ctx.strokeStyle = boxColor
+      // ctx.lineWidth = lineWidth
+      // ctx.beginPath()
+      // ctx.moveTo(points[0][0], points[0][1])
+      // for (let i = 1; i < points.length; i++) {
+      //   ctx.lineTo(points[i][0], points[i][1])
+      // }
+      // ctx.closePath()
+      // ctx.stroke()
 
-        ctx.save()
-        ctx.shadowColor = glowColor + glowAlpha + ')'
-        ctx.shadowBlur = glowSize
-        ctx.strokeStyle = currentColor
-        ctx.lineWidth = lineWidth
-        ctx.beginPath()
-        ctx.moveTo(points[0][0], points[0][1])
-        for (let i = 1; i < points.length; i++) {
-          ctx.lineTo(points[i][0], points[i][1])
-        }
-        ctx.closePath()
-        ctx.stroke()
-        ctx.restore()
-      }
+      const minX = Math.min(...points.map(p => p[0]))
+      const minY = Math.min(...points.map(p => p[1]))
 
-      ctx.strokeStyle = currentColor
-      ctx.lineWidth = lineWidth
-      ctx.beginPath()
-      ctx.moveTo(points[0][0], points[0][1])
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i][0], points[i][1])
-      }
-      ctx.closePath()
-      ctx.stroke()
-
-      // 绘制 pos_id 标签
-      if (det.pos_id !== undefined && det.pos_id !== null && det.pos_id !== '') {
-        const posIdText = String(det.pos_id)
-        const minX = Math.min(...points.map(p => p[0]))
-        const minY = Math.min(...points.map(p => p[1]))
-        ctx.font = 'bold 10px sans-serif'
-        const textMetrics = ctx.measureText(posIdText)
-        const textWidth = textMetrics.width
-        const textHeight = 10
-        const padding = 4
-
-        // 计算标签位置（确保不超出画布顶部）
-        let labelX = minX
-        let labelY = minY - textHeight - padding * 2
-        if (labelY < 0) {
-          labelY = minY + padding * 2
-        }
-
-        // 标签背景
-        ctx.fillStyle = color
-        ctx.fillRect(labelX, labelY, textWidth + padding * 2, textHeight + padding * 2)
-
-        // 标签文字
-        ctx.fillStyle = '#ffffff'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(posIdText, labelX + padding, labelY + textHeight / 2 + padding)
-      }
+      ctx.font = `bold ${fontSize}px sans-serif`
+      ctx.fillStyle = textColor
+      ctx.textBaseline = 'top'
+      ctx.fillText(labelText, minX, minY - fontSize - 2)
     } else {
-      if (isHighlighted) {
-        const breatheIntensity = (Math.sin(Date.now() / 200) + 1) / 2
-        const glowAlpha = breatheIntensity * 0.4
-        const glowSize = 8 + breatheIntensity * 6
-        ctx.strokeStyle = `${glowColor}${glowAlpha})`
-        ctx.lineWidth = lineWidth + glowSize * 2
-        ctx.strokeRect(x - glowSize, y - glowSize, w + glowSize * 2, h + glowSize * 2)
-      }
+      // ctx.strokeStyle = boxColor
+      // ctx.lineWidth = lineWidth
+      // ctx.strokeRect(x, y, w, h)
 
-      ctx.strokeStyle = currentColor
-      ctx.lineWidth = lineWidth
-      ctx.strokeRect(x, y, w, h)
-
-      // 绘制 pos_id 标签
-      if (det.pos_id !== undefined && det.pos_id !== null && det.pos_id !== '') {
-        const posIdText = String(det.pos_id)
-        ctx.font = 'bold 14px sans-serif'
-        const textMetrics = ctx.measureText(posIdText)
-        const textWidth = textMetrics.width
-        const textHeight = 14
-        const padding = 4
-
-        // 计算标签位置（确保不超出画布顶部）
-        let labelX = x
-        let labelY = y - textHeight - padding * 2
-        if (labelY < 0) {
-          labelY = y + padding * 2
-        }
-
-        // 标签背景
-        ctx.fillStyle = color
-
-        // 标签文字
-        ctx.fillStyle = '#16e12b'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(posIdText, labelX + padding, labelY + textHeight / 2 + padding)
-      }
+      ctx.font = `bold ${fontSize}px sans-serif`
+      ctx.fillStyle = textColor
+      ctx.textBaseline = 'top'
+      ctx.fillText(labelText, x, y - fontSize - 2)
     }
   })
 }
@@ -2116,8 +2510,8 @@ onBeforeUnmount(() => {
   <div class="flex flex-col h-screen w-screen bg-background text-foreground">
     <header class="h-14 border-b flex items-center px-6 bg-card shrink-0 z-20 shadow-sm w-full">
       <div class="flex items-center gap-2">
-        <div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-primary-foreground">
-          <Settings2 class="h-5 w-5" />
+        <div class="w-8 h-8 bgnded flex items-center justify-center text-primary-foreground">
+          <img src="~/assets/appicon.png" class="h-5 w-5" />
         </div>
         <h1 class="text-lg font-bold tracking-tight">{{ t('common.appName') }}</h1>
       </div>
@@ -2337,16 +2731,14 @@ onBeforeUnmount(() => {
                     <div class="flex items-center gap-0.5 text-primary">
                       <Input
                         type="number"
-                        :model-value="String(exposureValue)"
-                        min="0"
-                        max="200"
-                        class="h-7 w-16 px-2 py-1 text-xs text-right font-mono"
-                        @update:modelValue="handleExposureInput"
+                        v-model.number="exposureValue"
+                        min="1"
+                        max="2000"
+                        class="h-7 w-20 px-2 py-1 text-xs text-right font-mono"
                       />
-                      <span class="font-mono lowercase">ms</span>
                     </div>
                   </div>
-                  <Slider v-model="exposureSliderValue" :max="200" :step="1" />
+                  <Slider v-model="exposureSliderValue" :max="100" :min="1" :step="1" />
                 </div>
                 <div class="space-y-2">
                   <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
@@ -2354,17 +2746,49 @@ onBeforeUnmount(() => {
                     <div class="flex items-center gap-0.5 text-primary">
                       <Input
                         type="number"
-                        :model-value="String(gainValue)"
-                        step="0.1"
+                        v-model.number="gainValue"
+                        step="10"
                         min="0"
-                        max="4"
+                        max="1957"
                         class="h-7 w-16 px-2 py-1 text-xs text-right font-mono"
-                        @update:modelValue="handleGainInput"
                       />
-                      <span class="font-mono lowercase">x</span>
                     </div>
                   </div>
-                  <Slider v-model="gainSliderValue" :max="4" :step="0.1" />
+                  <Slider v-model="gainSliderValue" :max="1957" :step="1" />
+                </div>
+                <div class="space-y-2">
+                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
+                    <span>偏移X</span>
+                    <div class="flex items-center gap-0.5 text-primary">
+                      <Input
+                        type="number"
+                        v-model.number="offsetXValue"
+                        step="4"
+                        min="-1000"
+                        max="1000"
+                        class="h-7 w-20 px-2 py-1 text-xs text-right font-mono"
+                      />
+                      <span class="font-mono lowercase">px</span>
+                    </div>
+                  </div>
+                  <Slider v-model="offsetXSliderValue" :max="1000" :min="-1000" :step="4" />
+                </div>
+                <div class="space-y-2">
+                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
+                    <span>偏移Y</span>
+                    <div class="flex items-center gap-0.5 text-primary">
+                      <Input
+                        type="number"
+                        v-model.number="offsetYValue"
+                        step="2"
+                        min="-1000"
+                        max="1000"
+                        class="h-7 w-20 px-2 py-1 text-xs text-right font-mono"
+                      />
+                      <span class="font-mono lowercase">px</span>
+                    </div>
+                  </div>
+                  <Slider v-model="offsetYSliderValue" :max="1000" :min="-1000" :step="2" />
                 </div>
               </div>
 
@@ -2401,35 +2825,50 @@ onBeforeUnmount(() => {
 
             <TabsContent value="camera" class="flex-1 overflow-auto p-4 space-y-4">
               <!-- Camera List -->
-              <div v-for="cam in cameras" :key="cam.id" 
+              <div v-for="cam in cameras" :key="cam.id"
                 class="p-3 rounded-lg border space-y-3 relative group cursor-pointer transition-all"
                 :class="selectedCameraId === cam.id ? 'border-primary bg-primary/10' : 'bg-muted/10 hover:border-primary/50'"
-                @click="selectedCameraId = cam.id"
+                @click="selectedCameraId = cam.id; saveSelectedCamera(); loadCameraSettingsToForm(cam)"
               >
                 <div class="flex items-center justify-between">
                   <div class="flex items-center gap-2">
-                    <div :class="['w-2 h-2 rounded-full', cam.isEnabled !== false ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500']"></div>
+                    <div :class="['w-2 h-2 rounded-full', cam.status === 'online' || cam.isEnabled !== false ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500']"></div>
                     <span class="text-xs font-bold">{{ cam.name }}</span>
+                    <Wifi v-if="cam.isNetworkCamera" class="h-3 w-3 text-blue-500" />
                     <div v-if="selectedCameraId === cam.id" class="px-1.5 py-0.5 bg-primary text-primary-foreground text-[9px] rounded">当前</div>
                   </div>
                   <div class="flex items-center gap-1">
+                    <UiButton v-if="cam.isNetworkCamera" variant="ghost" size="icon" class="h-6 w-6" @click.stop="cam.status === 'online' ? handleDisconnectCamera(cam) : handleConnectCamera(cam)">
+                      <component :is="cam.status === 'online' ? Unplug : Plug" :class="['h-3 w-3', cam.status === 'online' ? 'text-green-600' : 'text-muted-foreground']" />
+                    </UiButton>
+                    <UiButton v-if="cam.isNetworkCamera && cam.status === 'online'" variant="ghost" size="icon" class="h-6 w-6" @click.stop="handleCaptureFromCamera(cam)">
+                      <Aperture class="h-3 w-3 text-primary" />
+                    </UiButton>
+                    <UiButton v-if="cam.isNetworkCamera && cam.status === 'online'" variant="ghost" size="icon" class="h-6 w-6" @click.stop="startCameraPreview(cam)">
+                      <Video class="h-3 w-3 text-blue-500" />
+                    </UiButton>
+                    <UiButton variant="ghost" size="icon" class="h-6 w-6" @click.stop="openCameraConfig(cam)" title="配置">
+                      <Settings class="h-3 w-3 text-muted-foreground" />
+                    </UiButton>
                     <UiButton variant="ghost" size="icon" class="h-6 w-6" @click.stop="toggleCameraEnabled(cam)">
                       <component :is="cam.isEnabled !== false ? Power : PowerOff" :class="['h-3 w-3', cam.isEnabled !== false ? 'text-green-600' : 'text-red-500']" />
                     </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-6 w-6 text-destructive hover:bg-destructive/10" @click.stop="handleRemoveCamera(cam.id)">
+                    <UiButton variant="ghost" size="icon" class="h-6 w-6 text-destructive hover:bg-destructive/10" @click.stop="handleRemoveCamera(cam)">
                       <Trash2 class="h-3 w-3" />
                     </UiButton>
                   </div>
                 </div>
                 <div class="grid grid-cols-2 gap-y-2 text-[10px]">
                   <div class="text-muted-foreground uppercase font-bold tracking-tight">状态</div>
-                  <div class="text-right font-mono" :class="cam.isEnabled !== false ? 'text-green-600' : 'text-red-500'">{{ cam.isEnabled !== false ? '已启用' : '已禁用' }}</div>
+                  <div class="text-right font-mono" :class="cam.status === 'online' || cam.isEnabled !== false ? 'text-green-600' : 'text-red-500'">{{ cam.status === 'online' ? '已连接' : (cam.isEnabled !== false ? '已启用' : '已禁用') }}</div>
                   <div class="text-muted-foreground uppercase font-bold tracking-tight">IP</div>
                   <div class="text-right font-mono">{{ cam.ip }}</div>
+                  <div v-if="cam.resolution" class="text-muted-foreground uppercase font-bold tracking-tight">分辨率</div>
+                  <div v-if="cam.resolution" class="text-right font-mono">{{ cam.resolution }}</div>
                 </div>
               </div>
 
-              <UiButton variant="outline" class="w-full h-10 border-dashed gap-2 text-xs font-bold" @click="openCameraModal">
+              <UiButton variant="outline" class="w-full h-10 border-dashed gap-2 text-xs font-bold" @click="openCameraTypeModal">
                 <Plus class="h-3.5 w-3.5" />
                 {{ t('dashboard.add') }}
               </UiButton>
@@ -2449,23 +2888,22 @@ onBeforeUnmount(() => {
             </div>
             <div class="flex-1 overflow-y-auto p-2">
               <div class="space-y-1">
-                <div 
-                  v-for="product in products" 
-                  :key="product.id" 
+                <div
+                  v-for="product in products"
+                  :key="product.id"
                   class="group p-2 text-xs rounded cursor-pointer flex items-center gap-3 transition-all border border-transparent"
                   :class="selectedProductId === product.id ? 'bg-primary/10 border-primary/20 shadow-sm' : 'hover:bg-muted'"
                   @click="handleSelectProduct(product.id)"
                   @dblclick="handleProductDoubleClick(product)"
                 >
-                  <div 
-                    class="w-8 h-8 rounded shrink-0 flex items-center justify-center font-bold text-[10px] transition-colors"
+                  <div
+                    class="w-8 h-8 rounded shrink-0 flex items-center justify-center transition-colors"
                     :class="selectedProductId === product.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground/40'"
                   >
-                    #{{ product.id }}
+                    <Package class="h-4 w-4" />
                   </div>
                   <div class="flex-1 min-w-0">
                     <div class="font-bold truncate" :class="{ 'text-primary': selectedProductId === product.id }">{{ product.name }}</div>
-                    <div class="text-[10px] text-muted-foreground truncate">{{ product.model }}</div>
                   </div>
                   <div class="flex items-center gap-1">
                     <div v-if="selectedProductId === product.id" class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse mr-1"></div>
@@ -2593,14 +3031,6 @@ onBeforeUnmount(() => {
                                 >
                                   {{ (item.score / 100).toFixed(2) }}
                                 </span>
-                                <button
-                                  @click.stop="addToNegativeLibrary(item, detectionResults.indexOf(item))"
-                                  :disabled="isAddingToNegativeLibrary"
-                                  class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-orange-100 text-orange-600"
-                                  title="添加到反例库"
-                                >
-                                  <Database class="h-3 w-3" />
-                                </button>
                               </div>
                             </div>
                           </div>
@@ -2622,7 +3052,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="space-y-2">
-                  <div v-for="(item, index) in predictionResults" :key="item.label" class="p-3 rounded-xl bg-muted/30 border border-muted/50 hover:bg-muted/50 hover:border-muted/70 transition-all">
+                  <div v-for="(item, index) in predictionResults.filter(r => r.label !== '工件主体')" :key="item.label" class="p-3 rounded-xl bg-muted/30 border border-muted/50 hover:bg-muted/50 hover:border-muted/70 transition-all">
                     <div class="flex items-center justify-between">
                       <div class="flex items-center gap-2">
                         <div class="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">{{ index + 1 }}</div>
@@ -2689,6 +3119,57 @@ onBeforeUnmount(() => {
       </UiCard>
     </div>
 
+    <!-- Camera Type Selection Modal -->
+    <div v-if="showCameraTypeModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg flex items-center gap-2">
+            <Camera class="h-5 w-5 text-primary" />
+            添加相机
+          </UiCardTitle>
+          <UiCardDescription>
+            选择要添加的相机类型
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardContent class="space-y-3">
+          <div
+            class="p-4 rounded-lg border cursor-pointer transition-all hover:border-primary/50 hover:bg-muted/50"
+            @click="openCameraModal"
+          >
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Usb class="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <div class="text-sm font-medium">USB 相机</div>
+                <div class="text-xs text-muted-foreground">连接本地 USB 摄像头设备</div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="p-4 rounded-lg border cursor-pointer transition-all hover:border-primary/50 hover:bg-muted/50"
+            @click="openNetworkCameraModal"
+          >
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Wifi class="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <div class="text-sm font-medium">网络相机</div>
+                <div class="text-xs text-muted-foreground">连接网络 IP 相机设备</div>
+              </div>
+            </div>
+          </div>
+        </UiCardContent>
+
+        <UiCardFooter class="flex justify-end">
+          <UiButton variant="outline" class="flex-1" @click="showCameraTypeModal = false">取消</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
     <div v-if="showCameraModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
         <UiCardHeader class="space-y-2">
@@ -2740,6 +3221,221 @@ onBeforeUnmount(() => {
         <UiCardFooter class="gap-2 w-full">
           <UiButton variant="outline" class="flex-1" @click="showCameraModal = false">取消</UiButton>
           <UiButton variant="default" class="flex-1" @click="handleAddCamera" :disabled="!selectedSystemCamera || isLoadingSystemCameras">确认添加</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <!-- Network Camera Modal -->
+    <div v-if="showNetworkCameraModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg flex items-center gap-2">
+            <Wifi class="h-5 w-5 text-primary" />
+            添加网络相机
+          </UiCardTitle>
+          <UiCardDescription>
+            配置网络相机连接参数
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardContent class="space-y-4">
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">相机ID</Label>
+            <Input
+              v-model="networkCameraId"
+              type="text"
+              placeholder="例如：camera_1"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">IP 地址</Label>
+            <Input
+              v-model="networkCameraIp"
+              type="text"
+              placeholder="192.168.110.10"
+            />
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">宽度（可选）</Label>
+              <Input
+                v-model="networkCameraWidth"
+                type="number"
+                placeholder="自动"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">高度（可选）</Label>
+              <Input
+                v-model="networkCameraHeight"
+                type="number"
+                placeholder="自动"
+              />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">曝光时间（微秒）</Label>
+              <Input
+                v-model="networkCameraExposure"
+                type="number"
+                placeholder="52-10000016"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">增益（0-1957）</Label>
+              <Input
+                v-model="networkCameraGain"
+                type="number"
+                placeholder="自动"
+              />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">偏移X（像素）</Label>
+              <Input
+                v-model="networkCameraOffsetX"
+                type="number"
+                placeholder="偏移X"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">偏移Y（像素）</Label>
+              <Input
+                v-model="networkCameraOffsetY"
+                type="number"
+                placeholder="偏移Y"
+              />
+            </div>
+          </div>
+        </UiCardContent>
+
+        <UiCardFooter class="gap-2 w-full">
+          <UiButton variant="outline" class="flex-1" @click="showNetworkCameraModal = false">取消</UiButton>
+          <UiButton variant="default" class="flex-1" @click="handleAddNetworkCamera" :disabled="!networkCameraId.trim()">确认添加</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <!-- Camera Preview Modal -->
+    <div v-if="cameraPreviewUrl" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-2xl shadow-2xl">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg flex items-center gap-2">
+            <Camera class="h-5 w-5 text-primary" />
+            相机实时预览
+          </UiCardTitle>
+        </UiCardHeader>
+        <UiCardContent class="space-y-4">
+          <div class="relative bg-black rounded-lg overflow-hidden">
+            <img :src="cameraPreviewUrl" class="w-full h-auto max-h-[60vh] object-contain" />
+          </div>
+        </UiCardContent>
+        <UiCardFooter class="gap-2 w-full">
+          <UiButton variant="outline" class="flex-1" @click="stopCameraPreview">关闭预览</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <!-- Camera Config Modal -->
+    <div v-if="showCameraConfigModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg flex items-center gap-2">
+            <Settings class="h-5 w-5 text-primary" />
+            相机配置
+          </UiCardTitle>
+          <UiCardDescription>
+            {{ editingCamera?.name }}
+          </UiCardDescription>
+        </UiCardHeader>
+
+        <UiCardContent class="space-y-4">
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">IP 地址</Label>
+            <Input
+              v-model="editingCameraConfig.ip"
+              type="text"
+              placeholder="127.0.0.1"
+            />
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">宽度</Label>
+              <Input
+                v-model.number="editingCameraConfig.width"
+                type="number"
+                placeholder="自动"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">高度</Label>
+              <Input
+                v-model.number="editingCameraConfig.height"
+                type="number"
+                placeholder="自动"
+              />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                曝光等级
+                <span class="text-[9px] text-muted-foreground font-normal normal-case ml-1">
+                  {{ editingCameraConfig.exposureTime ? `≈ ${Math.round(editingCameraConfig.exposureTime * 52 / 1000)}ms` : '' }}
+                </span>
+              </Label>
+              <Input
+                v-model.number="editingCameraConfig.exposureTime"
+                type="number"
+                min="1"
+                max="200"
+                placeholder="1-200"
+              />
+              <div class="text-[9px] text-muted-foreground">实际曝光 = 值 × 52μs</div>
+            </div>
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">增益 (0-1957)</Label>
+              <Input
+                v-model.number="editingCameraConfig.gain"
+                type="number"
+                min="0"
+                max="1957"
+                placeholder="0-1957"
+              />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">偏移X</Label>
+              <Input
+                v-model.number="editingCameraConfig.offsetX"
+                type="number"
+                placeholder="像素"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">偏移Y</Label>
+              <Input
+                v-model.number="editingCameraConfig.offsetY"
+                type="number"
+                placeholder="像素"
+              />
+            </div>
+          </div>
+        </UiCardContent>
+
+        <UiCardFooter class="gap-2 w-full">
+          <UiButton variant="outline" class="flex-1" @click="showCameraConfigModal = false">取消</UiButton>
+          <UiButton variant="default" class="flex-1" @click="saveCameraConfig">保存配置</UiButton>
         </UiCardFooter>
       </UiCard>
     </div>

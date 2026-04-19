@@ -1,6 +1,6 @@
 {
   "common": {
-    "appName": "One2All 控制台",
+    "appName": "琦航AI视觉检测",
     "home": "主页",
     "dashboard": "仪表盘",
     "dataAnnotation": "数据标注",
@@ -330,6 +330,7 @@
       "epochProgress": "轮次进度",
       "metricHistory": "指标历史",
       "clearLogs": "清除日志",
+      "stopMonitoring": "停止监控",
       "stageLabels": {
         "featureExtraction": "特征提取",
         "coresetSampling": "核心集采样",
@@ -465,6 +466,7 @@
     "refreshLogs": "刷新",
     "noLogs": "暂无日志",
     "loadLogsFailed": "加载日志失败",
+    "serviceNotFound": "服务不存在或已删除",
     "memoryBanks": "内存库",
     "noMemoryBanks": "暂无内存库信息",
     "positiveLibrary": "正例库",

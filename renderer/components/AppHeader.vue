@@ -9,7 +9,7 @@ const { t } = useI18n()
 const route = useRoute()
 
 const isPinned = ref(false)
-const currentProductId = ref<number | null>(null)
+const currentProductId = ref<string | null>(null)
 
 const togglePin = async () => {
   if (window.electronAPI) {
@@ -21,16 +21,21 @@ onMounted(async () => {
   if (window.electronAPI) {
     isPinned.value = await window.electronAPI.isAlwaysOnTop()
   }
-  
+
   const qProductId = route.query.productId
   if (qProductId) {
-    currentProductId.value = Number(qProductId)
+    currentProductId.value = String(qProductId)
+  } else {
+    const savedProductId = localStorage.getItem('selectedProductId')
+    if (savedProductId) {
+      currentProductId.value = savedProductId
+    }
   }
 })
 
 watch(() => route.query.productId, (newId) => {
   if (newId) {
-    currentProductId.value = Number(newId)
+    currentProductId.value = String(newId)
   }
 })
 

@@ -1,15 +1,15 @@
 {
   "appId": "com.one2all.shell",
-  "productName": "One2All Shell",
+  "productName": "One2All 视觉检测平台",
   "directories": {
     "output": "dist"
   },
   "files": [
     "electron/**/*",
-    "renderer/.output/public/**/*",
     "prisma/schema.prisma",
-    "prisma/dev.db",
+    "prisma/generated/**/*",
     "prisma/migrations/**/*",
+    ".env",
     "package.json",
     "!node_modules/**/test/**",
     "!node_modules/**/tests/**",
@@ -20,6 +20,23 @@
     "!node_modules/**/*.map",
     "!node_modules/.cache/**",
     "!node_modules/.pnpm/**",
+    "!node_modules/.bin/**",
+    "!node_modules/**/*.d.ts",
+    "!node_modules/**/*.ts",
+    "!node_modules/**/LICENSE*",
+    "!node_modules/**/license*",
+    "!node_modules/**/README*",
+    "!node_modules/**/readme*",
+    "!node_modules/**/CHANGELOG*",
+    "!node_modules/**/HISTORY*",
+    "!node_modules/**/.editorconfig",
+    "!node_modules/**/.eslintrc*",
+    "!node_modules/**/.prettierrc*",
+    "!node_modules/**/.gitignore",
+    "!node_modules/**/.npmignore",
+    "!node_modules/**/package-lock.json",
+    "!node_modules/**/yarn.lock",
+    "!node_modules/**/tsconfig.json",
     "!**/*.map",
     "!**/.git",
     "!**/.github",
@@ -29,13 +46,27 @@
     "!**/tests",
     "!**/docs",
     "!**/log",
-    "!**/logs"
+    "!**/logs",
+    "!prisma/dev.db"
   ],
   "asar": true,
   "asarUnpack": [
-    "prisma/**/*",
-    "node_modules/@prisma/client/**/*",
-    "node_modules/.prisma/**/*"
+    "prisma/generated/**/*",
+    "prisma/dev.db"
+  ],
+  "extraResources": [
+    {
+      "from": "prisma/generated",
+      "to": "prisma/generated"
+    },
+    {
+      "from": "prisma/dev.db",
+      "to": "prisma/dev.db"
+    },
+    {
+      "from": "renderer/.output/public",
+      "to": "renderer/.output/public"
+    }
   ],
   "win": {
     "target": [
@@ -54,5 +85,7 @@
   },
   "npmRebuild": false,
   "nodeGypRebuild": false,
-  "buildDependenciesFromSource": false
+  "buildDependenciesFromSource": false,
+  "compression": "maximum",
+  "includePdb": false
 }

@@ -49,7 +49,7 @@ const route = useRoute()
 const config = useRuntimeConfig()
 const toast = inject<any>('toast')
 
-const productId = ref<number | null>(null)
+const productId = ref<string | null>(null)
 const productName = ref('')
 const labelConfigs = ref<any[]>([])
 
@@ -252,6 +252,8 @@ const loadTaskSnapshot = async (taskIdOrUuid: string) => {
   }
 }
 
+const isRestoringState = ref(false)
+
 const restoreActiveTrainingState = async () => {
   if (typeof window === 'undefined') return false
   const gidKey = trainGroupIdStorageKey.value
@@ -264,11 +266,33 @@ const restoreActiveTrainingState = async () => {
   try {
     const savedTasks = JSON.parse(savedTasksRaw)
     if (!Array.isArray(savedTasks) || savedTasks.length === 0) return false
+
+    // 先验证后端服务是否还存在该训练组
+    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const checkUrl = `${apiBase.replace(/\/$/, '')}/train/status/group/${savedGid}`
+    try {
+      const checkRes = await fetch(checkUrl, { method: 'GET' })
+      if (!checkRes.ok) {
+        // 服务返回404或其他错误，说明训练组已不存在，清除本地状态
+        window.localStorage.removeItem(gidKey)
+        window.localStorage.removeItem(uuidKey)
+        window.localStorage.removeItem(tasksKey)
+        return false
+      }
+    } catch (err) {
+      // 网络错误，服务可能已关闭，清除本地状态
+      window.localStorage.removeItem(gidKey)
+      window.localStorage.removeItem(uuidKey)
+      window.localStorage.removeItem(tasksKey)
+      return false
+    }
+
     trainGroupId.value = savedGid
     trainTaskUuid.value = savedUuid || ''
     trainTasks.value = savedTasks
     activeMonitorTab.value = 'overview'
     monitorTaskId.value = 'all'
+    isRestoringState.value = true
 
     startGroupPolling()
     await Promise.all(savedTasks.map((t: any) => loadTaskSnapshot(String(t?.task_id || ''))))
@@ -290,6 +314,27 @@ const restoreActiveTrainingState = async () => {
   } catch {
     return false
   }
+}
+
+const clearRestoredState = () => {
+  closeMonitorStream()
+  stopGroupPolling()
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(trainGroupIdStorageKey.value)
+    window.localStorage.removeItem(trainTasksStorageKey.value)
+    window.localStorage.removeItem(trainTaskUuidStorageKey.value)
+  }
+  trainGroupId.value = ''
+  trainTaskUuid.value = ''
+  trainTasks.value = []
+  monitorStatus.value = ''
+  monitorProgress.value = 0
+  monitorLogs.value = []
+  monitorGroupProgress.value = 0
+  monitorGroupStatus.value = ''
+  groupMetrics.value = {}
+  groupLogs.value = {}
+  isRestoringState.value = false
 }
 
 const hasAppliedStartModeSideEffects = ref(false)
@@ -364,7 +409,7 @@ const batchCancel = async () => {
   }
 }
 const isResumingTask = ref(false)
-const trainTasks = ref<{ label: string; task_id: string; status?: string; progress?: number }[]>([])
+const trainTasks = ref<{ label: string; task_id: string; status?: string; progress?: number; posIds?: string[] }[]>([])
 const trainGroupId = ref('')
 const trainTaskUuid = ref('')
 
@@ -555,13 +600,14 @@ const getLearningRateValue = () => {
 const groupedRecords = computed(() => {
   const groups: Record<string, any[]> = {}
   for (const record of trainingRecords.value) {
-    const key = record.taskUuid || 'unknown'
+    const taskUuid = record.taskUuid || 'unknown'
+    const key = extractGroupKey(taskUuid)
     if (!groups[key]) {
       groups[key] = []
     }
     groups[key].push(record)
   }
-  return Object.entries(groups).map(([taskUuid, records]) => {
+  return Object.entries(groups).map(([groupKey, records]) => {
     const createdAt = records[0]?.createdAt
     const dateStr = createdAt ? new Date(createdAt).toLocaleString('zh-CN', {
       year: 'numeric',
@@ -574,16 +620,26 @@ const groupedRecords = computed(() => {
     }).replace(/\//g, '-') : '-'
     const status = records.some(r => r.status === 'running' || r.status === 'training') ? 'training' : records[0]?.status
     const labelCount = records.length
+    const displayTaskUuid = records[0]?.taskUuid || groupKey
     return {
-      taskUuid,
+      taskUuid: groupKey,
       records,
-      displayName: `${dateStr}@${taskUuid}`,
+      displayName: `${dateStr}@${displayTaskUuid}`,
       labelCount,
       createdAt,
       status
     }
   }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 })
+
+const extractGroupKey = (taskUuid: string): string => {
+  if (!taskUuid || taskUuid === 'unknown') return 'unknown'
+  const match = taskUuid.match(/^patchcore_(\d+)/)
+  if (match) {
+    return `patchcore_${match[1]}`
+  }
+  return taskUuid
+}
 
 const selectedGroup = ref<any>(null)
 const recordDetailTab = ref<'params' | 'metrics' | 'logs'>('params')
@@ -1731,7 +1787,6 @@ const formatMetricNumber = (v: number) => {
 }
 
 const enrichedLoadedImages = (images: any[]) => {
-  console.log('images:', images)
   return (images || []).map((img: any) => ({
     ...img,
     annotations: (img.annotations || []).map((ann: any) => {
@@ -2026,7 +2081,6 @@ const buildTrainCocoData = (results: any[]) => {
   const annotations = (results || []).flatMap((img, idx) => {
     return (img.annotations || []).map((ann: any) => {
       const bbox = calculateBbox(ann)
-      // console.log('ann:', ann)
       const area = calculateArea(ann)
       let segmentation: number[][] = []
       if (ann.type === 'rect') {
@@ -2054,11 +2108,13 @@ const buildTrainCocoData = (results: any[]) => {
     })
   })
 
-  const categories = labelConfigs.value.map((l, idx) => ({
-    id: idx + 1,
-    name: l.name,
-    supercategory: 'none'
-  }))
+  const categories = labelConfigs.value
+    .filter(l => l.id !== 'workpiece-body')
+    .map((l, idx) => ({
+      id: idx + 1,
+      name: l.name,
+      supercategory: 'none'
+    }))
 
   return { images, annotations, categories }
 }
@@ -2147,13 +2203,46 @@ const startTraining = async () => {
     let displayLabel: string
     
     if (tasks.length > 0) {
-      trainTasks.value = tasks.map((t: any) => ({
-        label: t.label,
-        task_id: t.task_id,
-        status: 'pending',
-        progress: 0
-      }))
-      displayLabel = tasks.length > 1 ? `${tasks.length} 个任务` : tasks[0]?.label || '训练任务'
+      // 收集每个 label 对应的所有位置ID，并按顺序排列
+      const labelPosIds: Record<string, string[]> = {}
+      for (const img of originalImages.value || []) {
+        for (const ann of img.annotations || []) {
+          if (ann.label && ann.posId) {
+            if (!labelPosIds[ann.label]) {
+              labelPosIds[ann.label] = []
+            }
+            const posIdStr = String(ann.posId)
+            if (!labelPosIds[ann.label].includes(posIdStr)) {
+              labelPosIds[ann.label].push(posIdStr)
+            }
+          }
+        }
+      }
+      // 对每个 label 的位置ID进行排序
+      for (const label in labelPosIds) {
+        labelPosIds[label].sort((a, b) => Number(a) - Number(b))
+      }
+      
+      // 按 label 对任务进行分组，并为每个任务分配对应的位置ID
+      const labelTaskIndex: Record<string, number> = {}
+      trainTasks.value = tasks
+        .filter((t: any) => t.label !== '工件主体')
+        .map((t: any) => {
+          if (!labelTaskIndex[t.label]) {
+            labelTaskIndex[t.label] = 0
+          }
+          const posIds = labelPosIds[t.label] || []
+          const taskPosId = posIds[labelTaskIndex[t.label]] || ''
+          labelTaskIndex[t.label]++
+          return {
+            label: t.label,
+            task_id: t.task_id,
+            status: 'pending',
+            progress: 0,
+            posIds: taskPosId ? [taskPosId] : []
+          }
+        })
+      displayLabel = trainTasks.value.length > 1 ? `${trainTasks.value.length} 个任务` : trainTasks.value[0]?.label || '训练任务'
     } else {
       // 兼容旧格式
       const labels = data.labels || []
@@ -2171,12 +2260,11 @@ const startTraining = async () => {
       }]
     }
     
-    // 为每个任务保存训练记录，而不是保存组记录
     if (productId.value && window.electronAPI && trainTaskUuid.value) {
       for (const t of trainTasks.value) {
         window.electronAPI.saveTrainingRecord({
           productId: productId.value,
-          taskId: t.task_id,
+          taskId: trainTaskUuid.value,
           labelName: t.label,
           modelName: 'PatchCore',
           status: 'pending',
@@ -2613,11 +2701,13 @@ const handleSaveDataset = async (opts?: { displayName: string; versionName: stri
           iscrowd: 0
         }))
       ),
-      categories: labelConfigs.value.map((l, idx) => ({
-        id: idx + 1,
-        name: l.name,
-        supercategory: 'none'
-      }))
+      categories: labelConfigs.value
+        .filter(l => l.id !== 'workpiece-body')
+        .map((l, idx) => ({
+          id: idx + 1,
+          name: l.name,
+          supercategory: 'none'
+        }))
     }
 
     const saveResult = await window.electronAPI.saveDataset(JSON.parse(JSON.stringify({
@@ -2736,7 +2826,8 @@ const previewGridCols = computed(() => {
 
 const trainConfig = ref({
   numAugmentations: [100],
-  maxConcurrent: [3]
+  maxConcurrent: [3],
+  batchSize: [8]
 })
 
 const enabledAugmentations = computed(() => {
@@ -2875,11 +2966,13 @@ const handleAugment = async () => {
         file_name: 'image.jpg'
       }],
       annotations: formattedAnnotations,
-      categories: labelConfigs.value.map((l, idx) => ({
-        id: idx + 1,
-        name: l.name,
-        supercategory: 'none'
-      }))
+      categories: labelConfigs.value
+        .filter(l => l.id !== 'workpiece-body')
+        .map((l, idx) => ({
+          id: idx + 1,
+          name: l.name,
+          supercategory: 'none'
+        }))
     }
 
     const augConfig: any = {}
@@ -3059,7 +3152,14 @@ onMounted(async () => {
 
   const qProductId = route.query.productId
   const qProductName = route.query.productName
-  if (qProductId) productId.value = Number(qProductId)
+  if (qProductId) {
+    productId.value = String(qProductId)
+  } else {
+    const savedProductId = localStorage.getItem('selectedProductId')
+    if (savedProductId) {
+      productId.value = savedProductId
+    }
+  }
   if (qProductName) productName.value = String(qProductName)
 
   // 加载训练记录
@@ -3819,9 +3919,6 @@ onBeforeUnmount(() => {
                 </button>
               </div>
 
-              <!-- Top Controls (Empty as per user request to move buttons and remove select) -->
-              <div class="flex items-center gap-3 py-2">
-              </div>
             </div>
 
             <!-- 2. Tab Content Area -->
@@ -3859,7 +3956,8 @@ onBeforeUnmount(() => {
                   </div>
                   <div class="divide-y divide-border/50 overflow-y-auto custom-scrollbar flex-1">
                     <div v-for="tItem in trainTasks" :key="tItem.task_id" 
-                      class="flex flex-col transition-all duration-300 group/item hover:bg-muted/10"
+                      class="flex flex-col transition-all duration-300 group/item hover:bg-muted/10 cursor-pointer"
+                      @click="activeMonitorTab = 'logs'; monitorTaskId = tItem.task_id"
                     >
                       <div class="p-5 flex items-center gap-8">
                         <div class="flex items-center gap-4 w-48 shrink-0">
@@ -3873,7 +3971,10 @@ onBeforeUnmount(() => {
                           <div v-else class="w-4 h-4 shrink-0"></div>
 
                           <div class="w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_8px_rgba(0,0,0,0.1)] transition-all duration-300 animate-pulse-slow" :class="getStatusClass(tItem.status)"></div>
-                          <div class="truncate text-sm font-semibold tracking-tight text-foreground/80 group-hover/item:text-foreground">{{ tItem.label }}</div>
+                          <div class="truncate text-sm font-semibold tracking-tight text-foreground/80 group-hover/item:text-foreground">
+                            {{ tItem.label }}
+                            <span v-if="tItem.posIds && tItem.posIds.length > 0" class="text-muted-foreground text-xs ml-1">[{{ tItem.posIds.join(',') }}]</span>
+                          </div>
                         </div>
                         <div class="flex-1 grid grid-cols-[1fr_100px] items-center gap-10">
                           <div class="space-y-2">
@@ -3966,6 +4067,9 @@ onBeforeUnmount(() => {
                         <span class="text-[10px] px-2.5 py-1 rounded-lg whitespace-nowrap font-medium shrink-0" :class="getStatusClass(group.status) + ' text-white'">
                           {{ t('training.monitor.statusList.' + (normalizeStatus(group.status) || 'pending')) }}
                         </span>
+                        <span class="text-[10px] text-muted-foreground">
+                          {{ group.records.length }}个标签
+                        </span>
                       </div>
                       <button
                         class="p-2 hover:bg-destructive/10 hover:text-destructive rounded-lg transition-all opacity-0 group-hover:opacity-100"
@@ -3974,6 +4078,22 @@ onBeforeUnmount(() => {
                         <Trash2 class="w-4 h-4" />
                       </button>
                       <ChevronDown class="w-5 h-5 text-muted-foreground transition-transform duration-300 group-hover:text-foreground" :class="{ 'rotate-180': activePopoverGroup?.taskUuid === group.taskUuid }" />
+                    </div>
+                    
+                    <!-- 标签列表预览 -->
+                    <div class="px-4 pb-3 pl-5">
+                      <div class="flex flex-wrap gap-1.5">
+                        <span 
+                          v-for="rec in group.records.slice(0, 5)" 
+                          :key="rec.id"
+                          class="text-[10px] px-2 py-0.5 rounded-md bg-muted/50 text-muted-foreground border border-border/50"
+                        >
+                          {{ rec.labelName }}
+                        </span>
+                        <span v-if="group.records.length > 5" class="text-[10px] px-2 py-0.5 rounded-md bg-muted/30 text-muted-foreground">
+                          +{{ group.records.length - 5 }}
+                        </span>
+                      </div>
                     </div>
 
                     <div 
