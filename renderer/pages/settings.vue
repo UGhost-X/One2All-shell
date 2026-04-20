@@ -23,9 +23,9 @@ const isSaving = ref(false)
 const showSavedMessage = ref(false)
 
 const backendMode = ref<'local' | 'remote'>('local')
-const backendIp = ref('localhost')
+const backendIp = ref('127.0.0.1')
 const remoteBackendIp = ref('')
-const backendUrl = ref('http://localhost:8000')
+const backendUrl = ref('http://127.0.0.1:8000')
 const backendPort = ref('8000')
 
 const isLocalMode = computed(() => backendMode.value === 'local')
@@ -50,18 +50,23 @@ onMounted(async () => {
     const settings = await window.electronAPI.getSettings()
     if (settings.dataPath) dataPath.value = settings.dataPath
     if (settings.backendMode) backendMode.value = settings.backendMode
-    if (settings.backendIp) backendIp.value = settings.backendIp
     if (settings.backendUrl) {
       backendUrl.value = settings.backendUrl
-      if (settings.backendMode === 'remote') {
-        try {
-          const url = new URL(settings.backendUrl)
+      try {
+        const url = new URL(settings.backendUrl)
+        if (settings.backendMode === 'remote') {
           remoteBackendIp.value = url.hostname
-          backendPort.value = url.port || '8000'
-        } catch {
+        } else {
+          backendIp.value = url.hostname
+        }
+        backendPort.value = url.port || '8000'
+      } catch {
+        if (settings.backendMode === 'remote') {
           remoteBackendIp.value = ''
         }
       }
+    } else if (settings.backendIp) {
+      backendIp.value = settings.backendIp
     }
     if (settings.backendPort) backendPort.value = settings.backendPort
   }
@@ -71,7 +76,7 @@ const handleSave = async () => {
   isSaving.value = true
 
   const finalUrl = backendMode.value === 'local'
-    ? `http://${backendIp.value}:${backendPort.value}`
+    ? `http://127.0.0.1:${backendPort.value}`
     : `http://${remoteBackendIp.value}:${backendPort.value}`
 
   if (window.electronAPI?.saveSettings) {
@@ -79,7 +84,7 @@ const handleSave = async () => {
       dataPath: dataPath.value,
       locale: locale.value,
       backendMode: backendMode.value,
-      backendIp: backendMode.value === 'local' ? backendIp.value : remoteBackendIp.value,
+      backendIp: backendMode.value === 'local' ? '127.0.0.1' : remoteBackendIp.value,
       backendUrl: finalUrl,
       backendPort: backendPort.value
     })
@@ -190,10 +195,10 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
                   <div class="relative flex-1">
                     <span class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">http://</span>
                     <Input
-                      :model-value="backendMode === 'local' ? backendIp : remoteBackendIp"
-                      @update:model-value="backendMode === 'local' ? null : remoteBackendIp = $event"
+                      :model-value="backendMode === 'local' ? '127.0.0.1' : remoteBackendIp"
+                      @update:model-value="remoteBackendIp = $event"
                       :readonly="backendMode === 'local'"
-                      :placeholder="backendMode === 'local' ? 'localhost' : '输入远程IP'"
+                      :placeholder="backendMode === 'local' ? '127.0.0.1' : '输入远程IP'"
                       class="font-mono text-sm pl-[60px]"
                     />
                   </div>
@@ -201,7 +206,6 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
                   <Input
                     v-model="backendPort"
                     type="number"
-                    :readonly="backendMode === 'local'"
                     placeholder="8000"
                     class="font-mono text-sm w-[100px]"
                   />
@@ -213,7 +217,7 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
                 <span class="text-xs text-muted-foreground">
                   当前配置:
                   <code class="bg-background px-1.5 py-0.5 rounded text-xs">
-                    {{ backendMode === 'local' ? `http://${backendIp}:${backendPort}` : `http://${remoteBackendIp}:${backendPort}` }}
+                    {{ backendMode === 'local' ? `http://127.0.0.1:${backendPort}` : `http://${remoteBackendIp}:${backendPort}` }}
                   </code>
                 </span>
               </div>

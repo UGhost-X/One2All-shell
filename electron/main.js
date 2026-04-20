@@ -1171,7 +1171,11 @@ app.whenReady().then(async () => {
         where: { taskUuid },
         orderBy: { createdAt: 'desc' }
       });
-      return records;
+      return records.map(r => ({
+        ...r,
+        metrics: JSON.parse(r.metrics || '[]'),
+        logs: JSON.parse(r.logs || '[]')
+      }));
     } catch (err) {
       console.error('Failed to get training records by taskUuid:', err);
       throw err;

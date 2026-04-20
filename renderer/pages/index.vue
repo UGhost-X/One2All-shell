@@ -38,7 +38,7 @@ import {
   Package,
   Usb
 } from 'lucide-vue-next'
-import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick, inject } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted, onActivated, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import Input from '@/components/ui/input/Input.vue'
 import Label from '@/components/ui/label/Label.vue'
@@ -71,7 +71,7 @@ const showToast = (message: string, type: 'info' | 'error' = 'info') => {
   }
 }
 
-const isToolbarFixed = ref(true)
+const isToolbarFixed = ref(false)
 const isToolbarHovered = ref(false)
 
 let toolbarTimer: any = null
@@ -524,6 +524,12 @@ onMounted(async () => {
     restoreSelectedCamera()
   }
   document.addEventListener('fullscreenchange', syncFullscreenState)
+})
+
+onActivated(async () => {
+  // 页面重新激活时，重新获取推理服务和标注数据
+  await fetchInferenceServices()
+  await fetchProductAnnotations()
 })
 
 const openProductModal = () => {

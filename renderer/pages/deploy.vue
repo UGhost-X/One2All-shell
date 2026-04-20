@@ -376,7 +376,6 @@ const loadDeployableModels = async () => {
   isLoadingModels.value = true
   try {
     const url = getBackendUrl(`/project/${productId.value}/models`)
-    console.log('[Deploy] Loading models for product:', productId.value, 'URL:', url)
     const res = await fetch(url)
     const data = await res.json()
     const allModels = data.models || []
@@ -407,7 +406,7 @@ const loadDeployableModels = async () => {
       try {
         const records = await window.electronAPI.getTrainingRecordsByTaskUuid(model.task_uuid)
         if (records && records.length > 0) {
-          model.created_at = records[0].createdAt
+          model.created_at = records[0].createdAt || records[0].startTime || records[0].created_at
         }
       } catch (e) {
         console.warn('[Deploy] Failed to get training record for', model.task_uuid, e)
@@ -435,7 +434,6 @@ const loadServices = async () => {
   isLoadingServices.value = true
   try {
     const url = getBackendUrl(`/deploy/http/services?project_id=${productId.value}&include_health=true`)
-    console.log('[Deploy] Loading services for product:', productId.value, 'URL:', url)
     const res = await fetch(url)
     const data = await res.json()
     const previousServiceIds = new Set(services.value.map(s => s.service_id))
@@ -927,7 +925,6 @@ onMounted(async () => {
 
   const qProductId = route.query.productId
   const qProductName = route.query.productName
-  console.log('[Deploy] onMounted - route.query.productId:', qProductId)
 
   if (qProductId) {
     productId.value = String(qProductId)
@@ -947,8 +944,6 @@ onMounted(async () => {
     }
   }
 
-  console.log('[Deploy] onMounted - final productId:', productId.value)
-
   if (productId.value) {
     await loadDeployableModels()
     await loadServices()
@@ -965,20 +960,17 @@ onUnmounted(() => {
 })
 
 watch(() => route.query.productId, async (newProductId) => {
-  console.log('[Deploy] Route productId changed:', newProductId, 'Current:', productId.value)
-  if (newProductId) {
-    const newId = String(newProductId)
-    if (newId !== productId.value) {
-      console.log('[Deploy] Switching to product:', newId)
-      productId.value = newId
-      const product = products.value.find(p => String(p.id) === newId)
-      productName.value = product?.name || ''
-      await loadDeployableModels()
-      await loadServices()
+  const newId = newProductId ? String(newProductId) : null
+  if (newId && newId !== productId.value) {
+    productId.value = newId
+    productName.value = String(route.query.productName || '')
+    loadDeployableModels()
+    loadServices()
+    
+    if (productId.value) {
       startServicesPolling()
-      if (autoRefreshLogs.value) {
-        startLogsAutoRefresh()
-      }
+    } else {
+      stopServicesPolling()
     }
   }
 })

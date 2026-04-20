@@ -46,12 +46,25 @@ definePageMeta({
 const { t } = useI18n()
 const route = useRoute()
 
-const config = useRuntimeConfig()
 const toast = inject<any>('toast')
+
+const apiBaseUrl = ref('http://127.0.0.1:8000')
+
+const loadApiBase = async () => {
+  if (typeof window !== 'undefined' && window.electronAPI?.getSettings) {
+    const settings = await window.electronAPI.getSettings()
+    if (settings?.backendUrl) {
+      apiBaseUrl.value = settings.backendUrl
+    }
+  }
+}
+
+const getApiBase = () => apiBaseUrl.value
 
 const productId = ref<string | null>(null)
 const productName = ref('')
 const labelConfigs = ref<any[]>([])
+const isDataLoaded = ref(false)
 
 const originalImages = ref<any[]>([])
 
@@ -62,35 +75,35 @@ const presetsData = ref<Record<string, any>>({
     brightness: { enabled: false, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [1]
+    num_results: [30]
   },
   basic: {
     rotate: { enabled: true, angle: [15] },
     brightness: { enabled: false, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [1]
+    num_results: [30]
   },
   standard: {
     rotate: { enabled: true, angle: [30] },
     brightness: { enabled: true, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [1]
+    num_results: [30]
   },
   heavy: {
     rotate: { enabled: true, angle: [45] },
     brightness: { enabled: true, min: 0.7, max: 1.3 },
     contrast: { enabled: true, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [1]
+    num_results: [30]
   },
   custom: {
     rotate: { enabled: false, angle: [30] },
     brightness: { enabled: false, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [1]
+    num_results: [30]
   }
 })
 
@@ -221,7 +234,7 @@ const resetMonitorState = (opts?: { clearActive?: boolean }) => {
 const loadTaskSnapshot = async (taskIdOrUuid: string) => {
   if (!taskIdOrUuid) return
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const taskUuid = trainTaskUuid.value || taskIdOrUuid
     const historyUrl = `${apiBase.replace(/\/$/, '')}/train/history/${encodeURIComponent(taskUuid)}`
     const res = await fetch(historyUrl)
@@ -268,7 +281,7 @@ const restoreActiveTrainingState = async () => {
     if (!Array.isArray(savedTasks) || savedTasks.length === 0) return false
 
     // 先验证后端服务是否还存在该训练组
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const checkUrl = `${apiBase.replace(/\/$/, '')}/train/status/group/${savedGid}`
     try {
       const checkRes = await fetch(checkUrl, { method: 'GET' })
@@ -396,7 +409,7 @@ const batchCancel = async () => {
     const idsToCancel = Array.from(selectedTaskIds.value)
     // Sequentially or in parallel? Parallel is faster.
     await Promise.all(idsToCancel.map(async (id) => {
-      const apiBase = config.public.apiBase || 'http://localhost:8000'
+      const apiBase = getApiBase()
       const url = `${apiBase.replace(/\/$/, '')}/train/stop/${id}`
       const res = await fetch(url, { method: 'POST' })
     }))
@@ -700,7 +713,7 @@ const handleDeleteDataset = async () => {
   if (!deletingDataset.value || !productId.value) return
 
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     let url = `${apiBase.replace(/\/$/, '')}/project/${productId.value}/datasets?task_uuid=${deletingDataset.value.task_uuid}`
     if (deleteDatasetMode.value === 'label') {
       url += `&label=${encodeURIComponent(deletingDataset.value.label)}`
@@ -735,7 +748,7 @@ const handleDeleteModel = async () => {
   if (!deletingModel.value || !productId.value) return
 
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const taskUuid = deletingModel.value.task_uuid || deletingModel.value.task_id
     // 对于统一结构，使用 labels 数组中的第一个标签
     const labelName = deletingModel.value.labels && deletingModel.value.labels.length > 0 ? deletingModel.value.labels[0] : deletingModel.value.label
@@ -892,14 +905,22 @@ const startGroupPolling = () => {
   groupPollingTimer = setInterval(async () => {
     if (!trainGroupId.value) return
     try {
-      const apiBase = config.public.apiBase || 'http://localhost:8000'
+      const apiBase = getApiBase()
       const url = `${apiBase.replace(/\/$/, '')}/train/status/group/${trainGroupId.value}`
       const res = await fetch(url)
       if (res.ok) {
         const data = await res.json()
-        const isGroupCompleted = String(data.status || '').toLowerCase() === 'completed' || String(data.status || '').toLowerCase() === 'success'
+        const status = String(data.status || '').toLowerCase()
+        const isGroupCompleted = status === 'completed' || status === 'success'
+        const isGroupFailed = status === 'failed' || status === 'error' || status === 'stopped'
         monitorGroupProgress.value = isGroupCompleted ? 100 : (data.progress || 0)
         monitorGroupStatus.value = data.status || ''
+
+        if (isGroupFailed) {
+          stopGroupPolling()
+          closeMonitorStream()
+          return
+        }
 
         // 刷新运行记录
         if (productId.value && window.electronAPI) {
@@ -1371,7 +1392,7 @@ const handleModelClick = (model: any, event: MouseEvent, groupId: string) => {
 const fetchProjectResults = async () => {
   if (!productId.value) return
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
 
     // Fetch Training Records from DB
     if (window.electronAPI) {
@@ -1821,7 +1842,7 @@ const closeMonitorStream = (taskId?: string) => {
 
 const openMonitorStream = (taskId: string) => {
   if (!taskId || monitorEventSources[taskId]) return
-  const apiBase = config.public.apiBase || 'http://localhost:8000'
+  const apiBase = getApiBase()
   const url = `${apiBase.replace(/\/$/, '')}/train/events/${encodeURIComponent(taskId)}`
 
   const es = new EventSource(url)
@@ -1894,33 +1915,32 @@ const applyMonitorPayload = (taskId: string, data: any) => {
 
   const isCurrentTask = taskId === monitorTaskId.value
 
-  // 更新状态
-  if (typeof data.status === 'string') {
-    if (isCurrentTask) monitorStatus.value = data.status
-    const isCompleted = ['completed', 'success'].includes(String(data.status).toLowerCase())
+  const status = data.status || data.state
+  const progress = data.progress || data.epoch_progress || data.iter_progress
 
-    // 同步任务的目标轮数
+  if (typeof status === 'string') {
+    if (isCurrentTask) monitorStatus.value = status
+    const isCompleted = ['completed', 'success'].includes(String(status).toLowerCase())
+
     const targetE = Number(data.total_epochs || data.config?.train_epochs || data.config?.train_iters || data.config?.epochs || 0)
     if (Number.isFinite(targetE) && targetE > 0) {
       taskTargetEpochs.value[taskId] = targetE
     }
 
-    // 更新当前任务的进度
     if (isCurrentTask) {
       if (isCompleted) {
         monitorProgress.value = 100
-      } else if (data.progress != null) {
-        const p = Number(data.progress)
+      } else if (progress != null) {
+        const p = Number(progress)
         if (Number.isFinite(p)) monitorProgress.value = p
       }
     }
 
-    // 更新任务列表中的状态
     const taskIndex = trainTasks.value.findIndex(t => t.task_id === taskId)
     if (taskIndex >= 0) {
-      trainTasks.value[taskIndex].status = data.status
-      if (data.progress != null) {
-        trainTasks.value[taskIndex].progress = isCompleted ? 100 : Number(data.progress)
+      trainTasks.value[taskIndex].status = status
+      if (progress != null) {
+        trainTasks.value[taskIndex].progress = isCompleted ? 100 : Number(progress)
       }
       if (data.current_epoch != null) {
         trainTasks.value[taskIndex].current_epoch = data.current_epoch
@@ -1995,14 +2015,25 @@ watch(trainTasks, (tasks) => {
 
 
 
-onActivated(() => {
+onActivated(async () => {
+  if (productId.value) {
+    await loadOriginalImages()
+    if (window.electronAPI) {
+      const products = await window.electronAPI.getProducts()
+      const product = products.find((p: any) => p.id === productId.value)
+      if (product?.scheme) {
+        const schemeConfig = JSON.parse(product.scheme.config)
+        labelConfigs.value = schemeConfig.labels || []
+      }
+    }
+  }
+
   if (trainGroupId.value && !groupPollingTimer) startGroupPolling()
   for (const tItem of trainTasks.value) {
     if (tItem.task_id) openMonitorStream(tItem.task_id)
   }
   if (monitorTaskId.value && monitorTaskId.value !== 'all' && !monitorEventSources[monitorTaskId.value]) openMonitorStream(monitorTaskId.value)
-  
-  // Default to first running task if in overall view or no task selected
+
   if (monitorTaskId.value === 'all' || !monitorTaskId.value) {
     const runningTask = trainTasks.value.find(t => {
       const s = (t.status || '').toLowerCase()
@@ -2132,8 +2163,16 @@ const startTraining = async () => {
     const settings = await window.electronAPI?.getSettings?.()
     const basePath = settings?.dataPath || settingsDataPath.value || ''
     const images = originalImages.value.map((img: any) => String(img.imageUrl || '').split(',')[1] || '')
+    console.log('[Training] originalImages.value:', originalImages.value)
     const cocoData = buildTrainCocoData(originalImages.value)
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    console.log('[Training] cocoData:', cocoData)
+    if (cocoData.annotations.length === 0) {
+      toast?.error('没有有效的标注数据，请先进行数据标注')
+      isTrainingStarting.value = false
+      return
+    }
+
+    const apiBase = getApiBase()
     const apiUrl = `${apiBase.replace(/\/$/, '')}/train/anomaly`
 
 
@@ -2171,7 +2210,7 @@ const startTraining = async () => {
       base_path: basePath,
       project_id: String(productId.value),
       model_name: 'PatchCore',
-      num_augmentations: Math.round(Number(trainConfig.value.numAugmentations[0] || 100)),
+      num_augmentations: Math.round(Number(trainConfig.value.numAugmentations[0] || 50)),
       max_concurrent: Math.round(Number(trainConfig.value.maxConcurrent[0] || 3))
     }
 
@@ -2205,8 +2244,10 @@ const startTraining = async () => {
     if (tasks.length > 0) {
       // 收集每个 label 对应的所有位置ID，并按顺序排列
       const labelPosIds: Record<string, string[]> = {}
+      const annotationLabels: string[] = []
       for (const img of originalImages.value || []) {
         for (const ann of img.annotations || []) {
+          annotationLabels.push(ann.label)
           if (ann.label && ann.posId) {
             if (!labelPosIds[ann.label]) {
               labelPosIds[ann.label] = []
@@ -2225,9 +2266,8 @@ const startTraining = async () => {
       
       // 按 label 对任务进行分组，并为每个任务分配对应的位置ID
       const labelTaskIndex: Record<string, number> = {}
-      trainTasks.value = tasks
-        .filter((t: any) => t.label !== '工件主体')
-        .map((t: any) => {
+      const filteredTasks = tasks.filter((t: any) => t.label !== '工件主体')
+      trainTasks.value = filteredTasks.map((t: any) => {
           if (!labelTaskIndex[t.label]) {
             labelTaskIndex[t.label] = 0
           }
@@ -2304,7 +2344,7 @@ const stopTask = async (taskId?: string) => {
   if (!tid || isStoppingTask.value) return
   isStoppingTask.value = true
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const url = `${apiBase.replace(/\/$/, '')}/train/stop/${tid}`
     const res = await fetch(url, { method: 'POST' })
     if (res.ok) {
@@ -2330,7 +2370,7 @@ const stopGroup = async () => {
 
   isStoppingGroup.value = true
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const url = `${apiBase.replace(/\/$/, '')}/train/stop/group/${trainGroupId.value}`
     const res = await fetch(url, { method: 'POST' })
     if (res.ok) {
@@ -2362,7 +2402,7 @@ const resumeTask = async (taskId?: string) => {
   if (!tid || tid === 'all' || isResumingTask.value) return
   isResumingTask.value = true
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const url = `${apiBase.replace(/\/$/, '')}/train/resume/${tid}`
     const res = await fetch(url, { method: 'POST' })
     if (!res.ok) {
@@ -2391,7 +2431,7 @@ const resumeGroup = async () => {
   if (isResumingTask.value) return
   isResumingTask.value = true
   try {
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const url = `${apiBase.replace(/\/$/, '')}/train/resume/group/${trainGroupId.value}`
     const res = await fetch(url, { method: 'POST' })
     if (!res.ok) throw new Error(await res.text())
@@ -2825,7 +2865,7 @@ const previewGridCols = computed(() => {
 })
 
 const trainConfig = ref({
-  numAugmentations: [100],
+  numAugmentations: [30],
   maxConcurrent: [3],
   batchSize: [8]
 })
@@ -2981,7 +3021,7 @@ const handleAugment = async () => {
     if (augmentConfig.value.contrast.enabled) augConfig.contrast = { range: [augmentConfig.value.contrast.min, augmentConfig.value.contrast.max] }
     if (augmentConfig.value.blur.enabled) augConfig.blur = { ksize_range: [1, augmentConfig.value.blur.ksize[0]] }
     
-    const apiBase = config.public.apiBase || 'http://localhost:8000'
+    const apiBase = getApiBase()
     const apiUrl = `${apiBase.replace(/\/$/, '')}/augment`
 
     const requestBody = {
@@ -3113,25 +3153,29 @@ const getLabelPosition = (ann: any) => {
 
 const loadOriginalImages = async () => {
   if (!productId.value || !window.electronAPI) return
-  
+
   const files = await window.electronAPI.getProductImages(productId.value)
   if (!files || files.length === 0) return
-  
+
   const images: any[] = []
-  
+
   for (const filePath of files) {
     const url = await window.electronAPI.loadImage(filePath)
     if (!url) continue
-    
     const ann = await window.electronAPI.getAnnotations(productId.value, filePath)
+    console.log("ann:::",ann)
     let annotations: any[] = []
     if (ann && ann.data) {
-      annotations = JSON.parse(ann.data).map((a: any, idx: number) => ({
-        ...a,
-        posId: a.posId ?? (idx + 1)
-      }))
+      try {
+        annotations = JSON.parse(ann.data).map((a: any, idx: number) => ({
+          ...a,
+          posId: a.posId ?? (idx + 1)
+        }))
+      } catch (e) {
+        console.error('[Training] loadOriginalImages - failed to parse ann.data:', e)
+      }
     }
-    
+
     images.push({
       imageUrl: url,
       imagePath: filePath,
@@ -3140,11 +3184,13 @@ const loadOriginalImages = async () => {
       height: 0
     })
   }
-  
+
   originalImages.value = images
 }
 
 onMounted(async () => {
+  await loadApiBase()
+
   if (window.electronAPI?.getSettings) {
     const settings = await window.electronAPI.getSettings()
     if (settings?.dataPath) settingsDataPath.value = settings.dataPath
@@ -3152,25 +3198,72 @@ onMounted(async () => {
 
   const qProductId = route.query.productId
   const qProductName = route.query.productName
+ 
+  let initialProductId = null
   if (qProductId) {
-    productId.value = String(qProductId)
+    initialProductId = String(qProductId)
+    productId.value = initialProductId
   } else {
     const savedProductId = localStorage.getItem('selectedProductId')
     if (savedProductId) {
-      productId.value = savedProductId
+      initialProductId = savedProductId
+      productId.value = initialProductId
     }
   }
   if (qProductName) productName.value = String(qProductName)
 
-  // 加载训练记录
+  // 重置数据加载状态，确保每次进入页面都重新加载
+  isDataLoaded.value = false
+  originalImages.value = []
+
+  // 只有在有 productId 时才加载数据
+    if (initialProductId) {
+      isDataLoaded.value = true
+
+      // 加载训练记录
+      if (window.electronAPI) {
+        trainingRecords.value = await window.electronAPI.getTrainingRecords(initialProductId)
+      }
+
+      // 加载原始图片和标注数据
+      await loadOriginalImages()
+
+      // Load product labels for COCO category_id mapping
+      if (window.electronAPI) {
+        const products = await window.electronAPI.getProducts()
+        const product = products.find(p => p.id === initialProductId)
+        if (product?.scheme) {
+          const schemeConfig = JSON.parse(product.scheme.config)
+          labelConfigs.value = schemeConfig.labels || []
+        }
+      }
+
+      const restored = await restoreActiveTrainingState()
+      if (restored) {
+        await loadOriginalImages()
+      }
+    }
+  })
+
+watch(() => route.query.productId, async (newProductId) => {
+  if (!newProductId) return
+
+  if (String(newProductId) === productId.value) {
+    await loadOriginalImages()
+    return
+  }
+
+  productId.value = String(newProductId)
+  productName.value = String(route.query.productName || '')
+  isDataLoaded.value = true
+
+  resetMonitorState({ clearActive: true })
+
   if (productId.value && window.electronAPI) {
     trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
   }
-
-  // 加载原始图片和标注数据
   await loadOriginalImages()
 
-  // Load product labels for COCO category_id mapping
   if (productId.value && window.electronAPI) {
     const products = await window.electronAPI.getProducts()
     const product = products.find(p => p.id === productId.value)

@@ -1,23 +1,10 @@
 import { defineEventHandler, getQuery, createError, readBody, getRequestURL, readFormData } from 'h3'
 import { InferenceServer } from '../../utils/inference-server'
+import { getSettings, getPythonApiBase, getInferenceHost } from '../../utils/settings'
 import fs from 'fs'
 import path from 'path'
 
-const pythonApiBase = process.env.PYTHON_PUBLIC_API_BASE || 'http://localhost:8000'
 const modelOutputBase = process.env.MODEL_OUTPUT_BASE || process.cwd()
-// 是否使用远程推理服务（与 PYTHON_PUBLIC_API_BASE 相同的 IP）
-const useRemoteInference = process.env.USE_REMOTE_INFERENCE === 'true'
-
-// 从 PYTHON_PUBLIC_API_BASE 提取主机地址
-function getInferenceHost(): string {
-  if (!useRemoteInference) return 'localhost'
-  try {
-    const url = new URL(pythonApiBase)
-    return url.hostname
-  } catch {
-    return 'localhost'
-  }
-}
 
 interface ModelInfo {
   task_uuid: string
@@ -78,15 +65,15 @@ function getProjectRoot(): string {
   return process.cwd()
 }
 
-async function resolveModelPath(serverPath: string): Promise<string> {
+async function resolveModelPath(serverPath: string, pythonApiBase: string): Promise<string> {
   if (!serverPath) return ''
-  
+
   if (path.isAbsolute(serverPath) && fs.existsSync(serverPath)) {
     return serverPath
   }
-  
-  let normalizedPath = serverPath.replace(/^\/+/, '').replace(/\\/g, '/')
-  
+
+  let normalizedPath = serverPath.replace(/^\/+/,'').replace(/\\/g, '/')
+
   if (normalizedPath.startsWith('home/')) {
     const parts = normalizedPath.split('/')
     const outputIndex = parts.indexOf('output')
@@ -94,26 +81,26 @@ async function resolveModelPath(serverPath: string): Promise<string> {
       normalizedPath = parts.slice(outputIndex).join('/')
     }
   }
-  
+
   const localPath = path.join(modelOutputBase, normalizedPath)
-  
+
   if (fs.existsSync(localPath)) {
     return localPath
   }
-  
-  
+
+
   const tempDir = path.join(process.cwd(), 'temp_models')
   if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true })
   }
-  
+
   const fileName = path.basename(serverPath)
   const tempPath = path.join(tempDir, fileName)
-  
+
   if (!fs.existsSync(tempPath)) {
     try {
       const staticUrl = `${pythonApiBase}/static/${normalizedPath.replace(/ /g, '%20')}`
-      
+
       const response = await fetch(staticUrl)
       if (response.ok) {
         const buffer = await response.arrayBuffer()
@@ -126,7 +113,7 @@ async function resolveModelPath(serverPath: string): Promise<string> {
   } else {
     return tempPath
   }
-  
+
   return localPath
 }
 
@@ -134,6 +121,9 @@ export default defineEventHandler(async (event) => {
   const requestURL = getRequestURL(event)
   const eventPath = requestURL.pathname
   const method = event.method
+
+  const settings = await getSettings()
+  const pythonApiBase = getPythonApiBase(settings)
 
   if (eventPath === '/api/deploy/list' && method === 'GET') {
     return {
@@ -152,7 +142,7 @@ export default defineEventHandler(async (event) => {
 
   if (eventPath.startsWith('/api/deploy/models/') && method === 'GET') {
     const projectId = eventPath.split('/api/deploy/models/')[1]
-    
+
     try {
       const res = await fetch(`${pythonApiBase}/project/${projectId}/models`)
       if (!res.ok) {
@@ -162,10 +152,10 @@ export default defineEventHandler(async (event) => {
       const models: ModelInfo[] = []
 
       const modelMap = new Map<string, ModelInfo>()
-      
+
       for (const model of data.models || []) {
         const taskUuid = model.task_uuid
-        
+
         if (!modelMap.has(taskUuid)) {
           modelMap.set(taskUuid, {
             task_uuid: taskUuid,
@@ -174,17 +164,15 @@ export default defineEventHandler(async (event) => {
             onnx_status: {}
           })
         }
-        
+
         const modelInfo = modelMap.get(taskUuid)!
-        
-        // 支持统一结构和扁平结构
+
         if (model.is_unified_structure || model.labels) {
           modelInfo.labels = model.labels || []
           for (const label of modelInfo.labels) {
             modelInfo.model_paths[label] = model.model_path || ''
           }
         } else {
-          // 单标签结构
           if (model.label) {
             modelInfo.labels.push(model.label)
             modelInfo.model_paths[model.label] = model.model_path || ''
@@ -229,7 +217,6 @@ export default defineEventHandler(async (event) => {
       })
 
       try {
-        // 调用 HTTP deploy 接口
         const deployRes = await fetch(`${pythonApiBase}/deploy/http`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -248,9 +235,8 @@ export default defineEventHandler(async (event) => {
 
         const serviceId = deployData.service_id
         const port = deployData.port
-        
-        // 构建推理服务地址
-        const host = getInferenceHost()
+
+        const host = getInferenceHost(settings)
         const inferenceUrl = `http://${host}:${port}`
         const service: DeployService = {
           service_id: serviceId,
@@ -318,15 +304,14 @@ export default defineEventHandler(async (event) => {
     const serviceId = eventPath.split('/api/deploy/stop/')[1]
 
     let service = runningServices.get(serviceId)
-    
-    // 如果本地找不到，尝试从后端获取服务列表
+
     if (!service) {
       try {
         const servicesRes = await fetch(`${pythonApiBase}/deploy/http/services`)
         if (servicesRes.ok) {
           const servicesData = await servicesRes.json()
           for (const svc of servicesData.services || []) {
-            const host = getInferenceHost()
+            const host = getInferenceHost(settings)
             const serviceUrl = `http://${host}:${svc.port}`
             runningServices.set(svc.service_id, {
               service_id: svc.service_id,
@@ -347,7 +332,7 @@ export default defineEventHandler(async (event) => {
         console.warn('同步服务列表失败:', syncErr)
       }
     }
-    
+
     if (!service) {
       throw createError({
         statusCode: 404,
@@ -378,7 +363,7 @@ export default defineEventHandler(async (event) => {
         const servicesData = await servicesRes.json()
         runningServices.clear()
         for (const svc of servicesData.services || []) {
-          const host = getInferenceHost()
+          const host = getInferenceHost(settings)
           const serviceUrl = `http://${host}:${svc.port}`
           runningServices.set(svc.service_id, {
             service_id: svc.service_id,
@@ -405,62 +390,61 @@ export default defineEventHandler(async (event) => {
   }
 
   if (eventPath === '/api/deploy/inference' && method === 'POST') {
-      try {
-        const formData = await readMultipartFormData(event)
-        let imageFile: any = null
-        let originalFilename = 'image.jpg'
-        let originalType = 'image/jpeg'
-        let service_id = ''
-        
-        if (formData) {
-          for (const field of formData) {
-            if (field.name === 'file' && field.data) {
-              imageFile = field.data
-              if (field.filename) originalFilename = field.filename
-              if (field.type) originalType = field.type
-            } else if (field.name === 'service_id') {
-              service_id = field.data?.toString() || ''
-            }
+    try {
+      const formData = await readMultipartFormData(event)
+      let imageFile: any = null
+      let originalFilename = 'image.jpg'
+      let originalType = 'image/jpeg'
+      let service_id = ''
+
+      if (formData) {
+        for (const field of formData) {
+          if (field.name === 'file' && field.data) {
+            imageFile = field.data
+            if (field.filename) originalFilename = field.filename
+            if (field.type) originalType = field.type
+          } else if (field.name === 'service_id') {
+            service_id = field.data?.toString() || ''
           }
         }
+      }
 
-        if (!imageFile || !service_id) {
-          throw createError({ statusCode: 400, message: '缺少必要参数 file 或 service_id' })
-        }
+      if (!imageFile || !service_id) {
+        throw createError({ statusCode: 400, message: '缺少必要参数 file 或 service_id' })
+      }
 
-        const service = runningServices.get(service_id)
-        if (!service || service.status !== 'running') {
-          throw createError({ statusCode: 404, message: '服务不存在或未运行' })
-        }
+      const service = runningServices.get(service_id)
+      if (!service || service.status !== 'running') {
+        throw createError({ statusCode: 404, message: '服务不存在或未运行' })
+      }
 
-        const host = getInferenceHost()
-        const inferenceUrl = `http://${host}:${service.port}`
-        
-        const inferenceFormData = new FormData()
-        
-        const blob = new Blob([new Uint8Array(imageFile)], { type: originalType })
-        inferenceFormData.append('file', blob, originalFilename)
-        inferenceFormData.append('service_id', service_id)
-          
-        
-        const inferenceRes = await fetch(`${inferenceUrl}/predict`, {
-          method: 'POST',
-          body: inferenceFormData
-        })
-                
-        if (!inferenceRes.ok) {
-          const errorText = await inferenceRes.text().catch(() => '{}')
-          console.error('Inference error response:', errorText)
-          let errorData = {}
-          try {
-            errorData = JSON.parse(errorText)
-          } catch {}
-          throw new Error(errorData.error || `推理请求失败: ${inferenceRes.status}`)
-        }
+      const host = getInferenceHost(settings)
+      const inferenceUrl = `http://${host}:${service.port}`
+
+      const inferenceFormData = new FormData()
+
+      const blob = new Blob([new Uint8Array(imageFile)], { type: originalType })
+      inferenceFormData.append('file', blob, originalFilename)
+      inferenceFormData.append('service_id', service_id)
+
+
+      const inferenceRes = await fetch(`${inferenceUrl}/predict`, {
+        method: 'POST',
+        body: inferenceFormData
+      })
+
+      if (!inferenceRes.ok) {
+        const errorText = await inferenceRes.text().catch(() => '{}')
+        console.error('Inference error response:', errorText)
+        let errorData = {}
+        try {
+          errorData = JSON.parse(errorText)
+        } catch {}
+        throw new Error(errorData.error || `推理请求失败: ${inferenceRes.status}`)
+      }
 
       const result = await inferenceRes.json()
 
-      // 支持多工件预测结果格式
       const convertedResult: any = {
         results: result.results || [],
         processing_time: result.processing_time || 0,
@@ -468,7 +452,6 @@ export default defineEventHandler(async (event) => {
         anomaly_count: result.anomaly_count || 0
       }
 
-      // 如果存在多工件结果，添加到返回数据中
       if (result.workpieces && Array.isArray(result.workpieces)) {
         convertedResult.workpieces = result.workpieces
         convertedResult.total_workpieces = result.total_workpieces || result.workpieces.length
@@ -492,27 +475,25 @@ export default defineEventHandler(async (event) => {
     const query = getQuery(event)
     const projectId = query.project_id as string
     const includeHealth = query.include_health === 'true'
-    
-    // 转发到 Python 后端的服务列表接口
+
     let servicesUrl = `${pythonApiBase}/deploy/http/services`
     const params = []
     if (projectId) params.push(`project_id=${projectId}`)
     if (includeHealth) params.push('include_health=true')
     if (params.length > 0) servicesUrl += '?' + params.join('&')
-    
+
     try {
       const httpRes = await fetch(servicesUrl)
       if (!httpRes.ok) {
         throw new Error(`后端服务返回 ${httpRes.status}`)
       }
-      
+
       const httpData = await httpRes.json()
-      
-      // 同步到本地缓存，并确保返回的数据包含 http_url
+
       const httpServices = httpData.services || []
       const processedServices = httpServices.map((svc: any) => {
         let serviceStatus = 'running'
-        
+
         if (svc.health) {
           if (!svc.health.healthy) {
             if (!svc.health.process_alive) {
@@ -526,9 +507,8 @@ export default defineEventHandler(async (event) => {
         }
 
         let serviceUrl = svc.inference_url || svc.http_url || `http://localhost:${svc.port}`
-        // 将 0.0.0.0 替换为 localhost，因为 0.0.0.0 不能用于客户端访问
         serviceUrl = serviceUrl.replace('0.0.0.0', 'localhost')
-        
+
         const processedService = {
           ...svc,
           status: serviceStatus,
@@ -550,10 +530,10 @@ export default defineEventHandler(async (event) => {
           service_type: 'http',
           device: svc.device,
         })
-        
+
         return processedService
       })
-      
+
       return {
         ...httpData,
         services: processedServices
@@ -580,7 +560,7 @@ export default defineEventHandler(async (event) => {
       }
 
       const conversionKey = `${task_uuid}_${label}`
-      
+
       if (onnxConversions.has(conversionKey)) {
         const existing = onnxConversions.get(conversionKey)
         if (existing?.status === 'completed') {
@@ -625,10 +605,10 @@ export default defineEventHandler(async (event) => {
           if (!onnxPath.startsWith('output/')) {
             onnxPath = `output/${project_id}/${onnxPath}`
           }
-          
+
           const fullOnnxPath = path.join(projectRoot, onnxPath)
           const configPath = path.join(path.dirname(fullOnnxPath), 'inference_config.yaml')
-          
+
           onnxConversions.set(conversionKey, {
             task_uuid,
             label,
@@ -703,7 +683,7 @@ export default defineEventHandler(async (event) => {
     const taskUuid = query.task_uuid as string
 
     let conversions = Array.from(onnxConversions.values())
-    
+
     if (taskUuid) {
       conversions = conversions.filter(c => c.task_uuid === taskUuid)
     }
@@ -739,7 +719,6 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 单个服务健康检查
   if (eventPath.startsWith('/api/deploy/http/service/') && eventPath.endsWith('/health') && method === 'GET') {
     const pathParts = eventPath.split('/')
     const serviceId = pathParts[pathParts.length - 2]
@@ -750,8 +729,7 @@ export default defineEventHandler(async (event) => {
         throw new Error(`后端服务返回 ${healthRes.status}`)
       }
       const healthData = await healthRes.json()
-      
-      // 同步健康状态到 runningServices
+
       const service = runningServices.get(serviceId)
       if (service && healthData.health) {
         let newStatus = 'running'
@@ -767,7 +745,7 @@ export default defineEventHandler(async (event) => {
         service.status = newStatus
         runningServices.set(serviceId, service)
       }
-      
+
       return healthData
     } catch (err: any) {
       console.warn(`Failed to fetch health for service ${serviceId}:`, err.message)
@@ -778,7 +756,6 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 单个服务日志获取
   if (eventPath.startsWith('/api/deploy/http/service/') && eventPath.endsWith('/logs') && method === 'GET') {
     const pathParts = eventPath.split('/')
     const serviceId = pathParts[pathParts.length - 2]
@@ -802,86 +779,8 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 获取服务内存库信息
-  if (eventPath.startsWith('/api/deploy/http/service/') && eventPath.endsWith('/memory_banks') && method === 'GET') {
-    const pathParts = eventPath.split('/')
-    const serviceId = pathParts[pathParts.length - 2]
-    
-    try {
-      const banksRes = await fetch(`${pythonApiBase}/deploy/http/service/${serviceId}/memory_banks`)
-      
-      if (!banksRes.ok) {
-        throw new Error(`后端服务返回 ${banksRes.status}`)
-      }
-      const banksData = await banksRes.json()
-      return banksData
-    } catch (err: any) {
-      console.warn(`Failed to fetch memory banks for service ${serviceId}:`, err.message)
-      return { banks: [] }
-    }
-  }
-
-  // 添加ROI到反例库
-  if (eventPath === '/api/deploy/roi/negative' && method === 'POST') {
-    try {
-      const formData = await readFormData(event)
-      const imageFile = formData.get('file') as File
-      const serviceId = formData.get('service_id') as string
-      const category = formData.get('category') as string
-      const posId = formData.get('pos_id') as string
-      const bbox = formData.get('bbox') as string
-
-      if (!imageFile || !serviceId) {
-        throw createError({
-          statusCode: 400,
-          message: '缺少必要参数 file 或 service_id'
-        })
-      }
-
-      const service = runningServices.get(serviceId)
-      if (!service || service.status !== 'running') {
-        throw createError({
-          statusCode: 404,
-          message: '服务不存在或未运行'
-        })
-      }
-
-      const host = getInferenceHost()
-      const inferenceUrl = `http://${host}:${service.port}`
-      const targetUrl = `${inferenceUrl}/negative_banks/${posId || 'default'}/add`
-            
-      const inferenceFormData = new FormData()
-      const blob = new Blob([new Uint8Array(await imageFile.arrayBuffer())], { type: imageFile.type })
-      inferenceFormData.append('file', blob, imageFile.name)
-      
-      const addRes = await fetch(targetUrl, {
-        method: 'POST',
-        body: inferenceFormData
-      })
-      
-      
-      if (!addRes.ok) {
-        const errorText = await addRes.text().catch(() => '')
-        console.error('[Add Negative] Error response:', errorText)
-        throw new Error(`添加失败: ${addRes.status} - ${errorText}`)
-      }
-
-      const result = await addRes.json()
-      return {
-        status: 'success',
-        message: '已添加到反例库',
-        data: result
-      }
-    } catch (err: any) {
-      throw createError({
-        statusCode: err.statusCode || 500,
-        message: err.message || '添加到反例库失败'
-      })
-    }
-  }
-
   throw createError({
     statusCode: 404,
-    message: 'API not found'
+    message: '未找到接口'
   })
 })
