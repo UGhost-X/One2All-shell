@@ -646,6 +646,7 @@ const isLoadingSystemCameras = ref(false)
 const showNetworkCameraModal = ref(false)
 const networkCameraId = ref('')
 const networkCameraIp = ref('192.168.110.10')
+const networkCameraVendor = ref<'Basler' | 'Hikrobot'>('Basler')
 const networkCameraWidth = ref<number | null>(null)
 const networkCameraHeight = ref<number | null>(null)
 const networkCameraExposure = ref<number | null>(null)
@@ -660,6 +661,7 @@ const showCameraConfigModal = ref(false)
 const editingCamera = ref<any>(null)
 const editingCameraConfig = ref({
   ip: '',
+  vendor: 'Basler' as 'Basler' | 'Hikrobot',
   width: null as number | null,
   height: null as number | null,
   exposureTime: null as number | null,
@@ -697,6 +699,7 @@ const openNetworkCameraModal = () => {
   showCameraTypeModal.value = false
   networkCameraId.value = ''
   networkCameraIp.value = '192.168.110.10'
+  networkCameraVendor.value = 'Basler'
   networkCameraWidth.value = null
   networkCameraHeight.value = null
   showNetworkCameraModal.value = true
@@ -747,6 +750,7 @@ const handleAddNetworkCamera = async () => {
     cameraId: networkCameraId.value.trim(),
     name: networkCameraId.value.trim(),
     ip: networkCameraIp.value.trim(),
+    vendor: networkCameraVendor.value,
     status: 'offline',
     width: networkCameraWidth.value,
     height: networkCameraHeight.value,
@@ -757,6 +761,7 @@ const handleAddNetworkCamera = async () => {
     isNetworkCamera: true,
     config: JSON.stringify({
       ipAddress: networkCameraIp.value.trim(),
+      vendor: networkCameraVendor.value,
       width: networkCameraWidth.value,
       height: networkCameraHeight.value,
       exposureTime: networkCameraExposure.value,
@@ -789,6 +794,7 @@ const handleConnectCamera = async (camera: any) => {
     const cameraId = camera.name
     const config = camera.config ? JSON.parse(camera.config) : {}
     const result = await window.electronAPI.connectCamera(cameraId, {
+      vendor: config.vendor || 'Basler',
       exposureTime: exposureValue.value * 52,
       gain: gainValue.value,
       offsetX: offsetXValue.value,
@@ -993,6 +999,7 @@ const openCameraConfig = (cam: any) => {
   const config = cam.config ? JSON.parse(cam.config) : {}
   editingCameraConfig.value = {
     ip: cam.ip || '',
+    vendor: config.vendor || 'Basler',
     width: config.width || null,
     height: config.height || null,
     exposureTime: config.exposureTime ? Math.round(config.exposureTime / 52) : null,
@@ -1009,6 +1016,7 @@ const saveCameraConfig = async () => {
   try {
     const config = {
       ...JSON.parse(editingCamera.value.config || '{}'),
+      vendor: editingCameraConfig.value.vendor,
       width: editingCameraConfig.value.width,
       height: editingCameraConfig.value.height,
       exposureTime: editingCameraConfig.value.exposureTime ? editingCameraConfig.value.exposureTime * 52 : null,
@@ -1263,14 +1271,11 @@ const updateCameraSettings = async () => {
       try {
         const cameraId = targetCamera.name
         const actualExposure = exposureValue.value * 52
-        const config = targetCamera.config ? JSON.parse(targetCamera.config) : {}
         const response = await window.electronAPI.updateCameraParameters(cameraId, {
           exposureTime: Math.round(actualExposure),
           gain: Math.round(gainValue.value),
           offsetX: Math.round(offsetXValue.value),
-          offsetY: Math.round(offsetYValue.value),
-          width: config.width,
-          height: config.height
+          offsetY: Math.round(offsetYValue.value)
         })
         if (isLiveStreaming.value && cameraPreviewUrl.value) {
           cameraPreviewUrl.value = `${cameraServiceUrl.value}/camera/${cameraId}/preview?t=${Date.now()}`
@@ -3282,6 +3287,17 @@ onBeforeUnmount(() => {
             />
           </div>
 
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">品牌</Label>
+            <select
+              v-model="networkCameraVendor"
+              class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="Basler">Basler</option>
+              <option value="Hikrobot">Hikrobot</option>
+            </select>
+          </div>
+
           <div class="grid grid-cols-2 gap-3">
             <div class="space-y-1.5">
               <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">宽度（可选）</Label>
@@ -3388,6 +3404,17 @@ onBeforeUnmount(() => {
               type="text"
               placeholder="127.0.0.1"
             />
+          </div>
+
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">品牌</Label>
+            <select
+              v-model="editingCameraConfig.vendor"
+              class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="Basler">Basler</option>
+              <option value="Hikrobot">Hikrobot</option>
+            </select>
           </div>
 
           <div class="grid grid-cols-2 gap-3">

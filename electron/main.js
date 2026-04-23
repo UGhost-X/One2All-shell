@@ -291,6 +291,8 @@ app.whenReady().then(async () => {
         backendPort: updated.backendPort,
         imageSettings: updated.imageSettings ? JSON.parse(updated.imageSettings) : { exposure: 67, gain: 1.2 }
       };
+      // 重新初始化相机服务，使用新的后端URL
+      await initCameraService(appSettings.backendUrl);
       return true;
     } catch (err) {
       console.error('Failed to save settings:', err);
@@ -493,6 +495,7 @@ app.whenReady().then(async () => {
       try {
         const params = new URLSearchParams();
         params.append('camera_id', cameraData.name);
+        params.append('vendor', camera.vendor || 'Basler');
         params.append('ip_address', cameraData.ip);
         if (camera.width) params.append('width', String(camera.width));
         if (camera.height) params.append('height', String(camera.height));
@@ -573,11 +576,12 @@ app.whenReady().then(async () => {
     });
   });
 
-  ipcMain.handle('camera:connect', async (event, { cameraId, exposureTime, gain, offsetX, offsetY, width, height }) => {
+  ipcMain.handle('camera:connect', async (event, { cameraId, vendor, exposureTime, gain, offsetX, offsetY, width, height }) => {
 
     if (cameraServiceReady) {
       try {
         const params = new URLSearchParams();
+        params.append('vendor', vendor || 'Basler');
         if (exposureTime !== undefined && exposureTime !== null) params.append('exposure_time', String(Math.round(exposureTime)));
         if (gain !== undefined && gain !== null) params.append('gain', String(Math.round(gain)));
         if (offsetX !== undefined && offsetX !== null) params.append('offset_x', String(Math.round(offsetX)));
@@ -600,6 +604,7 @@ app.whenReady().then(async () => {
           const existingConfig = camera.config ? JSON.parse(camera.config) : {};
           const updatedConfig = {
             ...existingConfig,
+            vendor: vendor || 'Basler',
             exposureTime,
             gain,
             offsetX,
@@ -666,16 +671,14 @@ app.whenReady().then(async () => {
     return { success: false, error: 'Camera service not available' };
   });
 
-  ipcMain.handle('camera:update-parameters', async (event, { cameraId, exposureTime, gain, offsetX, offsetY, width, height }) => {
+  ipcMain.handle('camera:update-parameters', async (event, { cameraId, exposureTime, gain, offsetX, offsetY }) => {
     if (cameraServiceReady) {
       try {
         const params = new URLSearchParams();
-        if (exposureTime !== undefined && exposureTime !== null) params.append('exposure_time', String(exposureTime));
-        if (gain !== undefined && gain !== null) params.append('gain', String(gain));
-        if (offsetX !== undefined && offsetX !== null) params.append('offset_x', String(offsetX));
-        if (offsetY !== undefined && offsetY !== null) params.append('offset_y', String(offsetY));
-        if (width !== undefined && width !== null) params.append('width', String(width));
-        if (height !== undefined && height !== null) params.append('height', String(height));
+        if (exposureTime !== undefined && exposureTime !== null) params.append('exposure_time', String(Math.round(exposureTime)));
+        if (gain !== undefined && gain !== null) params.append('gain', String(Math.round(gain)));
+        if (offsetX !== undefined && offsetX !== null) params.append('offset_x', String(Math.round(offsetX)));
+        if (offsetY !== undefined && offsetY !== null) params.append('offset_y', String(Math.round(offsetY)));
 
         const response = await makeCameraApiRequest(`/camera/${cameraId}/parameters`, {
           method: 'POST',
@@ -695,9 +698,7 @@ app.whenReady().then(async () => {
             exposureTime,
             gain,
             offsetX,
-            offsetY,
-            width,
-            height
+            offsetY
           };
           await prisma.camera.update({
             where: { id: camera.id },

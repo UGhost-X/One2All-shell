@@ -14,10 +14,11 @@ declare global {
       updateCamera: (id: string, data: any) => Promise<any>
       getSystemCameras: () => Promise<Array<{ id: string; name: string; deviceId: string; isSystemCamera: boolean }>>
       // Network Camera API
-      connectCamera: (cameraId: string, params?: { exposureTime?: number; gain?: number; offsetX?: number; offsetY?: number; width?: number; height?: number }) => Promise<{ success: boolean; message?: string; error?: string; status?: any }>
+      connectCamera: (cameraId: string, params?: { vendor?: string; exposureTime?: number; gain?: number; offsetX?: number; offsetY?: number; width?: number; height?: number }) => Promise<{ success: boolean; message?: string; error?: string; status?: any }>
       disconnectCamera: (cameraId: string) => Promise<{ success: boolean; message?: string; error?: string }>
       captureFromCamera: (cameraId: string, savePath?: string) => Promise<{ success: boolean; data?: any; error?: string }>
       getCameraStatus: (cameraId: string) => Promise<{ success: boolean; status?: any; error?: string }>
+      updateCameraParameters: (cameraId: string, params: { exposureTime?: number; gain?: number; offsetX?: number; offsetY?: number }) => Promise<{ success: boolean; message?: string; error?: string; current_values?: any }>
       // Annotation Schemes
       getSchemes: () => Promise<any[]>
       saveScheme: (scheme: any) => Promise<any>
