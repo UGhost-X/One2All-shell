@@ -274,7 +274,12 @@
       "allLabelsSelected": "Train on all categories if none selected",
       "allCategories": "All Categories",
       "numAugmentations": "Augmentation Count",
-      "maxConcurrent": "Concurrent Count"
+      "maxConcurrent": "Concurrent Count",
+      "trainMode": "Train Mode",
+      "trainModePlaceholder": "Select train mode",
+      "trainModeByPosId": "By Position ID",
+      "trainModeByCategory": "By Category",
+      "trainModeHint": "By Position ID creates separate models for each position; By Category creates unified models for each category"
     },
     "monitor": {
       "currentTask": "Current Task",

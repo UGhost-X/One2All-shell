@@ -1,6 +1,6 @@
 {
   "appId": "com.one2all.shell",
-  "productName": "One2All 视觉检测平台",
+  "productName": "QH视觉检测平台",
   "directories": {
     "output": "dist"
   },

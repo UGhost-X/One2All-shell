@@ -2211,7 +2211,8 @@ const startTraining = async () => {
       project_id: String(productId.value),
       model_name: 'PatchCore',
       num_augmentations: Math.round(Number(trainConfig.value.numAugmentations[0] || 50)),
-      max_concurrent: Math.round(Number(trainConfig.value.maxConcurrent[0] || 3))
+      max_concurrent: Math.round(Number(trainConfig.value.maxConcurrent[0] || 3)),
+      train_mode: trainMode.value
     }
 
     const res = await fetch(apiUrl, {
@@ -2869,6 +2870,9 @@ const trainConfig = ref({
   maxConcurrent: [3],
   batchSize: [8]
 })
+
+const trainMode = ref<'by_pos_id' | 'by_category'>('by_pos_id')
+const isTrainModeSelectOpen = ref(false)
 
 const enabledAugmentations = computed(() => {
   const enabled = []
@@ -3978,6 +3982,20 @@ onBeforeUnmount(() => {
                    />
                  </div>
                  <Slider v-model="trainConfig.maxConcurrent" :min="1" :max="10" />
+               </div>
+
+               <div class="space-y-1">
+                 <Label class="text-xs text-muted-foreground">{{ t('training.train.trainMode') }}</Label>
+                 <UiSelect v-model="trainMode" v-model:open="isTrainModeSelectOpen">
+                   <UiSelectTrigger class="h-8 text-xs bg-background w-full px-2 gap-2 outline-none ring-0 focus:outline-none focus:ring-0">
+                     <UiSelectValue :placeholder="t('training.train.trainModePlaceholder')" />
+                   </UiSelectTrigger>
+                   <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[200px]">
+                     <UiSelectItem value="by_pos_id">{{ t('training.train.trainModeByPosId') }}</UiSelectItem>
+                     <UiSelectItem value="by_category">{{ t('training.train.trainModeByCategory') }}</UiSelectItem>
+                   </UiSelectContent>
+                 </UiSelect>
+                 <p class="text-[10px] text-muted-foreground">{{ t('training.train.trainModeHint') }}</p>
                </div>
 
             </div>

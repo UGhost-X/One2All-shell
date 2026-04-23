@@ -585,6 +585,22 @@ const confirmDeleteProductAction = async () => {
   const id = productToDelete.value.id
   if (window.electronAPI) {
     try {
+      // 先获取该产品关联的所有推理服务并删除
+      const servicesRes = await fetch(getBackendUrl(`/deploy/http/services?project_id=${id}`))
+      if (servicesRes.ok) {
+        const servicesData = await servicesRes.json()
+        const services = servicesData.services || []
+        for (const service of services) {
+          try {
+            await fetch(getBackendUrl(`/deploy/http/service/${service.service_id}`), {
+              method: 'DELETE'
+            })
+          } catch (serviceErr) {
+            console.error(`Failed to delete service ${service.service_id}:`, serviceErr)
+          }
+        }
+      }
+      
       await window.electronAPI.deleteProduct(id)
       await fetchInitialData()
       
@@ -596,6 +612,9 @@ const confirmDeleteProductAction = async () => {
         viewerImageNatural.value = null
         resetViewer()
       }
+      
+      // 刷新推理服务列表
+      await fetchInferenceServices()
       
       showToast('产品已删除', 'info')
     } catch (err) {
@@ -3115,7 +3134,7 @@ onBeforeUnmount(() => {
             确认删除
           </UiCardTitle>
           <UiCardDescription>
-            确定要删除 "{{ productToDelete?.name }}" 吗？此操作将永久删除该产品及其所有关联图片，无法恢复。
+            确定要删除 "{{ productToDelete?.name }}" 吗？此操作将永久删除该产品及其所有关联图片和推理服务，无法恢复。
           </UiCardDescription>
         </UiCardHeader>
         <UiCardFooter class="flex justify-end gap-2">

@@ -290,7 +290,12 @@
       "allLabelsSelected": "未选择类别将训练全部",
       "allCategories": "所有分类",
       "numAugmentations": "增强图数量",
-      "maxConcurrent": "并发数量"
+      "maxConcurrent": "并发数量",
+      "trainMode": "训练模式",
+      "trainModePlaceholder": "选择训练模式",
+      "trainModeByPosId": "按位置ID训练",
+      "trainModeByCategory": "按类别训练",
+      "trainModeHint": "按位置ID训练会为每个位置创建独立模型；按类别训练会为每个类别创建统一模型"
     },
     "monitor": {
       "currentTask": "当前任务",
