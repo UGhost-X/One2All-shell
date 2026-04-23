@@ -1782,6 +1782,7 @@ const handleGainInput = (value: string | number) => {
 
 // Prediction Actions
 const showDetectionLabels = ref(true)
+const showDetectionBoxes = ref(true)
 const normalGroupCollapsed = ref(false)
 const anomalyGroupCollapsed = ref(false)
 
@@ -2364,7 +2365,8 @@ const drawDetectionBoxes = () => {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-  // const lineWidth = Math.max(2, Math.floor(canvas.width / 400))
+  // const lineWidth = Math.max(1, Math.floor(canvas.width / 400))
+  const lineWidth = 0.5
   const fontSize = Math.max(48, Math.min(24, Math.floor(canvas.width / 50)))
 
   detectionResults.value.forEach((det, index) => {
@@ -2373,7 +2375,7 @@ const drawDetectionBoxes = () => {
 
     const [x, y, w, h] = det.bbox
     const isNG = det.isAnomaly === true
-    const boxColor = isNG ? 'rgba(239, 68, 68, 0.8)' : 'rgba(34, 197, 94, 0.8)'
+    const boxColor = isNG ? '#ef4444' : '#22c55e'
     const textColor = isNG ? '#ef4444' : '#22c55e'
     const labelText = isNG ? 'NG' : 'OK'
 
@@ -2385,32 +2387,44 @@ const drawDetectionBoxes = () => {
         points.push([det.segmentation![i], det.segmentation![i + 1]])
       }
 
-      // ctx.strokeStyle = boxColor
-      // ctx.lineWidth = lineWidth
-      // ctx.beginPath()
-      // ctx.moveTo(points[0][0], points[0][1])
-      // for (let i = 1; i < points.length; i++) {
-      //   ctx.lineTo(points[i][0], points[i][1])
-      // }
-      // ctx.closePath()
-      // ctx.stroke()
+      // 绘制分割轮廓（如果启用）
+      if (showDetectionBoxes.value) {
+        ctx.strokeStyle = boxColor
+        ctx.lineWidth = lineWidth
+        ctx.beginPath()
+        ctx.moveTo(points[0][0], points[0][1])
+        for (let i = 1; i < points.length; i++) {
+          ctx.lineTo(points[i][0], points[i][1])
+        }
+        ctx.closePath()
+        ctx.stroke()
+      }
 
       const minX = Math.min(...points.map(p => p[0]))
       const minY = Math.min(...points.map(p => p[1]))
 
-      ctx.font = `bold ${fontSize}px sans-serif`
-      ctx.fillStyle = textColor
-      ctx.textBaseline = 'top'
-      ctx.fillText(labelText, minX, minY - fontSize - 2)
+      // 绘制标签（如果启用）
+      if (showDetectionLabels.value) {
+        ctx.font = `bold ${fontSize}px sans-serif`
+        ctx.fillStyle = textColor
+        ctx.textBaseline = 'top'
+        ctx.fillText(labelText, minX, minY - fontSize - 2)
+      }
     } else {
-      // ctx.strokeStyle = boxColor
-      // ctx.lineWidth = lineWidth
-      // ctx.strokeRect(x, y, w, h)
+      // 绘制矩形框（如果启用）
+      if (showDetectionBoxes.value) {
+        ctx.strokeStyle = boxColor
+        ctx.lineWidth = lineWidth
+        ctx.strokeRect(x, y, w, h)
+      }
 
-      ctx.font = `bold ${fontSize}px sans-serif`
-      ctx.fillStyle = textColor
-      ctx.textBaseline = 'top'
-      ctx.fillText(labelText, x, y - fontSize - 2)
+      // 绘制标签（如果启用）
+      if (showDetectionLabels.value) {
+        ctx.font = `bold ${fontSize}px sans-serif`
+        ctx.fillStyle = textColor
+        ctx.textBaseline = 'top'
+        ctx.fillText(labelText, x, y - fontSize - 2)
+      }
     }
   })
 }
@@ -2508,6 +2522,12 @@ watch(detectionResults, () => {
 }, { deep: true })
 
 watch(showDetectionLabels, () => {
+  if (detectionResults.value.length > 0) {
+    nextTick(() => drawDetectionBoxes())
+  }
+})
+
+watch(showDetectionBoxes, () => {
   if (detectionResults.value.length > 0) {
     nextTick(() => drawDetectionBoxes())
   }
@@ -2976,7 +2996,10 @@ onBeforeUnmount(() => {
                 <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.predictionResults') }}</span>
               </div>
               <div class="flex items-center gap-1">
-                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionLabels ? 'text-primary' : 'text-muted-foreground'" @click="showDetectionLabels = !showDetectionLabels">
+                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionBoxes ? 'text-primary' : 'text-muted-foreground'" @click="showDetectionBoxes = !showDetectionBoxes" :title="showDetectionBoxes ? '隐藏标注框' : '显示标注框'">
+                  <component :is="showDetectionBoxes ? Square : Square" class="h-3 w-3" />
+                </UiButton>
+                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionLabels ? 'text-primary' : 'text-muted-foreground'" @click="showDetectionLabels = !showDetectionLabels" :title="showDetectionLabels ? '隐藏标签' : '显示标签'">
                   <component :is="showDetectionLabels ? Eye : EyeOff" class="h-3 w-3" />
                 </UiButton>
                 <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click="clearResults">
