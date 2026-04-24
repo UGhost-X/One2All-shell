@@ -2871,7 +2871,7 @@ const trainConfig = ref({
   batchSize: [8]
 })
 
-const trainMode = ref<'by_pos_id' | 'by_category'>('by_pos_id')
+const trainMode = ref<'by_pos_id' | 'by_category'>('by_category')
 const isTrainModeSelectOpen = ref(false)
 
 const enabledAugmentations = computed(() => {
@@ -3991,8 +3991,8 @@ onBeforeUnmount(() => {
                      <UiSelectValue :placeholder="t('training.train.trainModePlaceholder')" />
                    </UiSelectTrigger>
                    <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[200px]">
-                     <UiSelectItem value="by_pos_id">{{ t('training.train.trainModeByPosId') }}</UiSelectItem>
                      <UiSelectItem value="by_category">{{ t('training.train.trainModeByCategory') }}</UiSelectItem>
+                     <UiSelectItem value="by_pos_id">{{ t('training.train.trainModeByPosId') }}</UiSelectItem>
                    </UiSelectContent>
                  </UiSelect>
                  <p class="text-[10px] text-muted-foreground">{{ t('training.train.trainModeHint') }}</p>
