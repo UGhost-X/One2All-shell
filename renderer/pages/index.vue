@@ -527,7 +527,8 @@ onMounted(async () => {
 })
 
 onActivated(async () => {
-  // 页面重新激活时，重新获取推理服务和标注数据
+  // 页面重新激活时，重新加载后端URL，然后获取推理服务和标注数据
+  await loadCameraServiceUrl()
   await fetchInferenceServices()
   await fetchProductAnnotations()
 })
@@ -794,6 +795,7 @@ const handleConnectCamera = async (camera: any) => {
     const cameraId = camera.name
     const config = camera.config ? JSON.parse(camera.config) : {}
     const result = await window.electronAPI.connectCamera(cameraId, {
+      ipAddress: camera.ip,
       vendor: config.vendor || 'Basler',
       exposureTime: exposureValue.value * 52,
       gain: gainValue.value,
@@ -826,19 +828,35 @@ const handleDisconnectCamera = async (camera: any) => {
     return
   }
   if (!window.electronAPI?.disconnectCamera) return
-  try {
-    const cameraId = camera.name
-    const result = await window.electronAPI.disconnectCamera(cameraId)
-    if (result.success) {
-      showToast('相机已断开', 'info')
-      await fetchInitialData()
-    } else {
-      showToast(result.error || '断开失败', 'error')
+
+  const cameraId = camera.name
+  const maxRetries = 3
+  let lastError = ''
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await window.electronAPI.disconnectCamera(cameraId)
+      if (result.success) {
+        showToast('相机已断开', 'info')
+        await fetchInitialData()
+        return
+      } else {
+        lastError = result.error || '断开失败'
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+      }
+    } catch (err: any) {
+      lastError = err.message || '断开相机失败'
+      console.error(`Failed to disconnect camera (attempt ${attempt}/${maxRetries}):`, err)
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
     }
-  } catch (err) {
-    console.error('Failed to disconnect camera:', err)
-    showToast('断开相机失败', 'error')
   }
+
+  showToast(`${lastError}，已重试${maxRetries}次`, 'error')
+  await fetchInitialData()
 }
 
 const handleCaptureFromCamera = async (camera: any) => {
@@ -852,74 +870,121 @@ const handleCaptureFromCamera = async (camera: any) => {
     return
   }
 
-  try {
-    const timestamp = new Date().getTime()
-    const cameraId = camera.name
-    const fileName = `capture_${cameraId}_${timestamp}.jpg`
+  const timestamp = new Date().getTime()
+  const cameraId = camera.name
+  const fileName = `capture_${cameraId}_${timestamp}.jpg`
+  const maxRetries = 3
+  let lastError = ''
+  let needReconnect = false
 
-    if (window.electronAPI?.updateCameraParameters) {
-      const actualExposure = exposureValue.value * 52
-      const config = camera.config ? JSON.parse(camera.config) : {}
-      await window.electronAPI.updateCameraParameters(cameraId, {
-        exposureTime: Math.round(actualExposure),
-        gain: Math.round(gainValue.value),
-        offsetX: Math.round(offsetXValue.value),
-        offsetY: Math.round(offsetYValue.value),
-        width: config.width,
-        height: config.height
-      })
-    }
-
-    const result = await window.electronAPI.captureFromCamera(cameraId)
-
-
-    let base64Data = null
-    if (result.success && result.data) {
-      base64Data = result.data.image_base64 || result.data.base64 || result.data.image || result.data
-    }
-
-    if (base64Data) {
-      const dataUrl = typeof base64Data === 'string'
-        ? `data:image/jpeg;base64,${base64Data}`
-        : `data:image/jpeg;base64,${base64Data}`
-
-      if (selectedProductHasImage.value && selectedProductHasAnnotation.value) {
-        await runCaptureInference(dataUrl)
-      } else {
-        const savedPath = await window.electronAPI.saveImage({
-          productId: selectedProductId.value,
-          fileName,
-          dataUrl
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      if (needReconnect && window.electronAPI?.connectCamera) {
+        showToast('相机正在重新连接...', 'info')
+        const config = camera.config ? JSON.parse(camera.config) : {}
+        const connectResult = await window.electronAPI.connectCamera(cameraId, {
+          vendor: config.vendor || 'Basler',
+          exposureTime: exposureValue.value * 52,
+          gain: gainValue.value,
+          offsetX: offsetXValue.value,
+          offsetY: offsetYValue.value,
+          width: widthValue.value || config.width,
+          height: heightValue.value || config.height,
         })
-
-        mainViewUrl.value = dataUrl
-        mainViewState.value = 'image'
-
-        const pid = selectedProductId.value
+        if (!connectResult.success) {
+          lastError = connectResult.error || '重新连接相机失败'
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 1000))
+            continue
+          }
+          break
+        }
+        needReconnect = false
         await fetchInitialData()
-        if (pid) {
-          selectedProductAnnotations.value = { placeholder: true }
-          await nextTick()
-          const updatedProduct = products.value.find(p => p.id === pid)
-          if (updatedProduct?.lastImagePath) {
-            try {
-              const annotations = await window.electronAPI.getAnnotations(pid, updatedProduct.lastImagePath)
-              selectedProductAnnotations.value = annotations
-            } catch {
-              selectedProductAnnotations.value = { placeholder: true }
-            }
+      }
+
+      if (window.electronAPI?.updateCameraParameters) {
+        const actualExposure = exposureValue.value * 52
+        const config = camera.config ? JSON.parse(camera.config) : {}
+        const paramResult = await window.electronAPI.updateCameraParameters(cameraId, {
+          exposureTime: Math.round(actualExposure),
+          gain: Math.round(gainValue.value),
+          offsetX: Math.round(offsetXValue.value),
+          offsetY: Math.round(offsetYValue.value)
+        })
+        if (paramResult.statusCode === 404) {
+          needReconnect = true
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 1000))
+            continue
           }
         }
-        showToast('拍照成功', 'info')
       }
-    } else {
-      console.error('Capture failed - no base64 data:', result)
-      showToast(result.error || result.message || '拍照失败', 'error')
+
+      const result = await window.electronAPI.captureFromCamera(cameraId)
+
+      if (result.statusCode === 404) {
+        needReconnect = true
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          continue
+        }
+      }
+
+      if (result.success && result.data) {
+        const base64Data = result.data.image_base64 || result.data.base64 || result.data.image || result.data
+        if (base64Data) {
+          const dataUrl = typeof base64Data === 'string'
+            ? `data:image/jpeg;base64,${base64Data}`
+            : `data:image/jpeg;base64,${base64Data}`
+
+          if (selectedProductHasImage.value && selectedProductHasAnnotation.value) {
+            await runCaptureInference(dataUrl)
+          } else {
+            const savedPath = await window.electronAPI.saveImage({
+              productId: selectedProductId.value,
+              fileName,
+              dataUrl
+            })
+
+            mainViewUrl.value = dataUrl
+            mainViewState.value = 'image'
+
+            const pid = selectedProductId.value
+            await fetchInitialData()
+            if (pid) {
+              selectedProductAnnotations.value = { placeholder: true }
+              await nextTick()
+              const updatedProduct = products.value.find(p => p.id === pid)
+              if (updatedProduct?.lastImagePath) {
+                try {
+                  const annotations = await window.electronAPI.getAnnotations(pid, updatedProduct.lastImagePath)
+                  selectedProductAnnotations.value = annotations
+                } catch {
+                  selectedProductAnnotations.value = { placeholder: true }
+                }
+              }
+            }
+            showToast('拍照成功', 'info')
+          }
+          return
+        }
+      }
+
+      lastError = result.error || result.message || '拍照失败'
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    } catch (err: any) {
+      lastError = err.message || '拍照失败'
+      console.error(`Failed to capture from camera (attempt ${attempt}/${maxRetries}):`, err)
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
     }
-  } catch (err) {
-    console.error('Failed to capture from camera:', err)
-    showToast('拍照失败', 'error')
   }
+
+  showToast(`${lastError}，已重试${maxRetries}次`, 'error')
 }
 
 const cameraServiceUrl = ref('')
@@ -928,8 +993,10 @@ const loadCameraServiceUrl = async () => {
   if (window.electronAPI?.getSettings) {
     try {
       const settings = await window.electronAPI.getSettings()
+      console.log('Loaded settings:', settings)
       if (settings?.backendUrl) {
         cameraServiceUrl.value = settings.backendUrl
+        console.log('Updated cameraServiceUrl to:', cameraServiceUrl.value)
       }
     } catch (err) {
       console.error('Failed to load camera service URL:', err)
@@ -958,6 +1025,7 @@ const stopCameraPreview = () => {
 const backendPort = '8000'
 const getBackendUrl = (path: string) => {
   const base = cameraServiceUrl.value.endsWith('/') ? cameraServiceUrl.value.slice(0, -1) : cameraServiceUrl.value
+  console.log('getBackendUrl called, base:', base, 'path:', path)
   return `${base}${path}`
 }
 
@@ -1016,6 +1084,7 @@ const saveCameraConfig = async () => {
   try {
     const config = {
       ...JSON.parse(editingCamera.value.config || '{}'),
+      ipAddress: editingCameraConfig.value.ip,
       vendor: editingCameraConfig.value.vendor,
       width: editingCameraConfig.value.width,
       height: editingCameraConfig.value.height,
@@ -1268,20 +1337,61 @@ const updateCameraSettings = async () => {
   const targetCamera = liveNetworkCamera.value || cameras.value.find(c => c.id === selectedCameraId.value)
   if (targetCamera && targetCamera.isNetworkCamera) {
     if (window.electronAPI?.updateCameraParameters) {
-      try {
-        const cameraId = targetCamera.name
-        const actualExposure = exposureValue.value * 52
-        const response = await window.electronAPI.updateCameraParameters(cameraId, {
-          exposureTime: Math.round(actualExposure),
-          gain: Math.round(gainValue.value),
-          offsetX: Math.round(offsetXValue.value),
-          offsetY: Math.round(offsetYValue.value)
-        })
-        if (isLiveStreaming.value && cameraPreviewUrl.value) {
-          cameraPreviewUrl.value = `${cameraServiceUrl.value}/camera/${cameraId}/preview?t=${Date.now()}`
+      const cameraId = targetCamera.name
+      const actualExposure = exposureValue.value * 52
+      const maxRetries = 3
+      let needReconnect = false
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          if (needReconnect && window.electronAPI?.connectCamera) {
+            const config = targetCamera.config ? JSON.parse(targetCamera.config) : {}
+            const connectResult = await window.electronAPI.connectCamera(cameraId, {
+              vendor: config.vendor || 'Basler',
+              exposureTime: actualExposure,
+              gain: gainValue.value,
+              offsetX: offsetXValue.value,
+              offsetY: offsetYValue.value,
+              width: widthValue.value || config.width,
+              height: heightValue.value || config.height,
+            })
+            if (!connectResult.success) {
+              console.error('重新连接相机失败:', connectResult.error)
+              if (attempt < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, 1000))
+                continue
+              }
+              break
+            }
+            needReconnect = false
+            await fetchInitialData()
+          }
+
+          const response = await window.electronAPI.updateCameraParameters(cameraId, {
+            exposureTime: Math.round(actualExposure),
+            gain: Math.round(gainValue.value),
+            offsetX: Math.round(offsetXValue.value),
+            offsetY: Math.round(offsetYValue.value)
+          })
+
+          if (response.statusCode === 404) {
+            needReconnect = true
+            if (attempt < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              continue
+            }
+          }
+
+          if (isLiveStreaming.value && cameraPreviewUrl.value) {
+            cameraPreviewUrl.value = `${cameraServiceUrl.value}/camera/${cameraId}/preview?t=${Date.now()}`
+          }
+          return
+        } catch (err) {
+          console.error(`Failed to update network camera parameters (attempt ${attempt}/${maxRetries}):`, err)
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 1000))
+          }
         }
-      } catch (err) {
-        console.error('Failed to update network camera parameters:', err)
       }
     }
     return

@@ -80,7 +80,7 @@ const handleSave = async () => {
     : `http://${remoteBackendIp.value}:${backendPort.value}`
 
   if (window.electronAPI?.saveSettings) {
-    await window.electronAPI.saveSettings({
+    const success = await window.electronAPI.saveSettings({
       dataPath: dataPath.value,
       locale: locale.value,
       backendMode: backendMode.value,
@@ -88,15 +88,18 @@ const handleSave = async () => {
       backendUrl: finalUrl,
       backendPort: backendPort.value
     })
+
+    if (success) {
+      showSavedMessage.value = true
+      setTimeout(() => {
+        showSavedMessage.value = false
+      }, 3000)
+    } else {
+      alert('保存设置失败，请重试')
+    }
   }
 
-  setTimeout(() => {
-    isSaving.value = false
-    showSavedMessage.value = true
-    setTimeout(() => {
-      showSavedMessage.value = false
-    }, 3000)
-  }, 500)
+  isSaving.value = false
 }
 
 const browseFolder = async () => {

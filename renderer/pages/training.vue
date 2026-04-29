@@ -2016,6 +2016,8 @@ watch(trainTasks, (tasks) => {
 
 
 onActivated(async () => {
+  await loadApiBase()
+
   if (productId.value) {
     await loadOriginalImages()
     if (window.electronAPI) {

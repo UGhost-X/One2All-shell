@@ -173,11 +173,9 @@ async function checkCameraServiceHealth() {
 }
 
 async function initCameraService(backendUrl) {
-
   cameraServiceUrl = backendUrl;
   const isReady = await checkCameraServiceHealth();
   cameraServiceReady = isReady;
-
   return isReady;
 }
 
@@ -193,6 +191,9 @@ async function makeCameraApiRequest(endpoint, options = {}) {
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
+          if (res.statusCode === 404) {
+            json.statusCode = 404;
+          }
           resolve(json);
         } catch (e) {
           resolve(data);
@@ -264,7 +265,9 @@ app.whenReady().then(async () => {
 
   let appSettings = await loadSettingsFromDb();
 
-  ipcMain.handle('settings:get', () => appSettings);
+  ipcMain.handle('settings:get', () => {
+    return appSettings;
+  });
   ipcMain.handle('settings:save', async (event, newSettings) => {
     try {
       const dataToSave = {
@@ -467,7 +470,6 @@ app.whenReady().then(async () => {
             const existingCam = dbCameras.find(c => c.name === cam.camera_id);
             if (existingCam) {
               existingCam.status = cam.connected ? 'online' : 'offline';
-              existingCam.ip = cam.ip_address;
               if (cam.resolution) {
                 existingCam.resolution = cam.resolution;
               }
@@ -555,17 +557,13 @@ app.whenReady().then(async () => {
         if (data.width) params.append('width', String(data.width));
         if (data.height) params.append('height', String(data.height));
 
-        const response = await makeCameraApiRequest(`/camera/${id}/config`, {
+        await makeCameraApiRequest(`/camera/${id}/config`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
+            'Content-Type': 'application-x-www-form-urlencoded'
           },
           body: params.toString()
         });
-
-        if (response.success) {
-          return response;
-        }
       } catch (err) {
         console.error('Failed to update camera config:', err);
       }
@@ -576,12 +574,13 @@ app.whenReady().then(async () => {
     });
   });
 
-  ipcMain.handle('camera:connect', async (event, { cameraId, vendor, exposureTime, gain, offsetX, offsetY, width, height }) => {
+  ipcMain.handle('camera:connect', async (event, { cameraId, ipAddress, vendor, exposureTime, gain, offsetX, offsetY, width, height }) => {
 
     if (cameraServiceReady) {
       try {
         const params = new URLSearchParams();
         params.append('vendor', vendor || 'Basler');
+        if (ipAddress) params.append('ip_address', ipAddress);
         if (exposureTime !== undefined && exposureTime !== null) params.append('exposure_time', String(Math.round(exposureTime)));
         if (gain !== undefined && gain !== null) params.append('gain', String(Math.round(gain)));
         if (offsetX !== undefined && offsetX !== null) params.append('offset_x', String(Math.round(offsetX)));
@@ -605,6 +604,7 @@ app.whenReady().then(async () => {
           const updatedConfig = {
             ...existingConfig,
             vendor: vendor || 'Basler',
+            ipAddress,
             exposureTime,
             gain,
             offsetX,
@@ -636,6 +636,9 @@ app.whenReady().then(async () => {
         return response;
       } catch (err) {
         console.error('Failed to disconnect camera:', err);
+        if (err.message === 'Request timeout') {
+          cameraServiceReady = false;
+        }
         return { success: false, error: err.message };
       }
     }

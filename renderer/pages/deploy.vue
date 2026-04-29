@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, inject, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, inject, watch, onActivated } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
@@ -957,6 +957,13 @@ onMounted(async () => {
 onUnmounted(() => {
   stopServicesPolling()
   stopLogsAutoRefresh()
+})
+
+onActivated(async () => {
+  await loadSettings()
+  if (productId.value) {
+    await loadServices()
+  }
 })
 
 watch(() => route.query.productId, async (newProductId) => {
