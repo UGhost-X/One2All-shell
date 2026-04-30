@@ -1082,6 +1082,10 @@ const saveCameraConfig = async () => {
   if (!editingCamera.value || !window.electronAPI) return
 
   try {
+    const editingCameraId = editingCamera.value.id
+    const wasOnline = editingCamera.value.isNetworkCamera && editingCamera.value.status === 'online'
+    const isSelectedCamera = editingCameraId === selectedCameraId.value
+
     const config = {
       ...JSON.parse(editingCamera.value.config || '{}'),
       ipAddress: editingCameraConfig.value.ip,
@@ -1101,7 +1105,21 @@ const saveCameraConfig = async () => {
 
     showCameraConfigModal.value = false
     await fetchInitialData()
-    showToast('相机配置已保存', 'info')
+
+    // 修复1：把最新相机数据同步回表单，解决 UI 不刷新问题
+    const updatedCamera = cameras.value.find(c => c.id === editingCameraId)
+    if (updatedCamera && isSelectedCamera) {
+      loadCameraSettingsToForm(updatedCamera)
+    }
+
+    // 修复2：只要相机之前在线就重连，不再依赖 isLiveStreaming
+    if (wasOnline && updatedCamera) {
+      showToast('相机配置已保存，正在重新连接...', 'info')
+      await handleDisconnectCamera(updatedCamera)
+      await handleConnectCamera(updatedCamera)
+    } else {
+      showToast('相机配置已保存', 'info')
+    }
   } catch (err) {
     console.error('Failed to save camera config:', err)
     showToast('保存相机配置失败', 'error')

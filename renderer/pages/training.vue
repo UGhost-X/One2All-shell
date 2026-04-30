@@ -1811,11 +1811,13 @@ const enrichedLoadedImages = (images: any[]) => {
   return (images || []).map((img: any) => ({
     ...img,
     annotations: (img.annotations || []).map((ann: any) => {
-      const labelInfo = labelConfigs.value[ann.categoryId - 1] || {}
+      const labelIdx = labelConfigs.value.findIndex(l => l.id === ann.labelId)
+      const categoryId = labelIdx !== -1 ? labelIdx + 1 : ann.categoryId || 1
+      const labelInfo = labelConfigs.value[categoryId - 1] || {}
       return {
         ...ann,
         color: labelInfo.color || '#3b82f6',
-        label: labelInfo.name || `Label ${ann.categoryId}`
+        label: labelInfo.name || `Label ${categoryId}`
       }
     })
   }))
@@ -2121,10 +2123,12 @@ const buildTrainCocoData = (results: any[]) => {
       } else {
         segmentation = [ann.points]
       }
+      const labelIdx = labelConfigs.value.findIndex(l => l.id === ann.labelId)
+      const category_id = labelIdx !== -1 ? labelIdx + 1 : 1
       return {
         id: annId++,
         image_id: idx + 1,
-        category_id: ann.categoryId || 1,
+        category_id,
         bbox,
         points: ann.points,
         rbbox: ann.rbbox,
@@ -2607,11 +2611,13 @@ const applyDatasetVersion = async (v: any) => {
         augmentedResults.value = loadResult.images.map((img: any) => ({
           ...img,
           annotations: img.annotations.map((ann: any) => {
-            const labelInfo = labelConfigs.value[ann.categoryId - 1] || {}
+            const labelIdx = labelConfigs.value.findIndex(l => l.id === ann.labelId)
+            const categoryId = labelIdx !== -1 ? labelIdx + 1 : ann.categoryId || 1
+            const labelInfo = labelConfigs.value[categoryId - 1] || {}
             return {
               ...ann,
               color: labelInfo.color || '#3b82f6',
-              label: labelInfo.name || `Label ${ann.categoryId}`
+              label: labelInfo.name || `Label ${categoryId}`
             }
           })
         }))
@@ -3075,7 +3081,8 @@ const handleAugment = async () => {
           points = seg
         }
 
-        const labelInfo = labelConfigs.value[ann.category_id - 1] || {}
+        const labelIdx = ann.category_id - 1
+        const labelInfo = labelConfigs.value[labelIdx] || {}
         return {
           id: ann.id || Math.random().toString(36).substr(2, 9),
           type,
@@ -3083,7 +3090,7 @@ const handleAugment = async () => {
           rbbox: ann.rbbox,
           color: ann.color || labelInfo.color || '#3b82f6',
           label: ann.label || labelInfo.name || 'unknown',
-          labelId: labelInfo.id,
+          labelId: labelInfo.id || ann.labelId,
           categoryId: ann.category_id,
           angle: ann.angle || 0,
           posId: ann.pos_id
