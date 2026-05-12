@@ -190,7 +190,18 @@ exports.Prisma.TrainingRecordScalarFieldEnum = {
   hasBestModel: 'hasBestModel',
   outputPath: 'outputPath',
   createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
+  updatedAt: 'updatedAt',
+  isRetrain: 'isRetrain',
+  baseTaskUuid: 'baseTaskUuid',
+  pathId: 'pathId',
+  taskChain: 'taskChain',
+  generation: 'generation',
+  fpCount: 'fpCount',
+  fnCount: 'fnCount',
+  encoderName: 'encoderName',
+  decoderDepth: 'decoderDepth',
+  epochs: 'epochs',
+  freezeEncoder: 'freezeEncoder'
 };
 
 exports.Prisma.AppSettingsScalarFieldEnum = {
@@ -202,6 +213,25 @@ exports.Prisma.AppSettingsScalarFieldEnum = {
   backendUrl: 'backendUrl',
   backendPort: 'backendPort',
   imageSettings: 'imageSettings',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+};
+
+exports.Prisma.RoiImageScalarFieldEnum = {
+  id: 'id',
+  productId: 'productId',
+  sourceTaskUuid: 'sourceTaskUuid',
+  category: 'category',
+  modelIsAnomaly: 'modelIsAnomaly',
+  userIsAnomaly: 'userIsAnomaly',
+  roiType: 'roiType',
+  filePath: 'filePath',
+  fileName: 'fileName',
+  thumbnailPath: 'thumbnailPath',
+  usedInRetrain: 'usedInRetrain',
+  usedTaskUuid: 'usedTaskUuid',
+  usedAt: 'usedAt',
+  generation: 'generation',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 };
@@ -224,7 +254,8 @@ exports.Prisma.ModelName = {
   DatasetVersion: 'DatasetVersion',
   Camera: 'Camera',
   TrainingRecord: 'TrainingRecord',
-  AppSettings: 'AppSettings'
+  AppSettings: 'AppSettings',
+  RoiImage: 'RoiImage'
 };
 
 /**

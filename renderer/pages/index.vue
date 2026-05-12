@@ -36,7 +36,8 @@ import {
   Unplug,
   Aperture,
   Package,
-  Usb
+  Usb,
+  AlertTriangle
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, onActivated, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
@@ -1739,16 +1740,17 @@ const runCaptureInference = async (dataUrl: string) => {
     return
   }
 
+  selectedInferenceService.value = inferenceServices.value[0]?.service_id || ''
   isInferring.value = true
   inferenceAbortController = new AbortController()
 
   try {
     const blob = await fetch(dataUrl).then(r => r.blob())
     const formData = new FormData()
-    formData.append('service_id', inferenceServices.value[0]?.service_id || '')
+    formData.append('service_id', selectedInferenceService.value)
     formData.append('file', blob, 'capture.jpg')
 
-    const selectedService = inferenceServices.value.find(s => s.service_id === inferenceServices.value[0]?.service_id)
+    const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
     const inferenceUrl = await getInferenceUrl(selectedService?.inference_url)
     const res = await fetch(`${inferenceUrl}/predict`, {
       method: 'POST',
@@ -1791,6 +1793,18 @@ const runCaptureInference = async (dataUrl: string) => {
     mainViewUrl.value = dataUrl
     mainViewState.value = 'image'
     showToast('拍照识别完成', 'info')
+    
+    // 自动保存ROI（拍照识别后）
+    if (detectionResults.value.length > 0 && selectedProductId.value) {
+      const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
+      const taskUuid = selectedService?.task_uuid || 'unknown'
+      // 先为每个结果设置 modelIsAnomaly
+      detectionResults.value = detectionResults.value.map(r => ({
+        ...r,
+        modelIsAnomaly: r.isAnomaly
+      }))
+      await autoSaveRoiImages(dataUrl, detectionResults.value, taskUuid)
+    }
   } catch (err) {
     console.error('Capture inference error:', err)
     showToast('拍照识别失败', 'error')
@@ -1919,9 +1933,9 @@ const treeCollapsedState = ref<Record<string, boolean>>({})
 
 // 按 anomaly_type -> category -> pos_id 层级分组的计算属性
 const groupedDetectionResults = computed(() => {
-  const groups: Record<string, Record<string, Record<string, typeof detectionResults.value[0][]>>> = {}
+  const groups: Record<string, Record<string, Record<string, Array<{ item: typeof detectionResults.value[0]; index: number }>>>> = {}
 
-  detectionResults.value.forEach((item) => {
+  detectionResults.value.forEach((item, index) => {
     const rawType = item.anomaly_type || '未知类型'
     const type = rawType === 'normal' ? 'OK' : 'NG'
     const cat = item.category || '未知类别'
@@ -1938,7 +1952,7 @@ const groupedDetectionResults = computed(() => {
     if (!groups[type][cat][pos]) {
       groups[type][cat][pos] = []
     }
-    groups[type][cat][pos].push(item)
+    groups[type][cat][pos].push({ item, index })
   })
 
   return groups
@@ -1948,6 +1962,12 @@ const groupedDetectionResults = computed(() => {
 const highlightedIndex = ref<number | null>(null)
 let highlightTimer: NodeJS.Timeout | null = null
 let breatheAnimationId: number | null = null
+
+// 右键菜单状态
+const contextMenuVisible = ref(false)
+const contextMenuX = ref(0)
+const contextMenuY = ref(0)
+const contextMenuTargetIndex = ref<number | null>(null)
 
 // 双击高亮检测框
 const highlightDetectionBox = (index: number) => {
@@ -1987,6 +2007,7 @@ const clearResults = () => {
   normalGroupCollapsed.value = false
   anomalyGroupCollapsed.value = false
   highlightedIndex.value = null
+  contextMenuVisible.value = false
   if (highlightTimer) {
     clearTimeout(highlightTimer)
     highlightTimer = null
@@ -1994,6 +2015,261 @@ const clearResults = () => {
   if (breatheAnimationId) {
     cancelAnimationFrame(breatheAnimationId)
     breatheAnimationId = null
+  }
+}
+
+const handleCanvasContextMenu = (e: MouseEvent) => {
+  e.preventDefault()
+  const canvas = detectionCanvasRef.value
+  const img = viewerImageRef.value
+  if (!canvas || !img || detectionResults.value.length === 0) return
+
+  const rect = canvas.getBoundingClientRect()
+  const scaleX = img.naturalWidth / rect.width
+  const scaleY = img.naturalHeight / rect.height
+  const mouseX = (e.clientX - rect.left) * scaleX
+  const mouseY = (e.clientY - rect.top) * scaleY
+
+  const fontSize = Math.max(48, Math.min(24, Math.floor(img.naturalWidth / 50)))
+  const padding = 4
+
+  for (let i = 0; i < detectionResults.value.length; i++) {
+    const det = detectionResults.value[i]
+    if (det.label === '工件主体') continue
+    if (det.visible === false) continue
+
+    const hasSegmentation = det.segmentation && det.segmentation.length >= 8
+    let labelX: number, labelY: number
+
+    if (hasSegmentation) {
+      const points: [number, number][] = []
+      for (let j = 0; j < det.segmentation!.length; j += 2) {
+        points.push([det.segmentation![j], det.segmentation![j + 1]])
+      }
+      labelX = Math.min(...points.map(p => p[0]))
+      labelY = Math.min(...points.map(p => p[1])) - fontSize - 2
+    } else {
+      const [x, y] = det.bbox
+      labelX = x
+      labelY = y - fontSize - 2
+    }
+
+    const textWidth = fontSize * 2
+    const textHeight = fontSize + padding * 2
+
+    if (
+      mouseX >= labelX &&
+      mouseX <= labelX + textWidth &&
+      mouseY >= labelY - padding &&
+      mouseY <= labelY + textHeight
+    ) {
+      contextMenuVisible.value = true
+      contextMenuX.value = e.clientX
+      contextMenuY.value = e.clientY
+      contextMenuTargetIndex.value = i
+      return
+    }
+  }
+
+  contextMenuVisible.value = false
+}
+
+// 标记NG/OK时更新ROI类型
+const handleToggleAnomaly = async (index: number, isAnomaly: boolean) => {
+  if (index >= 0 && index < detectionResults.value.length) {
+    const item = { ...detectionResults.value[index] }
+    
+    // 保存模型原始判断（如果还没有保存）
+    if (item.modelIsAnomaly === undefined) {
+      item.modelIsAnomaly = item.isAnomaly
+    }
+    
+    item.isAnomaly = isAnomaly
+    item.anomaly_type = isAnomaly ? 'anomaly' : 'normal'
+    
+    // 如果有ROI记录，更新ROI类型
+    if (item.roiId && selectedProductId.value) {
+      const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
+      const taskUuid = selectedService?.task_uuid || 'unknown'
+      
+      try {
+        const result = await window.electronAPI.updateRoiType({
+          productId: selectedProductId.value,
+          taskUuid: taskUuid,
+          category: item.category || item.label || 'unknown',
+          fileName: item.roiFileName || `image_${item.roiId}.jpg`,
+          userIsAnomaly: isAnomaly
+        })
+        
+        if (result.success) {
+          item.roiType = result.roiType
+          console.log(`ROI ${item.roiId} updated to type: ${result.roiType}`)
+        }
+      } catch (err) {
+        console.error('Failed to update ROI type:', err)
+      }
+    }
+    
+    detectionResults.value[index] = item
+    detectionResults.value = [...detectionResults.value]
+    nextTick(() => drawDetectionBoxes())
+  }
+  contextMenuVisible.value = false
+}
+
+const showToggleConfirmModal = ref(false)
+const toggleConfirmIndex = ref<number | null>(null)
+const toggleConfirmValue = ref<boolean>(false)
+
+const handleToggleAnomalyWithConfirm = (index: number, isAnomaly: boolean) => {
+  toggleConfirmIndex.value = index
+  toggleConfirmValue.value = isAnomaly
+  showToggleConfirmModal.value = true
+}
+
+const confirmToggleAnomaly = () => {
+  if (toggleConfirmIndex.value !== null) {
+    handleToggleAnomaly(toggleConfirmIndex.value, toggleConfirmValue.value)
+  }
+  showToggleConfirmModal.value = false
+}
+
+const handleGlobalClick = () => {
+  contextMenuVisible.value = false
+}
+
+// 格式化日期为 YYYY-MM-DD hh:mm:ss
+const formatDateTime = (date: Date): string => {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+// 手动保存ROI - 只保存用户修改过标签的ROI
+// 保存路径: extra-picture/{taskUuid}/{datetime}/{category}/NG|OK
+const handleSaveRoiImages = async () => {
+  if (!selectedProductId.value || detectionResults.value.length === 0) return
+
+  const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
+  const taskUuid = selectedService?.task_uuid || 'unknown'
+  const imageUrl = mainViewUrl.value
+
+  if (!imageUrl) {
+    showToast('没有可保存的图片', 'error')
+    return
+  }
+
+  try {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = reject
+      img.src = imageUrl
+    })
+
+    const roiImages = []
+    const now = new Date()
+    const requestTime = formatDateTime(now)
+
+    for (let i = 0; i < detectionResults.value.length; i++) {
+      const det = detectionResults.value[i]
+      if (det.label === '工件主体') continue
+
+      // 只保存用户修改过的ROI（modelIsAnomaly 和 userIsAnomaly 不一致）
+      const modelIsAnomaly = det.modelIsAnomaly ?? det.isAnomaly
+      const userIsAnomaly = det.isAnomaly
+      
+      console.log(`[Manual Save] Checking ROI ${i}:`, {
+        label: det.label,
+        modelIsAnomaly,
+        userIsAnomaly,
+        isModified: modelIsAnomaly !== userIsAnomaly
+      })
+      
+      // 如果模型判断和用户判断一致，说明用户没有修改，跳过
+      if (modelIsAnomaly === userIsAnomaly) continue
+
+      const hasSegmentation = det.segmentation && det.segmentation.length >= 8
+      let minX: number, minY: number, width: number, height: number
+
+      if (hasSegmentation) {
+        // 使用 segmentation 计算包围盒
+        const points: [number, number][] = []
+        for (let j = 0; j < det.segmentation!.length; j += 2) {
+          points.push([det.segmentation![j], det.segmentation![j + 1]])
+        }
+        minX = Math.min(...points.map(p => p[0]))
+        minY = Math.min(...points.map(p => p[1]))
+        const maxX = Math.max(...points.map(p => p[0]))
+        const maxY = Math.max(...points.map(p => p[1]))
+        width = maxX - minX
+        height = maxY - minY
+      } else {
+        // 使用 bbox
+        const [x, y, w, h] = det.bbox
+        minX = x
+        minY = y
+        width = w
+        height = h
+      }
+
+      if (width <= 0 || height <= 0) continue
+
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(width)
+      canvas.height = Math.round(height)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) continue
+
+      ctx.drawImage(img, minX, minY, width, height, 0, 0, width, height)
+
+      const base64 = canvas.toDataURL('image/jpeg', 0.95)
+      
+      roiImages.push({
+        category: det.category || det.label || 'unknown',
+        isAnomaly: userIsAnomaly,  // 以用户判断为准
+        modelIsAnomaly: modelIsAnomaly,  // 模型原始判断
+        userIsAnomaly: userIsAnomaly,     // 用户当前判断
+        base64
+      })
+    }
+
+    if (roiImages.length === 0) {
+      showToast('没有用户修改过的ROI需要保存', 'warning')
+      return
+    }
+
+    const result = await window.electronAPI.saveRoiImages({
+      productId: selectedProductId.value,
+      taskUuid,
+      images: roiImages,
+      mode: 'manual',  // 手动保存模式
+      requestTime
+    })
+
+    if (result.success) {
+      showToast(`已保存 ${roiImages.length} 个修改过的ROI图片`, 'success')
+      // 保存ROI记录ID到detectionResults，用于后续更新
+      let roiIndex = 0
+      for (let i = 0; i < detectionResults.value.length; i++) {
+        const det = detectionResults.value[i]
+        if (det.label === '工件主体') continue
+        const modelIsAnomaly = det.modelIsAnomaly ?? det.isAnomaly
+        const userIsAnomaly = det.isAnomaly
+        if (modelIsAnomaly === userIsAnomaly) continue  // 跳过未修改的
+        
+        if (roiIndex < result.rois.length) {
+          det.roiId = result.rois[roiIndex].id
+          det.roiType = result.rois[roiIndex].roiType
+          roiIndex++
+        }
+      }
+    } else {
+      showToast('保存ROI失败: ' + result.error, 'error')
+    }
+  } catch (err) {
+    console.error('Failed to save ROI images:', err)
+    showToast('保存ROI失败', 'error')
   }
 }
 
@@ -2053,6 +2329,94 @@ const cropImageBySegmentation = (imageUrl: string, segmentation: number[]): Prom
     img.onerror = () => reject(new Error('Failed to load image'))
     img.src = imageUrl
   })
+}
+
+// 自动保存ROI - 每次推理请求后自动保存所有ROI
+// 保存路径: request-result/{taskUuid}/{datetime}/{category}/NG|OK
+const autoSaveRoiImages = async (imageUrl: string, results: any[], taskUuid: string) => {
+  console.log('[Auto Save] Function called:', { imageUrl: !!imageUrl, resultsCount: results.length, taskUuid })
+  
+  if (!selectedProductId.value || results.length === 0) {
+    console.log('[Auto Save] Early return:', { hasProductId: !!selectedProductId.value, resultsCount: results.length })
+    return
+  }
+
+  try {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = reject
+      img.src = imageUrl
+    })
+
+    const roiImages = []
+    const now = new Date()
+    const requestTime = formatDateTime(now)
+
+    for (let i = 0; i < results.length; i++) {
+      const det = results[i]
+      if (det.label === '工件主体') continue
+
+      const hasSegmentation = det.segmentation && det.segmentation.length >= 8
+      let minX: number, minY: number, width: number, height: number
+
+      if (hasSegmentation) {
+        const points: [number, number][] = []
+        for (let j = 0; j < det.segmentation!.length; j += 2) {
+          points.push([det.segmentation![j], det.segmentation![j + 1]])
+        }
+        minX = Math.min(...points.map(p => p[0]))
+        minY = Math.min(...points.map(p => p[1]))
+        const maxX = Math.max(...points.map(p => p[0]))
+        const maxY = Math.max(...points.map(p => p[1]))
+        width = maxX - minX
+        height = maxY - minY
+      } else {
+        const [x, y, w, h] = det.bbox
+        minX = x
+        minY = y
+        width = w
+        height = h
+      }
+
+      if (width <= 0 || height <= 0) continue
+
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(width)
+      canvas.height = Math.round(height)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) continue
+
+      ctx.drawImage(img, minX, minY, width, height, 0, 0, width, height)
+
+      const base64 = canvas.toDataURL('image/jpeg', 0.95)
+      
+      const modelIsAnomaly = det.modelIsAnomaly ?? det.isAnomaly
+      
+      roiImages.push({
+        category: det.category || det.label || 'unknown',
+        isAnomaly: modelIsAnomaly,
+        modelIsAnomaly: modelIsAnomaly,
+        userIsAnomaly: modelIsAnomaly,  // 初始时用户判断与模型一致
+        base64
+      })
+    }
+
+    if (roiImages.length === 0) return
+
+    await window.electronAPI.saveRoiImages({
+      productId: selectedProductId.value,
+      taskUuid,
+      images: roiImages,
+      mode: 'auto',  // 自动保存模式
+      requestTime
+    })
+
+    console.log(`[Auto Save] Saved ${roiImages.length} ROI images to request-result/${taskUuid}/${requestTime}`)
+  } catch (err) {
+    console.error('[Auto Save] Failed to save ROI images:', err)
+  }
 }
 
 const openInferenceModal = () => {
@@ -2462,7 +2826,28 @@ const runInference = async () => {
           const maxScore = Math.max(...predictionResults.value.map(r => r.score))
           predictionConfidence.value = maxScore
         }
-      } 
+      }
+
+      // 自动保存ROI（每次推理请求后）
+      console.log('[Auto Save] Checking conditions:', {
+        detectionResultsCount: detectionResults.value.length,
+        hasProductId: !!selectedProductId.value,
+        hasInferenceService: !!selectedInferenceService.value
+      })
+      if (detectionResults.value.length > 0 && selectedProductId.value) {
+        const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
+        const taskUuid = selectedService?.task_uuid || 'unknown'
+        const imageToUse = inferenceImageUrl.value || mainViewUrl.value
+        console.log('[Auto Save] Triggering auto save:', { taskUuid, hasImage: !!imageToUse })
+        if (imageToUse) {
+          // 先为每个结果设置 modelIsAnomaly
+          detectionResults.value = detectionResults.value.map(r => ({
+            ...r,
+            modelIsAnomaly: r.isAnomaly
+          }))
+          await autoSaveRoiImages(imageToUse, detectionResults.value, taskUuid)
+        }
+      }
   } catch (err: any) {
     if (err.name === 'AbortError' || err.name === 'DOMException') {
       return
@@ -2481,6 +2866,7 @@ const runInference = async () => {
 
 // 绘制检测框
 const drawDetectionBoxes = () => {
+  console.log('drawDetectionBoxes called, results:', detectionResults.value.map(d => ({ label: d.label, isAnomaly: d.isAnomaly, anomaly_type: d.anomaly_type })))
   const canvas = detectionCanvasRef.value
   const img = viewerImageRef.value
   if (!canvas || !img) return
@@ -2506,6 +2892,7 @@ const drawDetectionBoxes = () => {
     const boxColor = isNG ? '#ef4444' : '#22c55e'
     const textColor = isNG ? '#ef4444' : '#22c55e'
     const labelText = isNG ? 'NG' : 'OK'
+    console.log(`Drawing item ${index}: ${labelText}, isAnomaly=${det.isAnomaly}`)
 
     const hasSegmentation = det.segmentation && det.segmentation.length >= 8
 
@@ -2675,12 +3062,17 @@ watch(
 
 onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', syncFullscreenState)
+  document.removeEventListener('click', handleGlobalClick)
   viewerResizeObserver?.disconnect()
   viewerResizeObserver = null
   if (inferenceAbortController) {
     inferenceAbortController.abort()
     inferenceAbortController = null
   }
+})
+
+onMounted(() => {
+  document.addEventListener('click', handleGlobalClick)
 })
 </script>
 
@@ -2717,8 +3109,55 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-else-if="mainViewState === 'image'" class="flex-1 min-w-0 min-h-0 relative bg-black/5 overflow-hidden">
-          <div class="absolute inset-0 p-6">
+        <div v-else-if="mainViewState === 'image'" class="flex-1 min-w-0 min-h-0 flex flex-col bg-black/5 overflow-hidden">
+          <!-- Toolbar -->
+          <div class="shrink-0 h-12 bg-background border-b border-r flex items-center justify-center px-4">
+            <div class="flex items-center gap-1">
+              <UiButton variant="ghost" size="icon" class="h-8 w-8" title="缩小" @click="zoomOutCenter">
+                <ZoomOut class="h-4 w-4" />
+              </UiButton>
+              <div class="px-2 text-[11px] font-mono tabular-nums text-muted-foreground min-w-[56px] text-center font-bold">
+                {{ viewerZoomLabel }}
+              </div>
+              <UiButton variant="ghost" size="icon" class="h-8 w-8" title="放大" @click="zoomInCenter">
+                <ZoomIn class="h-4 w-4" />
+              </UiButton>
+              
+              <Separator orientation="vertical" class="h-6 mx-1" />
+              
+              <UiButton variant="ghost" size="icon" class="h-8 w-8" title="左转 90°" @click="rotateLeft">
+                <RotateCcw class="h-4 w-4" />
+              </UiButton>
+              <UiButton variant="ghost" size="icon" class="h-8 w-8" title="右转 90°" @click="rotateRight">
+                <RotateCw class="h-4 w-4" />
+              </UiButton>
+              <UiButton variant="ghost" size="icon" class="h-8 w-8" title="重置视图" @click="resetViewer">
+                <RefreshCcw class="h-4 w-4" />
+              </UiButton>
+              
+              <Separator orientation="vertical" class="h-6 mx-1" />
+              
+              <UiButton variant="ghost" size="icon" class="h-8 w-8" title="全屏" @click="toggleFullscreen">
+                <component :is="viewerIsFullscreen ? Minimize2 : Maximize2" class="h-4 w-4" />
+              </UiButton>
+
+              <Separator orientation="vertical" class="h-6 mx-1" />
+
+              <UiButton
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8"
+                title="保存ROI"
+                :disabled="detectionResults.length === 0 || !selectedProductId"
+                @click="handleSaveRoiImages"
+              >
+                <Download class="h-4 w-4" />
+              </UiButton>
+            </div>
+          </div>
+
+          <!-- Canvas Area -->
+          <div class="flex-1 p-6 min-h-0 border-r">
             <div
               ref="viewerViewportRef"
               class="relative w-full h-full rounded-lg bg-background/40 overflow-hidden shadow-2xl select-none touch-none"
@@ -2728,7 +3167,8 @@ onBeforeUnmount(() => {
               @pointerup="onViewerPointerUp"
               @pointercancel="onViewerPointerUp"
               @wheel.prevent="onViewerWheel"
-            >              <div class="absolute left-1/2 top-1/2 will-change-transform" :style="viewerTransformStyle">
+            >
+              <div class="absolute left-1/2 top-1/2 will-change-transform" :style="viewerTransformStyle">
                 <img
                   ref="viewerImageRef"
                   :src="mainViewUrl"
@@ -2742,86 +3182,35 @@ onBeforeUnmount(() => {
                 <canvas
                   v-if="detectionResults.length > 0"
                   ref="detectionCanvasRef"
-                  class="absolute top-0 left-0 pointer-events-none"
+                  class="absolute top-0 left-0"
                   :style="viewerImageStyle"
+                  @contextmenu.prevent="handleCanvasContextMenu"
                 />
               </div>
-
-              <!-- Floating Toolbar Container -->
-              <div 
-                class="absolute top-0 left-0 right-0 h-20 z-30 flex justify-center items-start pt-3 pointer-events-none"
-                @mouseenter="handleToolbarHover(true)"
-                @mouseleave="handleToolbarHover(false)"
+              <!-- 右键菜单 -->
+              <div
+                v-if="contextMenuVisible"
+                class="fixed z-50 bg-popover border rounded-md shadow-md py-1 min-w-[120px]"
+                :style="{ left: contextMenuX + 'px', top: contextMenuY + 'px' }"
+                @mousedown.stop
               >
-                <Transition
-                  enter-active-class="transition duration-300 ease-out"
-                  enter-from-class="transform -translate-y-full opacity-0"
-                  enter-to-class="transform translate-y-0 opacity-100"
-                  leave-active-class="transition duration-200 ease-in"
-                  leave-from-class="transform translate-y-0 opacity-100"
-                  leave-to-class="transform -translate-y-full opacity-0"
+                <button
+                  v-if="contextMenuTargetIndex !== null && detectionResults[contextMenuTargetIndex]?.isAnomaly"
+                  class="w-full px-3 py-2 text-sm text-left hover:bg-muted transition-colors flex items-center gap-2"
+                  @mousedown.stop="handleToggleAnomaly(contextMenuTargetIndex!, false)"
                 >
-                  <div
-                    v-if="isToolbarFixed || isToolbarHovered"
-                    class="flex items-center gap-1 bg-background/90 backdrop-blur-md border rounded-xl p-1.5 shadow-2xl pointer-events-auto ring-1 ring-black/5"
-                    @pointerdown.stop
-                    @wheel.stop
-                  >
-                    <div class="flex items-center gap-0.5 px-1 mr-1">
-                      <UiButton 
-                        variant="ghost" 
-                        size="icon" 
-                        class="h-8 w-8 transition-colors"
-                        :class="isToolbarFixed ? 'text-primary bg-primary/10' : 'text-muted-foreground'"
-                        :title="isToolbarFixed ? '取消固定' : '固定工具栏'" 
-                        @click="isToolbarFixed = !isToolbarFixed"
-                      >
-                        <component :is="isToolbarFixed ? PinOff : Pin" class="h-4 w-4" />
-                      </UiButton>
-                    </div>
-
-                    <Separator orientation="vertical" class="h-6 mr-1" />
-
-                    <UiButton variant="ghost" size="icon" class="h-8 w-8" title="缩小" @click="zoomOutCenter">
-                      <ZoomOut class="h-4 w-4" />
-                    </UiButton>
-                    <div class="px-2 text-[11px] font-mono tabular-nums text-muted-foreground min-w-[56px] text-center font-bold">
-                      {{ viewerZoomLabel }}
-                    </div>
-                    <UiButton variant="ghost" size="icon" class="h-8 w-8" title="放大" @click="zoomInCenter">
-                      <ZoomIn class="h-4 w-4" />
-                    </UiButton>
-                    
-                    <Separator orientation="vertical" class="h-6 mx-1" />
-                    
-                    <UiButton variant="ghost" size="icon" class="h-8 w-8" title="左转 90°" @click="rotateLeft">
-                      <RotateCcw class="h-4 w-4" />
-                    </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-8 w-8" title="右转 90°" @click="rotateRight">
-                      <RotateCw class="h-4 w-4" />
-                    </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-8 w-8" title="重置视图" @click="resetViewer">
-                      <RefreshCcw class="h-4 w-4" />
-                    </UiButton>
-                    
-                    <Separator orientation="vertical" class="h-6 mx-1" />
-                    
-                    <UiButton variant="ghost" size="icon" class="h-8 w-8" title="全屏" @click="toggleFullscreen">
-                      <component :is="viewerIsFullscreen ? Minimize2 : Maximize2" class="h-4 w-4" />
-                    </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-8 w-8" title="截图" @click="captureScreenshot">
-                      <Download class="h-4 w-4" />
-                    </UiButton>
-                  </div>
-                </Transition>
+                  <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                  标记为 OK
+                </button>
+                <button
+                  v-if="contextMenuTargetIndex !== null && !detectionResults[contextMenuTargetIndex]?.isAnomaly"
+                  class="w-full px-3 py-2 text-sm text-left hover:bg-muted transition-colors flex items-center gap-2"
+                  @mousedown.stop="handleToggleAnomaly(contextMenuTargetIndex!, true)"
+                >
+                  <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                  标记为 NG
+                </button>
               </div>
-
-              <!-- Hover Trigger Area (Invisible when toolbar is hidden) -->
-              <div 
-                v-if="!isToolbarFixed && !isToolbarHovered"
-                class="absolute top-0 left-1/4 right-1/4 h-6 z-20 pointer-events-auto"
-                @mouseenter="handleToolbarHover(true)"
-              ></div>
             </div>
           </div>
         </div>
@@ -3190,9 +3579,9 @@ onBeforeUnmount(() => {
                           <!-- 叶子节点: 显示 anomaly_score -->
                           <div v-show="!treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]" class="border-t border-border/20">
                             <div
-                              v-for="(item, idx) in items"
+                              v-for="({ item, index: itemIndex }, idx) in items"
                               :key="idx"
-                              @dblclick="highlightDetectionBox(detectionResults.indexOf(item))"
+                              @dblclick="highlightDetectionBox(itemIndex)"
                               class="px-3 py-1.5 pl-16 flex items-center justify-between hover:bg-muted/10 cursor-pointer group"
                             >
                               <div class="flex items-center gap-2">
@@ -3206,6 +3595,16 @@ onBeforeUnmount(() => {
                                 <span class="text-[11px] text-muted-foreground">异常得分:</span>
                               </div>
                               <div class="flex items-center gap-2">
+                                <UiButton
+                                  variant="ghost"
+                                  size="sm"
+                                  class="h-5 px-2 text-[10px] font-bold gap-1"
+                                  :class="item.isAnomaly ? 'text-red-500 hover:text-red-600 hover:bg-red-50' : 'text-green-500 hover:text-green-600 hover:bg-green-50'"
+                                  @click.stop="handleToggleAnomalyWithConfirm(itemIndex, !item.isAnomaly)"
+                                >
+                                  <span class="w-1.5 h-1.5 rounded-full" :class="item.isAnomaly ? 'bg-red-500' : 'bg-green-500'"></span>
+                                  {{ item.isAnomaly ? 'NG' : 'OK' }}
+                                </UiButton>
                                 <span
                                   class="text-[11px] font-mono font-medium"
                                   :class="item.isAnomaly ? 'text-red-500' : 'text-green-500'"
@@ -3296,6 +3695,25 @@ onBeforeUnmount(() => {
         <UiCardFooter class="flex justify-end gap-2">
           <UiButton variant="outline" @click="showDeleteModal = false">取消</UiButton>
           <UiButton variant="destructive" @click="confirmDeleteProductAction">确认删除</UiButton>
+        </UiCardFooter>
+      </UiCard>
+    </div>
+
+    <!-- 确认切换 NG/OK 弹窗 -->
+    <div v-if="showToggleConfirmModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
+        <UiCardHeader class="space-y-2">
+          <UiCardTitle class="text-lg flex items-center gap-2">
+            <AlertTriangle class="h-5 w-5 text-primary" />
+            确认切换
+          </UiCardTitle>
+          <UiCardDescription>
+            确定要将此检测结果从 {{ toggleConfirmValue ? 'OK' : 'NG' }} 切换为 {{ toggleConfirmValue ? 'NG' : 'OK' }} 吗？
+          </UiCardDescription>
+        </UiCardHeader>
+        <UiCardFooter class="flex justify-end gap-2">
+          <UiButton variant="outline" @click="showToggleConfirmModal = false">取消</UiButton>
+          <UiButton variant="default" @click="confirmToggleAnomaly">确认切换</UiButton>
         </UiCardFooter>
       </UiCard>
     </div>

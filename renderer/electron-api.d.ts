@@ -36,6 +36,7 @@ declare global {
       getProductImages: (productId: string) => Promise<string[]>
       saveDataset: (data: { productId: string; versionName: string; moduleName: string; images: any[]; cocoData: any }) => Promise<any>
       loadDataset: (params: { id?: string; savePath?: string }) => Promise<any>
+      saveRoiImages: (data: { productId: string; taskUuid: string; images: Array<{ category: string; isAnomaly: boolean; base64: string }> }) => Promise<{ success: boolean; error?: string }>
       saveDatasetVersion: (data: any) => Promise<any>
       getDatasetVersions: (productId: string) => Promise<any[]>
       deleteDatasetVersion: (id: string) => Promise<any>
@@ -44,8 +45,36 @@ declare global {
       getTrainingRecord: (taskId: string, labelName?: string) => Promise<TrainingRecord | null>
       getTrainingRecordsByTaskUuid: (taskUuid: string) => Promise<TrainingRecord[]>
       deleteTrainingRecord: (taskId: string, labelName?: string) => Promise<any>
+      // ROI Management
+      updateRoiType: (data: { productId: string; taskUuid: string; category: string; fileName: string; userIsAnomaly: boolean }) => Promise<{ success: boolean; roiType?: string; error?: string }>
+      getAvailableRois: (data: { productId: string; baseTaskUuid: string; roiType?: 'FP' | 'FN' }) => Promise<{ success: boolean; rois?: RoiImage[]; error?: string }>
+      markRoisUsed: (data: { roiIds: string[]; usedTaskUuid: string }) => Promise<{ success: boolean; error?: string }>
+      // Retrain Tasks - 使用 TrainingRecord
+      createRetrainTask: (data: any) => Promise<{ success: boolean; task?: TrainingRecord; error?: string }>
+      updateRetrainTask: (data: { taskId: string; status: string; message?: string }) => Promise<{ success: boolean; task?: TrainingRecord; error?: string }>
+      getRetrainTasks: (data: { productId?: string; baseTaskUuid?: string }) => Promise<{ success: boolean; tasks?: TrainingRecord[]; error?: string }>
+      getRetrainTask: (data: { taskUuid: string }) => Promise<{ success: boolean; task?: TrainingRecord; error?: string }>
     }
   }
+}
+
+interface RoiImage {
+  id: string
+  productId: string
+  sourceTaskUuid: string
+  category: string
+  modelIsAnomaly: boolean
+  userIsAnomaly: boolean
+  roiType: 'FP' | 'FN' | 'NORMAL'
+  filePath: string
+  fileName: string
+  thumbnailPath?: string
+  usedInRetrain: boolean
+  usedTaskUuid?: string
+  usedAt?: Date
+  generation: number
+  createdAt: Date
+  updatedAt: Date
 }
 
 interface TrainingRecordData {
@@ -64,6 +93,18 @@ interface TrainingRecordData {
   outputPath?: string
   startedAt?: Date
   completedAt?: Date
+  // 重训相关字段
+  isRetrain?: boolean
+  baseTaskUuid?: string
+  pathId?: string
+  taskChain?: string
+  generation?: number
+  fpCount?: number
+  fnCount?: number
+  encoderName?: string
+  decoderDepth?: number
+  epochs?: number
+  freezeEncoder?: boolean
 }
 
 interface TrainingRecord extends TrainingRecordData {
@@ -79,4 +120,6 @@ interface TrainingRecord extends TrainingRecordData {
   logs?: string
   startTime?: Date
   endTime?: Date
+  createdAt: Date
+  updatedAt: Date
 }

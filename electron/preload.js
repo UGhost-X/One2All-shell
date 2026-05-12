@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getProductImages: (productId) => ipcRenderer.invoke('storage:get-product-images', productId),
   saveDataset: (data) => ipcRenderer.invoke('storage:save-dataset', data),
   loadDataset: (params) => ipcRenderer.invoke('storage:load-dataset', params),
+  saveRoiImages: (data) => ipcRenderer.invoke('storage:save-roi-images', data),
   saveDatasetVersion: (data) => ipcRenderer.invoke('db:save-dataset-version', data),
   getDatasetVersions: (productId) => ipcRenderer.invoke('db:get-dataset-versions', productId),
   deleteDatasetVersion: (id) => ipcRenderer.invoke('db:delete-dataset-version', id),
@@ -44,6 +45,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTrainingRecord: (taskId, labelName) => ipcRenderer.invoke('db:get-training-record', { taskId, labelName }),
   getTrainingRecordsByTaskUuid: (taskUuid) => ipcRenderer.invoke('db:get-training-records-by-task-uuid', taskUuid),
   deleteTrainingRecord: (taskId, labelName) => ipcRenderer.invoke('db:delete-training-record', { taskId, labelName }),
+  // ROI Management
+  updateRoiType: (data) => ipcRenderer.invoke('storage:update-roi-type', data),
+  getAvailableRois: (data) => ipcRenderer.invoke('storage:get-available-rois', data),
+  markRoisUsed: (data) => ipcRenderer.invoke('storage:mark-rois-used', data),
+  // Retrain Tasks
+  createRetrainTask: (data) => ipcRenderer.invoke('storage:create-retrain-task', data),
+  updateRetrainTask: (data) => ipcRenderer.invoke('storage:update-retrain-task', data),
+  getRetrainTasks: (data) => ipcRenderer.invoke('storage:get-retrain-tasks', data),
+  getRetrainTask: (data) => ipcRenderer.invoke('storage:get-retrain-task', data),
 });
 
 window.addEventListener('DOMContentLoaded', () => {

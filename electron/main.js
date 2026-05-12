@@ -866,6 +866,321 @@ app.whenReady().then(async () => {
     }
   });
 
+  // 格式化日期为 YYYY-MM-DD hh:mm:ss
+  const formatDateTime = (date) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  };
+
+  // 保存ROI图片 - 支持两种模式：
+  // 1. manual: 用户手动保存（只保存修改过的ROI）-> extra-picture/{taskUuid}/{datetime}/{category}/NG|OK
+  // 2. auto: 自动保存（每次请求后保存所有ROI）-> request-result/{taskUuid}/{datetime}/{category}/NG|OK
+  ipcMain.handle('storage:save-roi-images', async (event, { productId, taskUuid, images, mode = 'auto', requestTime }) => {
+    try {
+      const baseDir = appSettings.dataPath;
+      const savedRois = [];
+      
+      // 使用传入的时间或当前时间
+      const datetime = requestTime || formatDateTime(new Date());
+      
+      // 根据模式确定基础目录
+      const baseSubDir = mode === 'manual' ? 'extra-picture' : 'request-result';
+
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        const category = img.category || 'unknown';
+        const status = img.isAnomaly ? 'NG' : 'OK';
+        
+        // 构建目标目录: {baseDir}/{productId}/{baseSubDir}/{taskUuid}/{datetime}/{category}/{status}
+        // 使用短横线替换datetime中的空格和冒号，避免Windows路径问题
+        const safeDatetime = datetime.replace(/[:\s]/g, '-');
+        const targetDir = path.join(baseDir, String(productId), baseSubDir, String(taskUuid), safeDatetime, category, status);
+
+        // 确保目录存在（使用递归创建）
+        try {
+          fs.mkdirSync(targetDir, { recursive: true });
+        } catch (mkdirErr) {
+          console.error('Failed to create directory:', targetDir, mkdirErr);
+          throw mkdirErr;
+        }
+
+        const fileName = `image_${Date.now()}_${i + 1}.jpg`;
+        const filePath = path.join(targetDir, fileName);
+        const base64Data = img.base64.split(',')[1];
+        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+
+        // 计算ROI类型
+        let roiType = 'NORMAL';
+        if (img.modelIsAnomaly === true && img.userIsAnomaly === false) {
+          roiType = 'FP'; // False Positive: 模型NG，用户OK
+        } else if (img.modelIsAnomaly === false && img.userIsAnomaly === true) {
+          roiType = 'FN'; // False Negative: 模型OK，用户NG
+        }
+
+        // 只有手动保存的ROI才存入数据库（用于重训）
+        let roiRecord = null;
+        
+        if (mode === 'manual') {
+          // 存入数据库
+          roiRecord = await prisma.roiImage.create({
+            data: {
+              productId: String(productId),
+              sourceTaskUuid: String(taskUuid),
+              category: category,
+              modelIsAnomaly: img.modelIsAnomaly ?? img.isAnomaly,
+              userIsAnomaly: img.userIsAnomaly ?? img.isAnomaly,
+              roiType: roiType,
+              filePath: filePath,
+              fileName: fileName,
+              generation: 0
+            }
+          });
+        }
+
+        savedRois.push({
+          id: roiRecord?.id,
+          filePath: filePath,
+          roiType: roiType,
+          mode: mode
+        });
+      }
+
+      return { success: true, rois: savedRois };
+    } catch (err) {
+      console.error('Failed to save ROI images:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 更新ROI类型（用户标记后）
+  ipcMain.handle('storage:update-roi-type', async (event, { productId, taskUuid, category, fileName, userIsAnomaly }) => {
+    try {
+      // 查找对应的ROI记录
+      const roi = await prisma.roiImage.findFirst({
+        where: {
+          productId: String(productId),
+          sourceTaskUuid: String(taskUuid),
+          category: category,
+          fileName: fileName
+        }
+      });
+
+      if (!roi) {
+        return { success: false, error: 'ROI not found' };
+      }
+
+      // 计算新的ROI类型
+      let roiType = 'NORMAL';
+      if (roi.modelIsAnomaly === true && userIsAnomaly === false) {
+        roiType = 'FP';
+      } else if (roi.modelIsAnomaly === false && userIsAnomaly === true) {
+        roiType = 'FN';
+      }
+
+      // 更新记录
+      await prisma.roiImage.update({
+        where: { id: roi.id },
+        data: {
+          userIsAnomaly: userIsAnomaly,
+          roiType: roiType
+        }
+      });
+
+      return { success: true, roiType: roiType };
+    } catch (err) {
+      console.error('Failed to update ROI type:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 获取可用的ROI列表
+  ipcMain.handle('storage:get-available-rois', async (event, { productId, baseTaskUuid, roiType }) => {
+    try {
+      // 获取基础模型的重训记录，获取其任务链和generation
+      const baseTask = await prisma.trainingRecord.findFirst({
+        where: { 
+          taskUuid: baseTaskUuid,
+          isRetrain: true
+        }
+      });
+      
+      // 基础模型的generation和任务链
+      const baseGeneration = baseTask?.generation ?? 0;
+      const baseTaskChain = baseTask?.taskChain || '';
+      
+      // 构建祖先任务列表（包括基础模型本身）
+      // taskChain 格式: "taskuuid1,taskuuid2,taskuuid3"
+      const ancestorTasks = baseTaskChain 
+        ? [...baseTaskChain.split(','), baseTaskUuid]
+        : [baseTaskUuid];
+
+      // 查询条件：
+      // 1. 属于当前产品
+      // 2. generation <= 基础模型的generation（即该版本之前产生的ROI）
+      const whereClause = {
+        productId: String(productId),
+        generation: {
+          lte: baseGeneration  // 小于等于基础模型的generation
+        }
+      };
+
+      if (roiType) {
+        whereClause.roiType = roiType;
+      }
+
+      // 获取所有候选ROI
+      const allRois = await prisma.roiImage.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' }
+      });
+
+      // 过滤：排除被当前版本（baseTaskUuid）使用过的ROI
+      // 但保留被祖先版本（taskChain中的任务）使用过的ROI
+      const availableRois = allRois.filter(roi => {
+        if (!roi.usedInRetrain || !roi.usedTaskUuid) {
+          // 未被任何重训使用过的ROI，可用
+          return true;
+        }
+        
+        // 检查这个ROI被哪个任务使用过
+        // 如果被当前选择的基础模型使用过，则不可用
+        if (roi.usedTaskUuid === baseTaskUuid) {
+          return false;
+        }
+        
+        // 如果被祖先任务使用过，仍然可用（因为是之前版本使用的）
+        if (ancestorTasks.includes(roi.usedTaskUuid)) {
+          return true;
+        }
+        
+        // 被其他分支的任务使用过，也显示出来（用户可以选择是否使用）
+        return true;
+      });
+
+      return { success: true, rois: availableRois };
+    } catch (err) {
+      console.error('Failed to get available ROIs:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 标记ROI为已使用
+  ipcMain.handle('storage:mark-rois-used', async (event, { roiIds, usedTaskUuid }) => {
+    try {
+      await prisma.roiImage.updateMany({
+        where: {
+          id: { in: roiIds }
+        },
+        data: {
+          usedInRetrain: true,
+          usedTaskUuid: usedTaskUuid,
+          usedAt: new Date()
+        }
+      });
+
+      return { success: true };
+    } catch (err) {
+      console.error('Failed to mark ROIs as used:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 创建重训任务记录 - 使用 TrainingRecord 表
+  ipcMain.handle('storage:create-retrain-task', async (event, data) => {
+    try {
+      // 重训任务使用第一个 path_id 作为主记录
+      const firstPathId = data.pathId || '1';
+      const task = await prisma.trainingRecord.create({
+        data: {
+          productId: String(data.productId),
+          taskUuid: data.newTaskUuid,
+          labelName: firstPathId,  // 使用 pathId 作为 labelName
+          modelName: `retrain_${data.newTaskUuid}`,
+          config: JSON.stringify({
+            encoderName: data.encoderName,
+            decoderDepth: data.decoderDepth,
+            epochs: data.epochs,
+            batchSize: data.batchSize,
+            freezeEncoder: data.freezeEncoder
+          }),
+          status: 'pending',
+          isRetrain: true,
+          baseTaskUuid: data.baseTaskUuid,
+          pathId: firstPathId,
+          taskChain: data.taskChain || '',
+          generation: data.generation || 1,
+          fpCount: data.fpCount || 0,
+          fnCount: data.fnCount || 0,
+          encoderName: data.encoderName,
+          decoderDepth: data.decoderDepth,
+          epochs: data.epochs,
+          freezeEncoder: data.freezeEncoder
+        }
+      });
+
+      return { success: true, task: task };
+    } catch (err) {
+      console.error('Failed to create retrain task:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 获取单个重训任务（通过 taskUuid 查询）
+  ipcMain.handle('storage:get-retrain-task', async (event, { taskUuid }) => {
+    try {
+      const task = await prisma.trainingRecord.findFirst({
+        where: { 
+          taskUuid: taskUuid,
+          isRetrain: true
+        }
+      });
+
+      return { success: true, task: task };
+    } catch (err) {
+      console.error('Failed to get retrain task:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 更新重训任务状态
+  ipcMain.handle('storage:update-retrain-task', async (event, { taskId, status, message }) => {
+    try {
+      const task = await prisma.trainingRecord.update({
+        where: { id: taskId },
+        data: {
+          status: status,
+          logs: message || ''
+        }
+      });
+
+      return { success: true, task: task };
+    } catch (err) {
+      console.error('Failed to update retrain task:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 获取重训任务列表
+  ipcMain.handle('storage:get-retrain-tasks', async (event, { productId, baseTaskUuid }) => {
+    try {
+      const whereClause = {
+        isRetrain: true
+      };
+      if (productId) whereClause.productId = String(productId);
+      if (baseTaskUuid) whereClause.baseTaskUuid = baseTaskUuid;
+
+      const tasks = await prisma.trainingRecord.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' }
+      });
+
+      return { success: true, tasks: tasks };
+    } catch (err) {
+      console.error('Failed to get retrain tasks:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('storage:load-dataset', async (event, { id, savePath }) => {
     try {
       let finalPath = savePath;
@@ -1071,6 +1386,17 @@ app.whenReady().then(async () => {
   ipcMain.handle('db:save-training-record', async (event, data) => {
     try {
       const labelName = data.labelName || 'default'
+      
+      // 先查询是否已存在记录（可能是重训记录）
+      const existingRecord = await prisma.trainingRecord.findUnique({
+        where: {
+          taskUuid_labelName: {
+            taskUuid: data.taskId,
+            labelName
+          }
+        }
+      });
+      
       const updateData = {
         status: data.status,
         progress: data.progress,
@@ -1082,6 +1408,20 @@ app.whenReady().then(async () => {
       if (data.logs) updateData.logs = JSON.stringify(data.logs);
       if (data.batchSize != null) updateData.batchSize = data.batchSize;
       if (data.learningRate != null) updateData.learningRate = data.learningRate;
+      // 如果是重训记录，保留重训相关字段
+      if (existingRecord?.isRetrain) {
+        updateData.isRetrain = true;
+        if (existingRecord.baseTaskUuid) updateData.baseTaskUuid = existingRecord.baseTaskUuid;
+        if (existingRecord.pathId) updateData.pathId = existingRecord.pathId;
+        if (existingRecord.taskChain) updateData.taskChain = existingRecord.taskChain;
+        if (existingRecord.generation != null) updateData.generation = existingRecord.generation;
+        if (existingRecord.fpCount != null) updateData.fpCount = existingRecord.fpCount;
+        if (existingRecord.fnCount != null) updateData.fnCount = existingRecord.fnCount;
+        if (existingRecord.encoderName) updateData.encoderName = existingRecord.encoderName;
+        if (existingRecord.decoderDepth != null) updateData.decoderDepth = existingRecord.decoderDepth;
+        if (existingRecord.epochs != null) updateData.epochs = existingRecord.epochs;
+        if (existingRecord.freezeEncoder != null) updateData.freezeEncoder = existingRecord.freezeEncoder;
+      }
 
       return await prisma.trainingRecord.upsert({
         where: {
@@ -1124,7 +1464,12 @@ app.whenReady().then(async () => {
       });
       
       // 过滤掉组记录（labelName 包含"个任务"、"个类别"、"统一训练"等的记录）
+      // 但保留重训记录（isRetrain = true）
       const filteredRecords = records.filter(r => {
+        // 保留重训记录
+        if (r.isRetrain) {
+          return true;
+        }
         const labelName = r.labelName || '';
         // 排除组记录
         if (labelName.includes('个任务') || labelName.includes('个类别') || labelName === '统一训练') {

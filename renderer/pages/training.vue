@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch, nextTick, inject, onBeforeUnmount, onA
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useRuntimeConfig } from '#app'
-import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical, Zap, Eye, EyeOff, ChevronLeft, ChevronRight, Loader2 } from 'lucide-vue-next'
+import { X, TrendingDown, Activity, ListChecks, Square, Layers, GitCommit, Terminal, Play, Image as ImageIcon, RotateCw, Database, History, Box, Award, FileText, Save, Download, ChevronDown, Clock, Settings, Trash2, MoreVertical, Zap, Eye, EyeOff, ChevronLeft, ChevronRight, Loader2, RefreshCw } from 'lucide-vue-next'
 import { Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -37,6 +37,8 @@ import UiSelectTrigger from '@/components/ui/select/SelectTrigger.vue'
 import UiSelectValue from '@/components/ui/select/SelectValue.vue'
 import Progress from '@/components/ui/progress/Progress.vue'
 import Switch from '@/components/ui/switch/Switch.vue'
+import RoiSelector from '@/components/RoiSelector.vue'
+import RoiSelectorDialog from '@/components/RoiSelectorDialog.vue'
 
 definePageMeta({ 
   keepalive: true,
@@ -158,6 +160,29 @@ const isLabelSelectOpen = ref(false)
 const trainStartMode = ref<'fresh' | 'resume'>('fresh')
 const resumeMode = ref<'interrupted' | 'extended'>('interrupted')
 
+// 重训相关状态
+const retrainMode = ref<'fresh' | 'retrain'>('fresh')
+const isRetrainModeOpen = ref(false)
+const selectedBaseTask = ref('')
+const availableBaseTasks = ref<Array<{ task_uuid: string; created_at: string }>>([])
+const fpRois = ref<RoiImage[]>([])
+const fnRois = ref<RoiImage[]>([])
+const selectedFpRois = ref<string[]>([])
+const selectedFnRois = ref<string[]>([])
+const isLoadingRois = ref(false)
+const isStartingRetrain = ref(false)
+const isBaseTaskSelectOpen = ref(false)
+const retrainPathId = ref<string>('') // 存储重训时使用的 pathId
+
+// ROI 选择弹窗状态
+const showFpDialog = ref(false)
+const showFnDialog = ref(false)
+
+// 根据 ID 获取 ROI
+const getRoiById = (id: string): RoiImage | undefined => {
+  return [...fpRois.value, ...fnRois.value].find(r => r.id === id)
+}
+
 const trainRunCountStorageKey = computed(() => {
   const pid = productId.value == null ? '' : String(productId.value)
   const projectVersionKey = String(trainProjectVersion.value || '')
@@ -262,6 +287,31 @@ const loadTaskSnapshot = async (taskIdOrUuid: string) => {
     
     applyMonitorPayload(storageKey, data)
   } catch {
+  }
+}
+
+// 加载 FN 任务日志（FN 任务是同步的，通过 status 接口拉取）
+const loadFnTaskLogs = async (taskId: string) => {
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase.replace(/\/$/, '')}/train/status/${encodeURIComponent(taskId)}`)
+    if (!res.ok) return
+    const data = await res.json()
+
+    if (Array.isArray(data.logs) && data.logs.length > 0) {
+      groupLogs.value[taskId] = data.logs.map((x: any) => String(x))
+      if (monitorTaskId.value === taskId) {
+        monitorLogs.value = groupLogs.value[taskId]
+      }
+    }
+    // 同步状态
+    const idx = trainTasks.value.findIndex(t => t.task_id === taskId)
+    if (idx >= 0 && data.status) {
+      trainTasks.value[idx].status = data.status
+      trainTasks.value[idx].progress = data.progress || 100
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -903,116 +953,152 @@ const recordChartOptions = {
 const startGroupPolling = () => {
   stopGroupPolling()
   groupPollingTimer = setInterval(async () => {
-    if (!trainGroupId.value) return
+    if (trainTasks.value.length === 0) return
+    
     try {
       const apiBase = getApiBase()
-      const url = `${apiBase.replace(/\/$/, '')}/train/status/group/${trainGroupId.value}`
-      const res = await fetch(url)
-      if (res.ok) {
-        const data = await res.json()
-        const status = String(data.status || '').toLowerCase()
-        const isGroupCompleted = status === 'completed' || status === 'success'
-        const isGroupFailed = status === 'failed' || status === 'error' || status === 'stopped'
-        monitorGroupProgress.value = isGroupCompleted ? 100 : (data.progress || 0)
-        monitorGroupStatus.value = data.status || ''
-
-        if (isGroupFailed) {
-          stopGroupPolling()
-          closeMonitorStream()
-          return
+      
+      // 分别查询每个任务的状态
+      const taskStatusMap: Record<string, any> = {}
+      let allCompleted = true
+      let anyFailed = false
+      let totalProgress = 0
+      let completedCount = 0
+      
+      for (const t of trainTasks.value) {
+        if (!t.task_id) continue
+        // 跳过已完成的 copy 任务
+        if (t.taskType === 'copy' || t.task_id.startsWith('copied_')) {
+          taskStatusMap[t.task_id] = { status: 'completed', progress: 100 }
+          completedCount++
+          continue
         }
-
-        // 刷新运行记录
-        if (productId.value && window.electronAPI) {
-          trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
-        }
-
-        const groupStatus = data.status
-        const targetE = Number(data.total_epochs || data.config?.train_epochs || data.config?.train_iters || 0)
-        if (Number.isFinite(targetE) && targetE > 0) {
-          for (const t of trainTasks.value) {
-            taskTargetEpochs.value[t.task_id] = targetE
-          }
-        }
-
-        // 仅当组完成时，统一更新所有子任务为完成状态
-        // 子任务的独立进度由 SSE 流 (applyMonitorPayload) 维护，避免轮询覆盖
-        if (isGroupCompleted) {
-          trainTasks.value = trainTasks.value.map(t => {
-            const taskProgress = t.progress || 0
-            const taskStatus = t.status || ''
-            const isAlreadyCompleted = ['completed', 'success'].includes(String(taskStatus).toLowerCase())
-
-            if (productId.value && window.electronAPI && trainTaskUuid.value) {
-              const taskMetrics = groupMetrics.value[t.task_id] || []
-              const taskLogs = groupLogs.value[t.task_id] || []
-              const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
-              const serializableLogs = taskLogs.map((log: any) => String(log))
-              window.electronAPI.saveTrainingRecord({
-                productId: productId.value,
-                taskId: trainTaskUuid.value,
-                labelName: t.label,
-                modelName: data.model_name,
-                status: 'completed',
-                progress: 100,
-                totalEpochs: targetE,
-                currentEpoch: data.current_epoch,
-                batchSize: data.config?.train_batch_size || trainConfig.value.batchSize[0],
-                learningRate: data.config?.train_learning_rate || getLearningRateValue(),
-                metrics: serializableMetrics,
-                logs: serializableLogs,
-                startedAt: data.started_at ? new Date(data.started_at) : undefined,
-                completedAt: new Date()
-              }).catch(console.error)
+        
+        try {
+          const url = `${apiBase.replace(/\/$/, '')}/train/status/${encodeURIComponent(t.task_id)}`
+          const res = await fetch(url)
+          if (res.ok) {
+            const data = await res.json()
+            taskStatusMap[t.task_id] = data
+            
+            const status = String(data.status || '').toLowerCase()
+            if (status === 'completed' || status === 'success') {
+              completedCount++
+            } else {
+              allCompleted = false
             }
+            if (['failed', 'error', 'stopped'].includes(status)) {
+              anyFailed = true
+            }
+            totalProgress += data.progress || 0
+          } else {
+            allCompleted = false
+          }
+        } catch {
+          allCompleted = false
+        }
+      }
+      
+      // 计算组整体进度和状态
+      const activeTaskCount = trainTasks.value.filter(t => t.taskType !== 'copy' && !t.task_id?.startsWith('copied_')).length
+      monitorGroupProgress.value = activeTaskCount > 0 ? Math.round(totalProgress / activeTaskCount) : 100
+      monitorGroupStatus.value = allCompleted ? 'completed' : (anyFailed ? 'failed' : 'running')
 
-            return {
-              ...t,
+      if (anyFailed) {
+        stopGroupPolling()
+        closeMonitorStream()
+        return
+      }
+
+      // 刷新运行记录和基础模型列表
+      if (productId.value && window.electronAPI) {
+        trainingRecords.value = await window.electronAPI.getTrainingRecords(productId.value)
+        await loadAvailableBaseTasks()
+      }
+
+      // 同步每个任务的状态
+      let targetE = 0
+      for (const t of trainTasks.value) {
+        const taskData = taskStatusMap[t.task_id]
+        if (taskData) {
+          const te = Number(taskData.total_epochs || taskData.config?.train_epochs || taskData.config?.train_iters || 0)
+          if (te > targetE) targetE = te
+        }
+      }
+      if (targetE > 0) {
+        for (const t of trainTasks.value) {
+          taskTargetEpochs.value[t.task_id] = targetE
+        }
+      }
+
+      // 更新每个任务的状态
+      trainTasks.value = trainTasks.value.map(t => {
+        const taskData = taskStatusMap[t.task_id]
+        if (!taskData) return t
+        
+        const status = String(taskData.status || '').toLowerCase()
+        const isCompleted = status === 'completed' || status === 'success'
+        
+        // 同步状态到 trainTasks
+        if (t.taskType === 'fn' || t.taskType === 'copy') {
+          // FN/copy 任务已在列表中标记为 completed，不需要更新
+          return t
+        }
+        
+        return {
+          ...t,
+          status: taskData.status || t.status,
+          progress: taskData.progress || t.progress,
+          current_epoch: taskData.current_epoch || t.current_epoch,
+          total_epochs: targetE || t.total_epochs
+        }
+      })
+
+      // 仅当所有任务完成时，保存记录并清理
+      if (allCompleted) {
+        const firstTaskData = Object.values(taskStatusMap)[0] as any
+        
+        trainTasks.value = trainTasks.value.map(t => {
+          if (productId.value && window.electronAPI && trainTaskUuid.value) {
+            const taskMetrics = groupMetrics.value[t.task_id] || []
+            const taskLogs = groupLogs.value[t.task_id] || []
+            const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
+            const serializableLogs = taskLogs.map((log: any) => String(log))
+            const labelName = retrainPathId.value || t.label
+            window.electronAPI.saveTrainingRecord({
+              productId: productId.value,
+              taskId: trainTaskUuid.value,
+              labelName: labelName,
+              modelName: firstTaskData?.model_name || 'PatchCore',
               status: 'completed',
               progress: 100,
-              current_epoch: data.current_epoch,
-              total_epochs: targetE
-            }
-          })
-
-          stopGroupPolling()
-          closeMonitorStream()
-          if (typeof window !== 'undefined') {
-            window.localStorage.removeItem(trainGroupIdStorageKey.value)
-            window.localStorage.removeItem(trainTasksStorageKey.value)
-            window.localStorage.removeItem(trainTaskUuidStorageKey.value)
+              totalEpochs: targetE,
+              currentEpoch: firstTaskData?.current_epoch,
+              batchSize: firstTaskData?.config?.train_batch_size || trainConfig.value.batchSize[0],
+              learningRate: firstTaskData?.config?.train_learning_rate || getLearningRateValue(),
+              metrics: serializableMetrics,
+              logs: serializableLogs,
+              startedAt: firstTaskData?.started_at ? new Date(firstTaskData.started_at) : undefined,
+              completedAt: new Date()
+            }).catch(console.error)
           }
-        } else {
-          // 组未完成时，仅同步目标轮数，不覆盖子任务的独立进度
-          trainTasks.value = trainTasks.value.map(t => {
-            if (productId.value && window.electronAPI && trainTaskUuid.value) {
-              const taskMetrics = groupMetrics.value[t.task_id] || []
-              const taskLogs = groupLogs.value[t.task_id] || []
-              const serializableMetrics = JSON.parse(JSON.stringify(taskMetrics))
-              const serializableLogs = taskLogs.map((log: any) => String(log))
-              window.electronAPI.saveTrainingRecord({
-                productId: productId.value,
-                taskId: trainTaskUuid.value,
-                labelName: t.label,
-                modelName: data.model_name,
-                status: t.status || groupStatus,
-                progress: t.progress || 0,
-                totalEpochs: targetE,
-                currentEpoch: t.current_epoch || data.current_epoch,
-                batchSize: data.config?.train_batch_size || trainConfig.value.batchSize[0],
-                learningRate: data.config?.train_learning_rate || getLearningRateValue(),
-                metrics: serializableMetrics,
-                logs: serializableLogs,
-                startedAt: data.started_at ? new Date(data.started_at) : undefined,
-                completedAt: undefined
-              }).catch(console.error)
-            }
 
-            return {
-              ...t,
-              total_epochs: targetE
-            }
-          })
+          return {
+            ...t,
+            status: 'completed',
+            progress: 100,
+            current_epoch: firstTaskData?.current_epoch,
+            total_epochs: targetE
+          }
+        })
+
+        stopGroupPolling()
+        closeMonitorStream()
+        retrainPathId.value = ''
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(trainGroupIdStorageKey.value)
+          window.localStorage.removeItem(trainTasksStorageKey.value)
+          window.localStorage.removeItem(trainTaskUuidStorageKey.value)
         }
       }
     } catch (err) {
@@ -1808,12 +1894,14 @@ const formatMetricNumber = (v: number) => {
 }
 
 const enrichedLoadedImages = (images: any[]) => {
+  // 过滤掉 workpiece-body，与 COCO 构建逻辑保持一致
+  const filteredLabels = labelConfigs.value.filter(l => l.id !== 'workpiece-body')
   return (images || []).map((img: any) => ({
     ...img,
     annotations: (img.annotations || []).map((ann: any) => {
-      const labelIdx = labelConfigs.value.findIndex(l => l.id === ann.labelId)
+      const labelIdx = filteredLabels.findIndex(l => l.id === ann.labelId)
       const categoryId = labelIdx !== -1 ? labelIdx + 1 : ann.categoryId || 1
-      const labelInfo = labelConfigs.value[categoryId - 1] || {}
+      const labelInfo = filteredLabels[categoryId - 1] || {}
       return {
         ...ann,
         color: labelInfo.color || '#3b82f6',
@@ -1860,7 +1948,8 @@ const openMonitorStream = (taskId: string) => {
     }
   }
 
-  es.onerror = () => {
+  es.onerror = (err) => {
+    console.error('[openMonitorStream] SSE error for task:', taskId, err)
     closeMonitorStream(taskId)
   }
 }
@@ -1953,9 +2042,10 @@ const applyMonitorPayload = (taskId: string, data: any) => {
     }
   }
 
-  // 处理日志 - 后端返回 new_logs 数组
-  if (Array.isArray(data.new_logs) && data.new_logs.length > 0) {
-    const newLogs = data.new_logs.map((x: any) => String(x))
+  // 处理日志 - 后端返回 new_logs 数组，也兼容 logs 数组
+  const logsData = data.new_logs || data.logs
+  if (Array.isArray(logsData) && logsData.length > 0) {
+    const newLogs = logsData.map((x: any) => String(x))
     if (!groupLogs.value[taskId]) groupLogs.value[taskId] = []
     groupLogs.value[taskId] = groupLogs.value[taskId].concat(newLogs)
     if (isCurrentTask) {
@@ -1979,38 +2069,71 @@ const applyMonitorPayload = (taskId: string, data: any) => {
   }
 }
 
-watch(monitorTaskId, (taskId) => {
+watch(monitorTaskId, async (taskId) => {
   monitorStatus.value = ''
   monitorProgress.value = 0
   if (!taskId || taskId === 'all') {
     monitorLogs.value = []
     return
   }
-  
-  if (groupLogs.value[taskId] && groupLogs.value[taskId].length > 0) {
+
+  // 先展示已缓存的日志
+  if (groupLogs.value[taskId]?.length > 0) {
     monitorLogs.value = groupLogs.value[taskId]
   } else {
     monitorLogs.value = []
   }
 
+  // FN/copy 任务：不走 SSE，直接拉 status（同步已完成）
+  const task = trainTasks.value.find(t => t.task_id === taskId)
+  if (
+    task?.taskType === 'fn' ||
+    task?.taskType === 'copy' ||
+    taskId.startsWith('prototype_') ||
+    taskId.startsWith('copied_')
+  ) {
+    await loadFnTaskLogs(taskId)
+    return
+  }
+
+  // FP 或普通训练任务：走 SSE
   openMonitorStream(taskId)
 })
 
 watch(trainTasks, (tasks) => {
-  // Proactively open streams for all tasks in the group to collect metrics for "Overall" view
-  // Note: Browser SSE limits might apply, but we try
-  for (const t of tasks) {
-    if (t.task_id) {
-      const s = String(t.status || '').toLowerCase()
-      if (['completed', 'success', 'failed', 'stopped', 'canceled', 'interrupted', 'error', 'aborted'].includes(s)) {
-        // If task is finished, ensure stream is closed
-        if (monitorEventSources[t.task_id]) {
-          closeMonitorStream(t.task_id)
-        }
+  // 清理不再可取消的选中任务
+  const cancelableIds = new Set(tasks
+    .filter(t => ['pending', 'running', 'training', 'starting'].includes(t.status?.toLowerCase() || ''))
+    .map(t => t.task_id)
+  )
+  for (const id of selectedTaskIds.value) {
+    if (!cancelableIds.has(id)) selectedTaskIds.value.delete(id)
+  }
+
+  if (tasks.length > 0 && (!monitorTaskId.value || monitorTaskId.value === 'all')) {
+    const runningTask = tasks.find(t => ['running', 'training', 'starting'].includes((t.status || '').toLowerCase()))
+    const targetTask = runningTask || tasks[0]
+    if (targetTask) {
+      monitorTaskId.value = targetTask.task_id
+      if (targetTask.taskType === 'fn' || targetTask.taskType === 'copy') {
+        loadFnTaskLogs(targetTask.task_id)
       } else {
-        // Only open stream if not finished
-        openMonitorStream(t.task_id)
+        loadTaskSnapshot(targetTask.task_id)
       }
+    }
+  }
+
+  for (const t of tasks) {
+    if (!t.task_id) continue
+    // FN/copy 任务：跳过 SSE
+    if (t.taskType === 'fn' || t.taskType === 'copy' ||
+        t.task_id.startsWith('prototype_') || t.task_id.startsWith('copied_')) continue
+
+    const s = String(t.status || '').toLowerCase()
+    if (['completed', 'success', 'failed', 'stopped', 'canceled', 'interrupted', 'error', 'aborted'].includes(s)) {
+      if (monitorEventSources[t.task_id]) closeMonitorStream(t.task_id)
+    } else {
+      openMonitorStream(t.task_id)
     }
   }
 }, { deep: true })
@@ -2123,7 +2246,9 @@ const buildTrainCocoData = (results: any[]) => {
       } else {
         segmentation = [ann.points]
       }
-      const labelIdx = labelConfigs.value.findIndex(l => l.id === ann.labelId)
+      // 过滤掉 workpiece-body 后计算索引，与 categories 构建逻辑一致
+      const filteredLabels = labelConfigs.value.filter(l => l.id !== 'workpiece-body')
+      const labelIdx = filteredLabels.findIndex(l => l.id === ann.labelId)
       const category_id = labelIdx !== -1 ? labelIdx + 1 : 1
       return {
         id: annId++,
@@ -2346,6 +2471,332 @@ const startTraining = async () => {
   }
 }
 
+// 加载可用的基础模型列表
+const loadAvailableBaseTasks = async () => {
+  if (!productId.value || !window.electronAPI) return
+  try {
+    // 从本地数据库获取训练记录
+    const records = await window.electronAPI.getTrainingRecords(productId.value)
+    // 去重，按 taskUuid 分组
+    const taskMap = new Map()
+    for (const record of records) {
+      if (record.taskUuid && !taskMap.has(record.taskUuid)) {
+        taskMap.set(record.taskUuid, {
+          task_uuid: record.taskUuid,
+          created_at: record.startTime || record.createdAt
+        })
+      }
+    }
+    availableBaseTasks.value = Array.from(taskMap.values())
+  } catch (err) {
+    console.error('Failed to load base tasks:', err)
+  }
+}
+
+// 加载可用的ROI
+const loadAvailableRois = async () => {
+  if (!productId.value || !selectedBaseTask.value) return
+  
+  isLoadingRois.value = true
+  try {
+    // 加载 FP 类型的 ROI
+    const fpResult = await window.electronAPI?.getAvailableRois({
+      productId: productId.value,
+      baseTaskUuid: selectedBaseTask.value,
+      roiType: 'FP'
+    })
+    if (fpResult?.success) {
+      fpRois.value = fpResult.rois || []
+    }
+    
+    // 加载 FN 类型的 ROI
+    const fnResult = await window.electronAPI?.getAvailableRois({
+      productId: productId.value,
+      baseTaskUuid: selectedBaseTask.value,
+      roiType: 'FN'
+    })
+    if (fnResult?.success) {
+      fnRois.value = fnResult.rois || []
+    }
+  } catch (err) {
+    console.error('Failed to load ROIs:', err)
+    toast?.error(t('training.retrain.loadRoisFailed'))
+  } finally {
+    isLoadingRois.value = false
+  }
+}
+
+// 获取ROI的base64数据
+const getRoiBase64 = async (roiId: string): Promise<string> => {
+  const roi = [...fpRois.value, ...fnRois.value].find(r => r.id === roiId)
+  if (!roi) return ''
+  
+  try {
+    const imageData = await window.electronAPI?.loadImage(roi.filePath)
+    return imageData || ''
+  } catch (err) {
+    console.error('Failed to load ROI image:', err)
+    return ''
+  }
+}
+
+// 启动重训
+const startRetrain = async () => {
+  if (!productId.value || !selectedBaseTask.value) return
+  if (selectedFpRois.value.length === 0 && selectedFnRois.value.length === 0) {
+    toast?.error(t('training.retrain.noRoisSelected'))
+    return
+  }
+
+  isStartingRetrain.value = true
+  try {
+    // 获取选中的ROI base64数据，并按 path_id 分组
+    const feedbackGroupsMap = new Map<string, { fpImages: string[]; fnImages: string[] }>()
+
+    // 处理 FP ROI
+    for (const roiId of selectedFpRois.value) {
+      const roi = getRoiById(roiId)
+      if (!roi) continue
+
+      // 根据训练模式确定 path_id
+      let pathId: string
+      if (trainMode.value === 'by_category') {
+        // by_category 模式下使用 category 对应的 labelConfigs 索引+1（过滤掉 workpiece-body）
+        const filteredLabels = labelConfigs.value.filter(l => l.id !== 'workpiece-body')
+        const labelIdx = filteredLabels.findIndex(l => l.name === roi.category || l.id === roi.category)
+        pathId = String(labelIdx !== -1 ? labelIdx + 1 : 1)
+      } else {
+        // by_pos_id 模式下需要从 ROI 获取 posId，但目前 ROI 数据中没有 posId
+        // 暂时使用 category 作为 fallback
+        pathId = roi.category || '1'
+      }
+
+      if (!feedbackGroupsMap.has(pathId)) {
+        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [] })
+      }
+
+      const base64DataUri = await getRoiBase64(roiId)
+      if (base64DataUri) {
+        // 提取纯 base64 数据（去掉 data:image/... 前缀）
+        const pureBase64 = base64DataUri.split(',')[1] || base64DataUri
+        feedbackGroupsMap.get(pathId)!.fpImages.push(pureBase64)
+      }
+    }
+
+    // 处理 FN ROI
+    for (const roiId of selectedFnRois.value) {
+      const roi = getRoiById(roiId)
+      if (!roi) continue
+
+      // 根据训练模式确定 path_id
+      let pathId: string
+      if (trainMode.value === 'by_category') {
+        // by_category 模式下使用 category 对应的 labelConfigs 索引+1（过滤掉 workpiece-body）
+        const filteredLabels = labelConfigs.value.filter(l => l.id !== 'workpiece-body')
+        const labelIdx = filteredLabels.findIndex(l => l.name === roi.category || l.id === roi.category)
+        pathId = String(labelIdx !== -1 ? labelIdx + 1 : 1)
+      } else {
+        // by_pos_id 模式下需要从 ROI 获取 posId，但目前 ROI 数据中没有 posId
+        // 暂时使用 category 作为 fallback
+        pathId = roi.category || '1'
+      }
+
+      if (!feedbackGroupsMap.has(pathId)) {
+        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [] })
+      }
+
+      const base64DataUri = await getRoiBase64(roiId)
+      if (base64DataUri) {
+        // 提取纯 base64 数据（去掉 data:image/... 前缀）
+        const pureBase64 = base64DataUri.split(',')[1] || base64DataUri
+        feedbackGroupsMap.get(pathId)!.fnImages.push(pureBase64)
+      }
+    }
+
+    const apiBase = getApiBase()
+    const apiUrl = `${apiBase.replace(/\/$/, '')}/train/anomaly/retrain`
+
+    // 构建 feedback_groups 结构
+    const feedback_groups = Array.from(feedbackGroupsMap.entries()).map(([pathId, group]) => ({
+      path_id: pathId,
+      false_positive_images: group.fpImages,
+      false_negative_images: group.fnImages
+    }))
+
+    // 计算总数
+    const totalFp = feedback_groups.reduce((sum, g) => sum + g.false_positive_images.length, 0)
+    const totalFn = feedback_groups.reduce((sum, g) => sum + g.false_negative_images.length, 0)
+
+    const payload = {
+      project_id: String(productId.value),
+      base_task_uuid: selectedBaseTask.value,
+      feedback_groups,
+      encoder_name: trainConfig.value.encoderName,
+      decoder_depth: trainConfig.value.decoderDepth,
+      epochs: trainConfig.value.epochs,
+      batch_size: trainConfig.value.batchSize[0],
+      freeze_encoder: trainConfig.value.freezeEncoder
+    }
+
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+
+    if (!res.ok) {
+      const errorText = await res.text()
+      throw new Error(errorText)
+    }
+
+    const data = await res.json()
+
+    if (data.status === 'success') {
+      // 获取基础模型的重训记录，构建任务链
+      let taskChain = selectedBaseTask.value
+      let generation = 1
+      try {
+        const baseTaskRecord = await window.electronAPI?.getRetrainTask?.({ taskUuid: selectedBaseTask.value })
+        if (baseTaskRecord?.task) {
+          // 基础模型也是重训产生的，继承其任务链
+          taskChain = baseTaskRecord.task.taskChain
+            ? `${baseTaskRecord.task.taskChain},${selectedBaseTask.value}`
+            : selectedBaseTask.value
+          generation = (baseTaskRecord.task.generation || 0) + 1
+        }
+      } catch (e) {
+        // 基础模型可能是原始训练，没有重训记录
+        console.log('Base task is original training or no record found')
+      }
+
+      // 创建重训任务记录（使用第一个 path_id 作为主记录）
+      const firstPathId = feedback_groups[0]?.path_id || '1'
+      retrainPathId.value = firstPathId // 保存 pathId 用于后续更新记录
+      await window.electronAPI?.createRetrainTask({
+        productId: productId.value,
+        baseTaskUuid: selectedBaseTask.value,
+        newTaskUuid: data.new_task_uuid,
+        pathId: firstPathId,
+        taskChain,
+        generation,
+        fpCount: totalFp,
+        fnCount: totalFn,
+        encoderName: trainConfig.value.encoderName,
+        decoderDepth: trainConfig.value.decoderDepth,
+        epochs: trainConfig.value.epochs,
+        batchSize: trainConfig.value.batchSize[0],
+        freezeEncoder: trainConfig.value.freezeEncoder
+      })
+
+      // 标记ROI为已使用
+      await window.electronAPI?.markRoisUsed({
+        roiIds: [...selectedFpRois.value, ...selectedFnRois.value],
+        usedTaskUuid: data.new_task_uuid
+      })
+
+      // 更新训练状态
+      trainTaskUuid.value = data.new_task_uuid
+      // FP 任务的 task_uuid 等于 new_task_uuid，group 轮询会命中
+      trainGroupId.value = data.new_task_uuid
+
+      // ---- 重建 trainTasks ----
+      const filteredLabels = labelConfigs.value.filter((l: any) => l.id !== 'workpiece-body')
+      const allTasks: any[] = []
+
+      for (const result of (data.results || [])) {
+        if (result.status === 'error') continue
+
+        const pathId = String(result.path_id)
+        const pathIdNum = parseInt(pathId)
+        // by_category 模式：path_id 是 1-based 的分类序号，可直接映射标签名
+        // by_pos_id 模式：path_id 是位置号，没有对应标签名则显示 "位置 X"
+        const categoryLabel = trainMode.value === 'by_category'
+          ? (filteredLabels[pathIdNum - 1]?.name || `分类 ${pathId}`)
+          : `位置 ${pathId}`
+
+        const taskIds: string[] = result.task_ids || []
+        const fpTaskIds = taskIds.filter(id => !id.startsWith('prototype_'))
+        const fnTaskIds = taskIds.filter(id => id.startsWith('prototype_'))
+
+        // FP 微调任务 — 异步，需要 SSE 监控
+        for (const taskId of fpTaskIds) {
+          allTasks.push({
+            label: categoryLabel,
+            task_id: taskId,
+            status: 'pending',
+            progress: 0,
+            pathId,
+            taskType: 'fp',   // 区分标记
+          })
+        }
+
+        // FN 原型库任务 — 同步执行，API 返回时已完成
+        for (const taskId of fnTaskIds) {
+          allTasks.push({
+            label: categoryLabel,
+            task_id: taskId,
+            status: 'completed',   // 同步，已完成
+            progress: 100,
+            pathId,
+            taskType: 'fn',
+          })
+        }
+
+        // 无反馈只复制的 path_id
+        if (result.status === 'copied' && fpTaskIds.length === 0 && fnTaskIds.length === 0) {
+          allTasks.push({
+            label: categoryLabel,
+            task_id: `copied_${pathId}_${Date.now()}`,
+            status: 'completed',
+            progress: 100,
+            pathId,
+            taskType: 'copy',
+          })
+        }
+      }
+
+      trainTasks.value = allTasks.length > 0 ? allTasks : [{
+        label: 'retrain',
+        task_id: data.new_task_uuid,
+        status: 'pending',
+        progress: 0,
+      }]
+
+      toast?.success(t('training.retrain.startSuccess', { taskUuid: data.new_task_uuid }))
+
+      // 清空选择
+      selectedFpRois.value = []
+      selectedFnRois.value = []
+
+      // 开始监控
+      monitorTaskId.value = 'all'
+      activeMonitorTab.value = 'overview'
+      startGroupPolling()
+
+      // 只为 FP 任务开 SSE；FN/copy 已完成，不需要
+      console.log('[startRetrain] Opening SSE for FP tasks:', trainTasks.value.filter((t: any) => t.taskType === 'fp').map((t: any) => t.task_id))
+      for (const t of trainTasks.value) {
+        if (t.taskType === 'fp' && t.task_id) {
+          openMonitorStream(t.task_id)
+        }
+      }
+
+      // 拉取已完成的 FN 日志
+      for (const t of trainTasks.value) {
+        if (t.taskType === 'fn' && t.task_id) {
+          loadFnTaskLogs(t.task_id)
+        }
+      }
+    } else {
+      throw new Error(data.message || 'Unknown error')
+    }
+  } catch (err: any) {
+    toast?.error(`${t('training.retrain.startFailed')}: ${err.message}`)
+  } finally {
+    isStartingRetrain.value = false
+  }
+}
+
 const stopTask = async (taskId?: string) => {
   const tid = taskId || monitorTaskId.value
   if (!tid || isStoppingTask.value) return
@@ -2373,30 +2824,62 @@ const stopTask = async (taskId?: string) => {
 }
 
 const stopGroup = async () => {
-  if (isStoppingGroup.value || !trainGroupId.value) return
+  if (isStoppingGroup.value) return
 
   isStoppingGroup.value = true
   try {
     const apiBase = getApiBase()
-    const url = `${apiBase.replace(/\/$/, '')}/train/stop/group/${trainGroupId.value}`
-    const res = await fetch(url, { method: 'POST' })
-    if (res.ok) {
-      toast?.success(t('training.monitor.stopGroupSuccess'))
-      // Update all running tasks to stopped locally
-      trainTasks.value = trainTasks.value.map(t => {
-        const s = String(t.status || '').toLowerCase()
-        if (['pending', 'running', 'training', 'starting'].includes(s)) {
-          return { ...t, status: 'stopped' }
-        }
-        return t
-      })
-      // Update group status to stopped
-      monitorGroupStatus.value = 'stopped'
-      monitorGroupProgress.value = 0
-      stopGroupPolling()
-    } else {
-      throw new Error(await res.text())
+    
+    // 分别停止每个运行中的任务
+    const runningTasks = trainTasks.value.filter(t => {
+      const s = String(t.status || '').toLowerCase()
+      return ['pending', 'running', 'training', 'starting'].includes(s) && t.task_id
+    })
+    
+    if (runningTasks.length === 0) {
+      toast?.info('没有运行中的任务需要停止')
+      return
     }
+    
+    // 并行停止所有运行中的任务
+    const stopPromises = runningTasks.map(async (t) => {
+      try {
+        const url = `${apiBase.replace(/\/$/, '')}/train/stop/${encodeURIComponent(t.task_id!)}`
+        const res = await fetch(url, { method: 'POST' })
+        if (res.ok) {
+          return { taskId: t.task_id, success: true }
+        } else {
+          return { taskId: t.task_id, success: false, error: await res.text() }
+        }
+      } catch (err: any) {
+        return { taskId: t.task_id, success: false, error: err.message }
+      }
+    })
+    
+    const results = await Promise.all(stopPromises)
+    const successCount = results.filter(r => r.success).length
+    const failCount = results.length - successCount
+    
+    if (failCount === 0) {
+      toast?.success(t('training.monitor.stopGroupSuccess'))
+    } else if (successCount > 0) {
+      toast?.warning(`已停止 ${successCount} 个任务，${failCount} 个任务停止失败`)
+    } else {
+      toast?.error('停止任务失败')
+    }
+    
+    // Update all running tasks to stopped locally
+    trainTasks.value = trainTasks.value.map(t => {
+      const s = String(t.status || '').toLowerCase()
+      if (['pending', 'running', 'training', 'starting'].includes(s)) {
+        return { ...t, status: 'stopped' }
+      }
+      return t
+    })
+    // Update group status to stopped
+    monitorGroupStatus.value = 'stopped'
+    monitorGroupProgress.value = 0
+    stopGroupPolling()
   } catch (err: any) {
     toast?.error(`${t('training.monitor.stopGroupFailed')}: ${err.message}`)
   } finally {
@@ -2608,12 +3091,14 @@ const applyDatasetVersion = async (v: any) => {
     if (v.id) {
       const loadResult = await window.electronAPI.loadDataset({ id: v.id, savePath: v.savePath })
       if (loadResult.success) {
+        // 过滤掉 workpiece-body，与 COCO 构建逻辑保持一致
+        const filteredLabels = labelConfigs.value.filter(l => l.id !== 'workpiece-body')
         augmentedResults.value = loadResult.images.map((img: any) => ({
           ...img,
           annotations: img.annotations.map((ann: any) => {
-            const labelIdx = labelConfigs.value.findIndex(l => l.id === ann.labelId)
+            const labelIdx = filteredLabels.findIndex(l => l.id === ann.labelId)
             const categoryId = labelIdx !== -1 ? labelIdx + 1 : ann.categoryId || 1
-            const labelInfo = labelConfigs.value[categoryId - 1] || {}
+            const labelInfo = filteredLabels[categoryId - 1] || {}
             return {
               ...ann,
               color: labelInfo.color || '#3b82f6',
@@ -2964,6 +3449,8 @@ const handleAugment = async () => {
     }
     
     // ... (Format annotations) ...
+    // 过滤掉 workpiece-body，与 COCO 构建逻辑保持一致
+    const filteredLabels = labelConfigs.value.filter(l => l.id !== 'workpiece-body')
     const formattedAnnotations = currentAnnotations.value.map((ann, idx) => {
       const bbox = calculateBbox(ann.points, ann.type)
       const area = calculateArea(ann.points, ann.type)
@@ -2990,7 +3477,7 @@ const handleAugment = async () => {
         segmentation = [ann.points]
       }
 
-      const labelIdx = labelConfigs.value.findIndex(l => l.id === ann.labelId)
+      const labelIdx = filteredLabels.findIndex(l => l.id === ann.labelId)
       const category_id = labelIdx !== -1 ? labelIdx + 1 : 1
 
       return {
@@ -3176,7 +3663,6 @@ const loadOriginalImages = async () => {
     const url = await window.electronAPI.loadImage(filePath)
     if (!url) continue
     const ann = await window.electronAPI.getAnnotations(productId.value, filePath)
-    console.log("ann:::",ann)
     let annotations: any[] = []
     if (ann && ann.data) {
       try {
@@ -3255,6 +3741,9 @@ onMounted(async () => {
       if (restored) {
         await loadOriginalImages()
       }
+      
+      // 加载可用的基础模型列表（用于重训）
+      await loadAvailableBaseTasks()
     }
   })
 
@@ -4007,6 +4496,100 @@ onBeforeUnmount(() => {
                  <p class="text-[10px] text-muted-foreground">{{ t('training.train.trainModeHint') }}</p>
                </div>
 
+               <!-- 重训模式选择 -->
+               <div class="space-y-1 pt-2 border-t">
+                 <Label class="text-xs text-muted-foreground">{{ t('training.retrain.mode') }}</Label>
+                 <UiSelect v-model="retrainMode" v-model:open="isRetrainModeOpen">
+                   <UiSelectTrigger class="h-8 text-xs bg-background w-full px-2 gap-2 outline-none ring-0 focus:outline-none focus:ring-0">
+                     <UiSelectValue :placeholder="t('training.retrain.modePlaceholder')" />
+                   </UiSelectTrigger>
+                   <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[200px]">
+                     <UiSelectItem value="fresh">{{ t('training.retrain.fresh') }}</UiSelectItem>
+                     <UiSelectItem value="retrain">{{ t('training.retrain.incremental') }}</UiSelectItem>
+                   </UiSelectContent>
+                 </UiSelect>
+               </div>
+
+               <!-- 重训选项 -->
+               <div v-if="retrainMode === 'retrain'" class="space-y-3 pt-2">
+                 <!-- 选择基础模型 -->
+                 <div class="space-y-1">
+                   <Label class="text-xs text-muted-foreground">{{ t('training.retrain.baseModel') }}</Label>
+                   <UiSelect v-model="selectedBaseTask" v-model:open="isBaseTaskSelectOpen" @update:model-value="loadAvailableRois">
+                     <UiSelectTrigger class="h-8 text-xs bg-background w-full px-2 gap-2">
+                       <UiSelectValue :placeholder="availableBaseTasks.length === 0 ? '暂无可用模型' : t('training.retrain.selectBaseModel')" />
+                     </UiSelectTrigger>
+                     <UiSelectContent class="z-[9999] w-[var(--radix-select-trigger-width)] min-w-[200px]">
+                       <UiSelectItem v-for="task in availableBaseTasks" :key="task.task_uuid" :value="task.task_uuid">
+                         {{ task.task_uuid }} ({{ new Date(task.created_at).toLocaleDateString() }})
+                       </UiSelectItem>
+                     </UiSelectContent>
+                   </UiSelect>
+                 </div>
+
+                 <!-- False Positives 选择 -->
+                 <div v-if="selectedBaseTask" class="space-y-1">
+                   <div class="flex items-center justify-between">
+                     <Label class="text-xs text-muted-foreground">{{ t('training.retrain.falsePositives') }}</Label>
+                     <div class="flex items-center gap-2">
+                       <span class="text-[10px] text-muted-foreground">{{ selectedFpRois.length }} {{ t('training.retrain.selected') }}</span>
+                       <UiButton variant="outline" size="sm" class="h-6 text-xs px-2" @click="showFpDialog = true">
+                         选择
+                       </UiButton>
+                     </div>
+                   </div>
+                   <p class="text-[10px] text-muted-foreground">{{ t('training.retrain.fpDescription') }}</p>
+                   <!-- 已选择缩略图预览 -->
+                   <div v-if="selectedFpRois.length > 0" class="flex flex-wrap gap-1 mt-2">
+                     <div
+                       v-for="roiId in selectedFpRois.slice(0, 5)"
+                       :key="roiId"
+                       class="w-8 h-8 rounded border overflow-hidden relative"
+                     >
+                       <img
+                         v-if="getRoiById(roiId)?.filePath"
+                         :src="`file://${getRoiById(roiId)?.filePath}`"
+                         class="w-full h-full object-cover"
+                       />
+                     </div>
+                     <div v-if="selectedFpRois.length > 5" class="w-8 h-8 rounded border flex items-center justify-center text-[10px] text-muted-foreground">
+                       +{{ selectedFpRois.length - 5 }}
+                     </div>
+                   </div>
+                 </div>
+
+                 <!-- False Negatives 选择 -->
+                 <div v-if="selectedBaseTask" class="space-y-1">
+                   <div class="flex items-center justify-between">
+                     <Label class="text-xs text-muted-foreground">{{ t('training.retrain.falseNegatives') }}</Label>
+                     <div class="flex items-center gap-2">
+                       <span class="text-[10px] text-muted-foreground">{{ selectedFnRois.length }} {{ t('training.retrain.selected') }}</span>
+                       <UiButton variant="outline" size="sm" class="h-6 text-xs px-2" @click="showFnDialog = true">
+                         选择
+                       </UiButton>
+                     </div>
+                   </div>
+                   <p class="text-[10px] text-muted-foreground">{{ t('training.retrain.fnDescription') }}</p>
+                   <!-- 已选择缩略图预览 -->
+                   <div v-if="selectedFnRois.length > 0" class="flex flex-wrap gap-1 mt-2">
+                     <div
+                       v-for="roiId in selectedFnRois.slice(0, 5)"
+                       :key="roiId"
+                       class="w-8 h-8 rounded border overflow-hidden relative"
+                     >
+                       <img
+                         v-if="getRoiById(roiId)?.filePath"
+                         :src="`file://${getRoiById(roiId)?.filePath}`"
+                         class="w-full h-full object-cover"
+                       />
+                     </div>
+                     <div v-if="selectedFnRois.length > 5" class="w-8 h-8 rounded border flex items-center justify-center text-[10px] text-muted-foreground">
+                       +{{ selectedFnRois.length - 5 }}
+                     </div>
+                   </div>
+                 </div>
+               </div>
+
             </div>
 
             <div class="mt-auto pt-4 shrink-0">
@@ -4017,8 +4600,23 @@ onBeforeUnmount(() => {
                 </UiButton>
               </template>
               <template v-else>
-                <UiButton class="w-full" @click="startTraining" :disabled="isTrainingStarting || originalImages.length === 0">
+                <UiButton 
+                  v-if="retrainMode === 'fresh'"
+                  class="w-full" 
+                  @click="startTraining" 
+                  :disabled="isTrainingStarting || originalImages.length === 0"
+                >
                   {{ isTrainingStarting ? t('training.train.starting') : t('training.train.start') }}
+                </UiButton>
+                <UiButton 
+                  v-else
+                  class="w-full" 
+                  variant="secondary"
+                  @click="startRetrain" 
+                  :disabled="isStartingRetrain || !selectedBaseTask || (selectedFpRois.length === 0 && selectedFnRois.length === 0)"
+                >
+                  <RefreshCw class="w-4 h-4 mr-2" />
+                  {{ isStartingRetrain ? t('training.retrain.starting') : t('training.retrain.start') }}
                 </UiButton>
               </template>
             </div>
@@ -4091,9 +4689,27 @@ onBeforeUnmount(() => {
                           <div v-else class="w-4 h-4 shrink-0"></div>
 
                           <div class="w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_8px_rgba(0,0,0,0.1)] transition-all duration-300 animate-pulse-slow" :class="getStatusClass(tItem.status)"></div>
-                          <div class="truncate text-sm font-semibold tracking-tight text-foreground/80 group-hover/item:text-foreground">
-                            {{ tItem.label }}
-                            <span v-if="tItem.posIds && tItem.posIds.length > 0" class="text-muted-foreground text-xs ml-1">[{{ tItem.posIds.join(',') }}]</span>
+                          <div class="text-sm font-semibold tracking-tight text-foreground/80 group-hover/item:text-foreground flex items-center gap-1.5 min-w-0">
+                            <span class="truncate shrink-0 max-w-[120px]" :title="tItem.label">{{ tItem.label }}</span>
+
+                            <!-- 类型徽章 -->
+                            <span
+                              v-if="tItem.taskType === 'fp'"
+                              class="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 font-bold shrink-0"
+                            >FP 微调</span>
+                            <span
+                              v-else-if="tItem.taskType === 'fn'"
+                              class="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-bold shrink-0"
+                            >FN 原型库</span>
+                            <span
+                              v-else-if="tItem.taskType === 'copy'"
+                              class="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400 font-bold shrink-0"
+                            >已复制</span>
+
+                            <span
+                              v-if="tItem.posIds && tItem.posIds.length > 0"
+                              class="text-muted-foreground text-xs shrink-0"
+                            >[{{ tItem.posIds.join(',') }}]</span>
                           </div>
                         </div>
                         <div class="flex-1 grid grid-cols-[1fr_100px] items-center gap-10">
@@ -4593,6 +5209,28 @@ onBeforeUnmount(() => {
       </div>
       </div>
     </div>
+
+    <!-- ROI 选择弹窗 - False Positives -->
+    <RoiSelectorDialog
+      v-model:open="showFpDialog"
+      :title="t('training.retrain.falsePositives')"
+      :description="t('training.retrain.fpDescription')"
+      :rois="fpRois"
+      v-model:selected="selectedFpRois"
+      :empty-text="t('training.retrain.noFpRois')"
+      @confirm="showFpDialog = false"
+    />
+
+    <!-- ROI 选择弹窗 - False Negatives -->
+    <RoiSelectorDialog
+      v-model:open="showFnDialog"
+      :title="t('training.retrain.falseNegatives')"
+      :description="t('training.retrain.fnDescription')"
+      :rois="fnRois"
+      v-model:selected="selectedFnRois"
+      :empty-text="t('training.retrain.noFnRois')"
+      @confirm="showFnDialog = false"
+    />
   </div>
 </template>
 

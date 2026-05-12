@@ -95,10 +95,25 @@ model TrainingRecord {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
+  // 重训相关字段
+  isRetrain     Boolean  @default(false) // 是否是重训任务
+  baseTaskUuid  String? // 基础模型的task_uuid（重训时使用）
+  pathId        String? // 路径ID（重训时使用）
+  taskChain     String   @default("") // 任务血缘链
+  generation    Int      @default(0) // 第几代（0=原始训练，1=第一次重训...）
+  fpCount       Int      @default(0) // False Positive数量
+  fnCount       Int      @default(0) // False Negative数量
+  encoderName   String? // 编码器名称
+  decoderDepth  Int? // 解码器深度
+  epochs        Int? // 训练轮数
+  freezeEncoder Boolean? // 是否冻结编码器
+
   @@unique([taskUuid, labelName])
   @@index([productId])
   @@index([taskUuid])
   @@index([status])
+  @@index([isRetrain])
+  @@index([baseTaskUuid])
 }
 
 model AppSettings {
@@ -112,4 +127,44 @@ model AppSettings {
   imageSettings String?  @default("{\"exposure\":6084,\"gain\":1.2}")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+// ROI 图片记录表 - 用于重训管理
+model RoiImage {
+  id             String @id @default(uuid())
+  productId      String
+  sourceTaskUuid String // ROI来源的task_uuid（模型ID）
+  category       String // 缺陷类别
+
+  // 模型原始判断
+  modelIsAnomaly Boolean
+  // 用户修正后的判断
+  userIsAnomaly  Boolean
+
+  // ROI类型：根据模型和用户的判断差异自动计算
+  // 'FP' = False Positive (模型NG, 用户OK) → 用于微调
+  // 'FN' = False Negative (模型OK, 用户NG) → 用于原型库
+  // 'NORMAL' = 判断一致或用户未修改
+  roiType String @default("NORMAL")
+
+  filePath      String // 文件完整路径
+  fileName      String // 文件名
+  thumbnailPath String? // 缩略图路径
+
+  // 使用状态
+  usedInRetrain Boolean   @default(false)
+  usedTaskUuid  String? // 被用于哪个重训任务
+  usedAt        DateTime?
+
+  // 支持链式重训
+  generation Int @default(0) // 第几代（0=原始训练，1=第一次重训...）
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([sourceTaskUuid])
+  @@index([roiType])
+  @@index([usedInRetrain])
+  @@index([usedTaskUuid])
 }

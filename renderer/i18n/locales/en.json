@@ -391,6 +391,31 @@
       "converted": "Converted",
       "inference": "Inference Config"
     },
+    "retrain": {
+      "mode": "Training Mode",
+      "modePlaceholder": "Select training mode",
+      "fresh": "Fresh Training",
+      "incremental": "Incremental Retrain",
+      "baseModel": "Base Model",
+      "selectBaseModel": "Select base model",
+      "falsePositives": "False Positives",
+      "falseNegatives": "False Negatives",
+      "fpDescription": "Normal samples misclassified as anomalies, used for model fine-tuning",
+      "fnDescription": "Anomalies missed by the model, used for prototype bank update",
+      "noFpRois": "No false positive samples available",
+      "noFnRois": "No false negative samples available",
+      "selected": "selected",
+      "used": "Used",
+      "start": "Start Retrain",
+      "starting": "Starting retrain...",
+      "startSuccess": "Retrain started successfully, new task: {taskUuid}",
+      "startFailed": "Failed to start retrain",
+      "loadRoisFailed": "Failed to load ROIs",
+      "noRoisSelected": "Please select at least one ROI",
+      "fp": "FP",
+      "fn": "FN",
+      "normal": "Normal"
+    },
     "messages": {
       "success": "Augmentation preview generated successfully",
       "failed": "Augmentation request failed"

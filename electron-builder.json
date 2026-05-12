@@ -86,6 +86,6 @@
   "npmRebuild": false,
   "nodeGypRebuild": false,
   "buildDependenciesFromSource": false,
-  "compression": "maximum",
+  "compression": "normal",
   "includePdb": false
 }

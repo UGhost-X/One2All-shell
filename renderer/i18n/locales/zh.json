@@ -407,6 +407,31 @@
       "converted": "已转换",
       "inference": "推理配置"
     },
+    "retrain": {
+      "mode": "训练模式",
+      "modePlaceholder": "选择训练模式",
+      "fresh": "全新训练",
+      "incremental": "增量重训",
+      "baseModel": "基础模型",
+      "selectBaseModel": "选择基础模型",
+      "falsePositives": "False Positives (误检)",
+      "falseNegatives": "False Negatives (漏检)",
+      "fpDescription": "被误检为异常的正常样本，用于微调模型",
+      "fnDescription": "被漏检的异常样本，用于更新原型库",
+      "noFpRois": "暂无可用误检样本",
+      "noFnRois": "暂无可用漏检样本",
+      "selected": "已选择",
+      "used": "已使用",
+      "start": "开始重训",
+      "starting": "重训启动中...",
+      "startSuccess": "重训启动成功，新任务: {taskUuid}",
+      "startFailed": "重训启动失败",
+      "loadRoisFailed": "加载ROI失败",
+      "noRoisSelected": "请至少选择一个ROI",
+      "fp": "误检",
+      "fn": "漏检",
+      "normal": "正常"
+    },
     "messages": {
       "success": "增强预览生成成功",
       "failed": "增强请求失败"

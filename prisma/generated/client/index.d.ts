@@ -48,6 +48,11 @@ export type TrainingRecord = $Result.DefaultSelection<Prisma.$TrainingRecordPayl
  * 
  */
 export type AppSettings = $Result.DefaultSelection<Prisma.$AppSettingsPayload>
+/**
+ * Model RoiImage
+ * 
+ */
+export type RoiImage = $Result.DefaultSelection<Prisma.$RoiImagePayload>
 
 /**
  * ##  Prisma Client ʲˢ
@@ -236,6 +241,16 @@ export class PrismaClient<
     * ```
     */
   get appSettings(): Prisma.AppSettingsDelegate<ExtArgs, ClientOptions>;
+
+  /**
+   * `prisma.roiImage`: Exposes CRUD operations for the **RoiImage** model.
+    * Example usage:
+    * ```ts
+    * // Fetch zero or more RoiImages
+    * const roiImages = await prisma.roiImage.findMany()
+    * ```
+    */
+  get roiImage(): Prisma.RoiImageDelegate<ExtArgs, ClientOptions>;
 }
 
 export namespace Prisma {
@@ -683,7 +698,8 @@ export namespace Prisma {
     DatasetVersion: 'DatasetVersion',
     Camera: 'Camera',
     TrainingRecord: 'TrainingRecord',
-    AppSettings: 'AppSettings'
+    AppSettings: 'AppSettings',
+    RoiImage: 'RoiImage'
   };
 
   export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -702,7 +718,7 @@ export namespace Prisma {
       omit: GlobalOmitOptions
     }
     meta: {
-      modelProps: "product" | "annotationScheme" | "annotation" | "datasetVersion" | "camera" | "trainingRecord" | "appSettings"
+      modelProps: "product" | "annotationScheme" | "annotation" | "datasetVersion" | "camera" | "trainingRecord" | "appSettings" | "roiImage"
       txIsolationLevel: Prisma.TransactionIsolationLevel
     }
     model: {
@@ -1224,6 +1240,80 @@ export namespace Prisma {
           }
         }
       }
+      RoiImage: {
+        payload: Prisma.$RoiImagePayload<ExtArgs>
+        fields: Prisma.RoiImageFieldRefs
+        operations: {
+          findUnique: {
+            args: Prisma.RoiImageFindUniqueArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload> | null
+          }
+          findUniqueOrThrow: {
+            args: Prisma.RoiImageFindUniqueOrThrowArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>
+          }
+          findFirst: {
+            args: Prisma.RoiImageFindFirstArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload> | null
+          }
+          findFirstOrThrow: {
+            args: Prisma.RoiImageFindFirstOrThrowArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>
+          }
+          findMany: {
+            args: Prisma.RoiImageFindManyArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>[]
+          }
+          create: {
+            args: Prisma.RoiImageCreateArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>
+          }
+          createMany: {
+            args: Prisma.RoiImageCreateManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          createManyAndReturn: {
+            args: Prisma.RoiImageCreateManyAndReturnArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>[]
+          }
+          delete: {
+            args: Prisma.RoiImageDeleteArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>
+          }
+          update: {
+            args: Prisma.RoiImageUpdateArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>
+          }
+          deleteMany: {
+            args: Prisma.RoiImageDeleteManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          updateMany: {
+            args: Prisma.RoiImageUpdateManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          updateManyAndReturn: {
+            args: Prisma.RoiImageUpdateManyAndReturnArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>[]
+          }
+          upsert: {
+            args: Prisma.RoiImageUpsertArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$RoiImagePayload>
+          }
+          aggregate: {
+            args: Prisma.RoiImageAggregateArgs<ExtArgs>
+            result: $Utils.Optional<AggregateRoiImage>
+          }
+          groupBy: {
+            args: Prisma.RoiImageGroupByArgs<ExtArgs>
+            result: $Utils.Optional<RoiImageGroupByOutputType>[]
+          }
+          count: {
+            args: Prisma.RoiImageCountArgs<ExtArgs>
+            result: $Utils.Optional<RoiImageCountAggregateOutputType> | number
+          }
+        }
+      }
     }
   } & {
     other: {
@@ -1327,6 +1417,7 @@ export namespace Prisma {
     camera?: CameraOmit
     trainingRecord?: TrainingRecordOmit
     appSettings?: AppSettingsOmit
+    roiImage?: RoiImageOmit
   }
 
   /* Types for Logging */
@@ -6879,6 +6970,11 @@ export namespace Prisma {
     batchSize: number | null
     learningRate: number | null
     latestIter: number | null
+    generation: number | null
+    fpCount: number | null
+    fnCount: number | null
+    decoderDepth: number | null
+    epochs: number | null
   }
 
   export type TrainingRecordSumAggregateOutputType = {
@@ -6888,6 +6984,11 @@ export namespace Prisma {
     batchSize: number | null
     learningRate: number | null
     latestIter: number | null
+    generation: number | null
+    fpCount: number | null
+    fnCount: number | null
+    decoderDepth: number | null
+    epochs: number | null
   }
 
   export type TrainingRecordMinAggregateOutputType = {
@@ -6912,6 +7013,17 @@ export namespace Prisma {
     outputPath: string | null
     createdAt: Date | null
     updatedAt: Date | null
+    isRetrain: boolean | null
+    baseTaskUuid: string | null
+    pathId: string | null
+    taskChain: string | null
+    generation: number | null
+    fpCount: number | null
+    fnCount: number | null
+    encoderName: string | null
+    decoderDepth: number | null
+    epochs: number | null
+    freezeEncoder: boolean | null
   }
 
   export type TrainingRecordMaxAggregateOutputType = {
@@ -6936,6 +7048,17 @@ export namespace Prisma {
     outputPath: string | null
     createdAt: Date | null
     updatedAt: Date | null
+    isRetrain: boolean | null
+    baseTaskUuid: string | null
+    pathId: string | null
+    taskChain: string | null
+    generation: number | null
+    fpCount: number | null
+    fnCount: number | null
+    encoderName: string | null
+    decoderDepth: number | null
+    epochs: number | null
+    freezeEncoder: boolean | null
   }
 
   export type TrainingRecordCountAggregateOutputType = {
@@ -6960,6 +7083,17 @@ export namespace Prisma {
     outputPath: number
     createdAt: number
     updatedAt: number
+    isRetrain: number
+    baseTaskUuid: number
+    pathId: number
+    taskChain: number
+    generation: number
+    fpCount: number
+    fnCount: number
+    encoderName: number
+    decoderDepth: number
+    epochs: number
+    freezeEncoder: number
     _all: number
   }
 
@@ -6971,6 +7105,11 @@ export namespace Prisma {
     batchSize?: true
     learningRate?: true
     latestIter?: true
+    generation?: true
+    fpCount?: true
+    fnCount?: true
+    decoderDepth?: true
+    epochs?: true
   }
 
   export type TrainingRecordSumAggregateInputType = {
@@ -6980,6 +7119,11 @@ export namespace Prisma {
     batchSize?: true
     learningRate?: true
     latestIter?: true
+    generation?: true
+    fpCount?: true
+    fnCount?: true
+    decoderDepth?: true
+    epochs?: true
   }
 
   export type TrainingRecordMinAggregateInputType = {
@@ -7004,6 +7148,17 @@ export namespace Prisma {
     outputPath?: true
     createdAt?: true
     updatedAt?: true
+    isRetrain?: true
+    baseTaskUuid?: true
+    pathId?: true
+    taskChain?: true
+    generation?: true
+    fpCount?: true
+    fnCount?: true
+    encoderName?: true
+    decoderDepth?: true
+    epochs?: true
+    freezeEncoder?: true
   }
 
   export type TrainingRecordMaxAggregateInputType = {
@@ -7028,6 +7183,17 @@ export namespace Prisma {
     outputPath?: true
     createdAt?: true
     updatedAt?: true
+    isRetrain?: true
+    baseTaskUuid?: true
+    pathId?: true
+    taskChain?: true
+    generation?: true
+    fpCount?: true
+    fnCount?: true
+    encoderName?: true
+    decoderDepth?: true
+    epochs?: true
+    freezeEncoder?: true
   }
 
   export type TrainingRecordCountAggregateInputType = {
@@ -7052,6 +7218,17 @@ export namespace Prisma {
     outputPath?: true
     createdAt?: true
     updatedAt?: true
+    isRetrain?: true
+    baseTaskUuid?: true
+    pathId?: true
+    taskChain?: true
+    generation?: true
+    fpCount?: true
+    fnCount?: true
+    encoderName?: true
+    decoderDepth?: true
+    epochs?: true
+    freezeEncoder?: true
     _all?: true
   }
 
@@ -7163,6 +7340,17 @@ export namespace Prisma {
     outputPath: string | null
     createdAt: Date
     updatedAt: Date
+    isRetrain: boolean
+    baseTaskUuid: string | null
+    pathId: string | null
+    taskChain: string
+    generation: number
+    fpCount: number
+    fnCount: number
+    encoderName: string | null
+    decoderDepth: number | null
+    epochs: number | null
+    freezeEncoder: boolean | null
     _count: TrainingRecordCountAggregateOutputType | null
     _avg: TrainingRecordAvgAggregateOutputType | null
     _sum: TrainingRecordSumAggregateOutputType | null
@@ -7206,6 +7394,17 @@ export namespace Prisma {
     outputPath?: boolean
     createdAt?: boolean
     updatedAt?: boolean
+    isRetrain?: boolean
+    baseTaskUuid?: boolean
+    pathId?: boolean
+    taskChain?: boolean
+    generation?: boolean
+    fpCount?: boolean
+    fnCount?: boolean
+    encoderName?: boolean
+    decoderDepth?: boolean
+    epochs?: boolean
+    freezeEncoder?: boolean
   }, ExtArgs["result"]["trainingRecord"]>
 
   export type TrainingRecordSelectCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
@@ -7230,6 +7429,17 @@ export namespace Prisma {
     outputPath?: boolean
     createdAt?: boolean
     updatedAt?: boolean
+    isRetrain?: boolean
+    baseTaskUuid?: boolean
+    pathId?: boolean
+    taskChain?: boolean
+    generation?: boolean
+    fpCount?: boolean
+    fnCount?: boolean
+    encoderName?: boolean
+    decoderDepth?: boolean
+    epochs?: boolean
+    freezeEncoder?: boolean
   }, ExtArgs["result"]["trainingRecord"]>
 
   export type TrainingRecordSelectUpdateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
@@ -7254,6 +7464,17 @@ export namespace Prisma {
     outputPath?: boolean
     createdAt?: boolean
     updatedAt?: boolean
+    isRetrain?: boolean
+    baseTaskUuid?: boolean
+    pathId?: boolean
+    taskChain?: boolean
+    generation?: boolean
+    fpCount?: boolean
+    fnCount?: boolean
+    encoderName?: boolean
+    decoderDepth?: boolean
+    epochs?: boolean
+    freezeEncoder?: boolean
   }, ExtArgs["result"]["trainingRecord"]>
 
   export type TrainingRecordSelectScalar = {
@@ -7278,9 +7499,20 @@ export namespace Prisma {
     outputPath?: boolean
     createdAt?: boolean
     updatedAt?: boolean
+    isRetrain?: boolean
+    baseTaskUuid?: boolean
+    pathId?: boolean
+    taskChain?: boolean
+    generation?: boolean
+    fpCount?: boolean
+    fnCount?: boolean
+    encoderName?: boolean
+    decoderDepth?: boolean
+    epochs?: boolean
+    freezeEncoder?: boolean
   }
 
-  export type TrainingRecordOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "taskUuid" | "labelName" | "modelName" | "config" | "status" | "progress" | "totalEpochs" | "currentEpoch" | "batchSize" | "learningRate" | "latestIter" | "metrics" | "logs" | "startTime" | "endTime" | "hasBestModel" | "outputPath" | "createdAt" | "updatedAt", ExtArgs["result"]["trainingRecord"]>
+  export type TrainingRecordOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "taskUuid" | "labelName" | "modelName" | "config" | "status" | "progress" | "totalEpochs" | "currentEpoch" | "batchSize" | "learningRate" | "latestIter" | "metrics" | "logs" | "startTime" | "endTime" | "hasBestModel" | "outputPath" | "createdAt" | "updatedAt" | "isRetrain" | "baseTaskUuid" | "pathId" | "taskChain" | "generation" | "fpCount" | "fnCount" | "encoderName" | "decoderDepth" | "epochs" | "freezeEncoder", ExtArgs["result"]["trainingRecord"]>
 
   export type $TrainingRecordPayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     name: "TrainingRecord"
@@ -7307,6 +7539,17 @@ export namespace Prisma {
       outputPath: string | null
       createdAt: Date
       updatedAt: Date
+      isRetrain: boolean
+      baseTaskUuid: string | null
+      pathId: string | null
+      taskChain: string
+      generation: number
+      fpCount: number
+      fnCount: number
+      encoderName: string | null
+      decoderDepth: number | null
+      epochs: number | null
+      freezeEncoder: boolean | null
     }, ExtArgs["result"]["trainingRecord"]>
     composites: {}
   }
@@ -7751,6 +7994,17 @@ export namespace Prisma {
     readonly outputPath: FieldRef<"TrainingRecord", 'String'>
     readonly createdAt: FieldRef<"TrainingRecord", 'DateTime'>
     readonly updatedAt: FieldRef<"TrainingRecord", 'DateTime'>
+    readonly isRetrain: FieldRef<"TrainingRecord", 'Boolean'>
+    readonly baseTaskUuid: FieldRef<"TrainingRecord", 'String'>
+    readonly pathId: FieldRef<"TrainingRecord", 'String'>
+    readonly taskChain: FieldRef<"TrainingRecord", 'String'>
+    readonly generation: FieldRef<"TrainingRecord", 'Int'>
+    readonly fpCount: FieldRef<"TrainingRecord", 'Int'>
+    readonly fnCount: FieldRef<"TrainingRecord", 'Int'>
+    readonly encoderName: FieldRef<"TrainingRecord", 'String'>
+    readonly decoderDepth: FieldRef<"TrainingRecord", 'Int'>
+    readonly epochs: FieldRef<"TrainingRecord", 'Int'>
+    readonly freezeEncoder: FieldRef<"TrainingRecord", 'Boolean'>
   }
     
 
@@ -9208,6 +9462,1176 @@ export namespace Prisma {
 
 
   /**
+   * Model RoiImage
+   */
+
+  export type AggregateRoiImage = {
+    _count: RoiImageCountAggregateOutputType | null
+    _avg: RoiImageAvgAggregateOutputType | null
+    _sum: RoiImageSumAggregateOutputType | null
+    _min: RoiImageMinAggregateOutputType | null
+    _max: RoiImageMaxAggregateOutputType | null
+  }
+
+  export type RoiImageAvgAggregateOutputType = {
+    generation: number | null
+  }
+
+  export type RoiImageSumAggregateOutputType = {
+    generation: number | null
+  }
+
+  export type RoiImageMinAggregateOutputType = {
+    id: string | null
+    productId: string | null
+    sourceTaskUuid: string | null
+    category: string | null
+    modelIsAnomaly: boolean | null
+    userIsAnomaly: boolean | null
+    roiType: string | null
+    filePath: string | null
+    fileName: string | null
+    thumbnailPath: string | null
+    usedInRetrain: boolean | null
+    usedTaskUuid: string | null
+    usedAt: Date | null
+    generation: number | null
+    createdAt: Date | null
+    updatedAt: Date | null
+  }
+
+  export type RoiImageMaxAggregateOutputType = {
+    id: string | null
+    productId: string | null
+    sourceTaskUuid: string | null
+    category: string | null
+    modelIsAnomaly: boolean | null
+    userIsAnomaly: boolean | null
+    roiType: string | null
+    filePath: string | null
+    fileName: string | null
+    thumbnailPath: string | null
+    usedInRetrain: boolean | null
+    usedTaskUuid: string | null
+    usedAt: Date | null
+    generation: number | null
+    createdAt: Date | null
+    updatedAt: Date | null
+  }
+
+  export type RoiImageCountAggregateOutputType = {
+    id: number
+    productId: number
+    sourceTaskUuid: number
+    category: number
+    modelIsAnomaly: number
+    userIsAnomaly: number
+    roiType: number
+    filePath: number
+    fileName: number
+    thumbnailPath: number
+    usedInRetrain: number
+    usedTaskUuid: number
+    usedAt: number
+    generation: number
+    createdAt: number
+    updatedAt: number
+    _all: number
+  }
+
+
+  export type RoiImageAvgAggregateInputType = {
+    generation?: true
+  }
+
+  export type RoiImageSumAggregateInputType = {
+    generation?: true
+  }
+
+  export type RoiImageMinAggregateInputType = {
+    id?: true
+    productId?: true
+    sourceTaskUuid?: true
+    category?: true
+    modelIsAnomaly?: true
+    userIsAnomaly?: true
+    roiType?: true
+    filePath?: true
+    fileName?: true
+    thumbnailPath?: true
+    usedInRetrain?: true
+    usedTaskUuid?: true
+    usedAt?: true
+    generation?: true
+    createdAt?: true
+    updatedAt?: true
+  }
+
+  export type RoiImageMaxAggregateInputType = {
+    id?: true
+    productId?: true
+    sourceTaskUuid?: true
+    category?: true
+    modelIsAnomaly?: true
+    userIsAnomaly?: true
+    roiType?: true
+    filePath?: true
+    fileName?: true
+    thumbnailPath?: true
+    usedInRetrain?: true
+    usedTaskUuid?: true
+    usedAt?: true
+    generation?: true
+    createdAt?: true
+    updatedAt?: true
+  }
+
+  export type RoiImageCountAggregateInputType = {
+    id?: true
+    productId?: true
+    sourceTaskUuid?: true
+    category?: true
+    modelIsAnomaly?: true
+    userIsAnomaly?: true
+    roiType?: true
+    filePath?: true
+    fileName?: true
+    thumbnailPath?: true
+    usedInRetrain?: true
+    usedTaskUuid?: true
+    usedAt?: true
+    generation?: true
+    createdAt?: true
+    updatedAt?: true
+    _all?: true
+  }
+
+  export type RoiImageAggregateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Filter which RoiImage to aggregate.
+     */
+    where?: RoiImageWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of RoiImages to fetch.
+     */
+    orderBy?: RoiImageOrderByWithRelationInput | RoiImageOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the start position
+     */
+    cursor?: RoiImageWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` RoiImages from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` RoiImages.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Count returned RoiImages
+    **/
+    _count?: true | RoiImageCountAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to average
+    **/
+    _avg?: RoiImageAvgAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to sum
+    **/
+    _sum?: RoiImageSumAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to find the minimum value
+    **/
+    _min?: RoiImageMinAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to find the maximum value
+    **/
+    _max?: RoiImageMaxAggregateInputType
+  }
+
+  export type GetRoiImageAggregateType<T extends RoiImageAggregateArgs> = {
+        [P in keyof T & keyof AggregateRoiImage]: P extends '_count' | 'count'
+      ? T[P] extends true
+        ? number
+        : GetScalarType<T[P], AggregateRoiImage[P]>
+      : GetScalarType<T[P], AggregateRoiImage[P]>
+  }
+
+
+
+
+  export type RoiImageGroupByArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    where?: RoiImageWhereInput
+    orderBy?: RoiImageOrderByWithAggregationInput | RoiImageOrderByWithAggregationInput[]
+    by: RoiImageScalarFieldEnum[] | RoiImageScalarFieldEnum
+    having?: RoiImageScalarWhereWithAggregatesInput
+    take?: number
+    skip?: number
+    _count?: RoiImageCountAggregateInputType | true
+    _avg?: RoiImageAvgAggregateInputType
+    _sum?: RoiImageSumAggregateInputType
+    _min?: RoiImageMinAggregateInputType
+    _max?: RoiImageMaxAggregateInputType
+  }
+
+  export type RoiImageGroupByOutputType = {
+    id: string
+    productId: string
+    sourceTaskUuid: string
+    category: string
+    modelIsAnomaly: boolean
+    userIsAnomaly: boolean
+    roiType: string
+    filePath: string
+    fileName: string
+    thumbnailPath: string | null
+    usedInRetrain: boolean
+    usedTaskUuid: string | null
+    usedAt: Date | null
+    generation: number
+    createdAt: Date
+    updatedAt: Date
+    _count: RoiImageCountAggregateOutputType | null
+    _avg: RoiImageAvgAggregateOutputType | null
+    _sum: RoiImageSumAggregateOutputType | null
+    _min: RoiImageMinAggregateOutputType | null
+    _max: RoiImageMaxAggregateOutputType | null
+  }
+
+  type GetRoiImageGroupByPayload<T extends RoiImageGroupByArgs> = Prisma.PrismaPromise<
+    Array<
+      PickEnumerable<RoiImageGroupByOutputType, T['by']> &
+        {
+          [P in ((keyof T) & (keyof RoiImageGroupByOutputType))]: P extends '_count'
+            ? T[P] extends boolean
+              ? number
+              : GetScalarType<T[P], RoiImageGroupByOutputType[P]>
+            : GetScalarType<T[P], RoiImageGroupByOutputType[P]>
+        }
+      >
+    >
+
+
+  export type RoiImageSelect<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    productId?: boolean
+    sourceTaskUuid?: boolean
+    category?: boolean
+    modelIsAnomaly?: boolean
+    userIsAnomaly?: boolean
+    roiType?: boolean
+    filePath?: boolean
+    fileName?: boolean
+    thumbnailPath?: boolean
+    usedInRetrain?: boolean
+    usedTaskUuid?: boolean
+    usedAt?: boolean
+    generation?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+  }, ExtArgs["result"]["roiImage"]>
+
+  export type RoiImageSelectCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    productId?: boolean
+    sourceTaskUuid?: boolean
+    category?: boolean
+    modelIsAnomaly?: boolean
+    userIsAnomaly?: boolean
+    roiType?: boolean
+    filePath?: boolean
+    fileName?: boolean
+    thumbnailPath?: boolean
+    usedInRetrain?: boolean
+    usedTaskUuid?: boolean
+    usedAt?: boolean
+    generation?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+  }, ExtArgs["result"]["roiImage"]>
+
+  export type RoiImageSelectUpdateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    productId?: boolean
+    sourceTaskUuid?: boolean
+    category?: boolean
+    modelIsAnomaly?: boolean
+    userIsAnomaly?: boolean
+    roiType?: boolean
+    filePath?: boolean
+    fileName?: boolean
+    thumbnailPath?: boolean
+    usedInRetrain?: boolean
+    usedTaskUuid?: boolean
+    usedAt?: boolean
+    generation?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+  }, ExtArgs["result"]["roiImage"]>
+
+  export type RoiImageSelectScalar = {
+    id?: boolean
+    productId?: boolean
+    sourceTaskUuid?: boolean
+    category?: boolean
+    modelIsAnomaly?: boolean
+    userIsAnomaly?: boolean
+    roiType?: boolean
+    filePath?: boolean
+    fileName?: boolean
+    thumbnailPath?: boolean
+    usedInRetrain?: boolean
+    usedTaskUuid?: boolean
+    usedAt?: boolean
+    generation?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+  }
+
+  export type RoiImageOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "sourceTaskUuid" | "category" | "modelIsAnomaly" | "userIsAnomaly" | "roiType" | "filePath" | "fileName" | "thumbnailPath" | "usedInRetrain" | "usedTaskUuid" | "usedAt" | "generation" | "createdAt" | "updatedAt", ExtArgs["result"]["roiImage"]>
+
+  export type $RoiImagePayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    name: "RoiImage"
+    objects: {}
+    scalars: $Extensions.GetPayloadResult<{
+      id: string
+      productId: string
+      sourceTaskUuid: string
+      category: string
+      modelIsAnomaly: boolean
+      userIsAnomaly: boolean
+      roiType: string
+      filePath: string
+      fileName: string
+      thumbnailPath: string | null
+      usedInRetrain: boolean
+      usedTaskUuid: string | null
+      usedAt: Date | null
+      generation: number
+      createdAt: Date
+      updatedAt: Date
+    }, ExtArgs["result"]["roiImage"]>
+    composites: {}
+  }
+
+  type RoiImageGetPayload<S extends boolean | null | undefined | RoiImageDefaultArgs> = $Result.GetResult<Prisma.$RoiImagePayload, S>
+
+  type RoiImageCountArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> =
+    Omit<RoiImageFindManyArgs, 'select' | 'include' | 'distinct' | 'omit'> & {
+      select?: RoiImageCountAggregateInputType | true
+    }
+
+  export interface RoiImageDelegate<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs, GlobalOmitOptions = {}> {
+    [K: symbol]: { types: Prisma.TypeMap<ExtArgs>['model']['RoiImage'], meta: { name: 'RoiImage' } }
+    /**
+     * Find zero or one RoiImage that matches the filter.
+     * @param {RoiImageFindUniqueArgs} args - Arguments to find a RoiImage
+     * @example
+     * // Get one RoiImage
+     * const roiImage = await prisma.roiImage.findUnique({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findUnique<T extends RoiImageFindUniqueArgs>(args: SelectSubset<T, RoiImageFindUniqueArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "findUnique", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find one RoiImage that matches the filter or throw an error with `error.code='P2025'`
+     * if no matches were found.
+     * @param {RoiImageFindUniqueOrThrowArgs} args - Arguments to find a RoiImage
+     * @example
+     * // Get one RoiImage
+     * const roiImage = await prisma.roiImage.findUniqueOrThrow({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findUniqueOrThrow<T extends RoiImageFindUniqueOrThrowArgs>(args: SelectSubset<T, RoiImageFindUniqueOrThrowArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find the first RoiImage that matches the filter.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {RoiImageFindFirstArgs} args - Arguments to find a RoiImage
+     * @example
+     * // Get one RoiImage
+     * const roiImage = await prisma.roiImage.findFirst({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findFirst<T extends RoiImageFindFirstArgs>(args?: SelectSubset<T, RoiImageFindFirstArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "findFirst", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find the first RoiImage that matches the filter or
+     * throw `PrismaKnownClientError` with `P2025` code if no matches were found.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {RoiImageFindFirstOrThrowArgs} args - Arguments to find a RoiImage
+     * @example
+     * // Get one RoiImage
+     * const roiImage = await prisma.roiImage.findFirstOrThrow({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findFirstOrThrow<T extends RoiImageFindFirstOrThrowArgs>(args?: SelectSubset<T, RoiImageFindFirstOrThrowArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "findFirstOrThrow", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find zero or more RoiImages that matches the filter.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {RoiImageFindManyArgs} args - Arguments to filter and select certain fields only.
+     * @example
+     * // Get all RoiImages
+     * const roiImages = await prisma.roiImage.findMany()
+     * 
+     * // Get first 10 RoiImages
+     * const roiImages = await prisma.roiImage.findMany({ take: 10 })
+     * 
+     * // Only select the `id`
+     * const roiImageWithIdOnly = await prisma.roiImage.findMany({ select: { id: true } })
+     * 
+     */
+    findMany<T extends RoiImageFindManyArgs>(args?: SelectSubset<T, RoiImageFindManyArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "findMany", GlobalOmitOptions>>
+
+    /**
+     * Create a RoiImage.
+     * @param {RoiImageCreateArgs} args - Arguments to create a RoiImage.
+     * @example
+     * // Create one RoiImage
+     * const RoiImage = await prisma.roiImage.create({
+     *   data: {
+     *     // ... data to create a RoiImage
+     *   }
+     * })
+     * 
+     */
+    create<T extends RoiImageCreateArgs>(args: SelectSubset<T, RoiImageCreateArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "create", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Create many RoiImages.
+     * @param {RoiImageCreateManyArgs} args - Arguments to create many RoiImages.
+     * @example
+     * // Create many RoiImages
+     * const roiImage = await prisma.roiImage.createMany({
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     *     
+     */
+    createMany<T extends RoiImageCreateManyArgs>(args?: SelectSubset<T, RoiImageCreateManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Create many RoiImages and returns the data saved in the database.
+     * @param {RoiImageCreateManyAndReturnArgs} args - Arguments to create many RoiImages.
+     * @example
+     * // Create many RoiImages
+     * const roiImage = await prisma.roiImage.createManyAndReturn({
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * 
+     * // Create many RoiImages and only return the `id`
+     * const roiImageWithIdOnly = await prisma.roiImage.createManyAndReturn({
+     *   select: { id: true },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * 
+     */
+    createManyAndReturn<T extends RoiImageCreateManyAndReturnArgs>(args?: SelectSubset<T, RoiImageCreateManyAndReturnArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "createManyAndReturn", GlobalOmitOptions>>
+
+    /**
+     * Delete a RoiImage.
+     * @param {RoiImageDeleteArgs} args - Arguments to delete one RoiImage.
+     * @example
+     * // Delete one RoiImage
+     * const RoiImage = await prisma.roiImage.delete({
+     *   where: {
+     *     // ... filter to delete one RoiImage
+     *   }
+     * })
+     * 
+     */
+    delete<T extends RoiImageDeleteArgs>(args: SelectSubset<T, RoiImageDeleteArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "delete", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Update one RoiImage.
+     * @param {RoiImageUpdateArgs} args - Arguments to update one RoiImage.
+     * @example
+     * // Update one RoiImage
+     * const roiImage = await prisma.roiImage.update({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: {
+     *     // ... provide data here
+     *   }
+     * })
+     * 
+     */
+    update<T extends RoiImageUpdateArgs>(args: SelectSubset<T, RoiImageUpdateArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "update", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Delete zero or more RoiImages.
+     * @param {RoiImageDeleteManyArgs} args - Arguments to filter RoiImages to delete.
+     * @example
+     * // Delete a few RoiImages
+     * const { count } = await prisma.roiImage.deleteMany({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     * 
+     */
+    deleteMany<T extends RoiImageDeleteManyArgs>(args?: SelectSubset<T, RoiImageDeleteManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Update zero or more RoiImages.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {RoiImageUpdateManyArgs} args - Arguments to update one or more rows.
+     * @example
+     * // Update many RoiImages
+     * const roiImage = await prisma.roiImage.updateMany({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: {
+     *     // ... provide data here
+     *   }
+     * })
+     * 
+     */
+    updateMany<T extends RoiImageUpdateManyArgs>(args: SelectSubset<T, RoiImageUpdateManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Update zero or more RoiImages and returns the data updated in the database.
+     * @param {RoiImageUpdateManyAndReturnArgs} args - Arguments to update many RoiImages.
+     * @example
+     * // Update many RoiImages
+     * const roiImage = await prisma.roiImage.updateManyAndReturn({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * 
+     * // Update zero or more RoiImages and only return the `id`
+     * const roiImageWithIdOnly = await prisma.roiImage.updateManyAndReturn({
+     *   select: { id: true },
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * 
+     */
+    updateManyAndReturn<T extends RoiImageUpdateManyAndReturnArgs>(args: SelectSubset<T, RoiImageUpdateManyAndReturnArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "updateManyAndReturn", GlobalOmitOptions>>
+
+    /**
+     * Create or update one RoiImage.
+     * @param {RoiImageUpsertArgs} args - Arguments to update or create a RoiImage.
+     * @example
+     * // Update or create a RoiImage
+     * const roiImage = await prisma.roiImage.upsert({
+     *   create: {
+     *     // ... data to create a RoiImage
+     *   },
+     *   update: {
+     *     // ... in case it already exists, update
+     *   },
+     *   where: {
+     *     // ... the filter for the RoiImage we want to update
+     *   }
+     * })
+     */
+    upsert<T extends RoiImageUpsertArgs>(args: SelectSubset<T, RoiImageUpsertArgs<ExtArgs>>): Prisma__RoiImageClient<$Result.GetResult<Prisma.$RoiImagePayload<ExtArgs>, T, "upsert", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+
+    /**
+     * Count the number of RoiImages.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {RoiImageCountArgs} args - Arguments to filter RoiImages to count.
+     * @example
+     * // Count the number of RoiImages
+     * const count = await prisma.roiImage.count({
+     *   where: {
+     *     // ... the filter for the RoiImages we want to count
+     *   }
+     * })
+    **/
+    count<T extends RoiImageCountArgs>(
+      args?: Subset<T, RoiImageCountArgs>,
+    ): Prisma.PrismaPromise<
+      T extends $Utils.Record<'select', any>
+        ? T['select'] extends true
+          ? number
+          : GetScalarType<T['select'], RoiImageCountAggregateOutputType>
+        : number
+    >
+
+    /**
+     * Allows you to perform aggregations operations on a RoiImage.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {RoiImageAggregateArgs} args - Select which aggregations you would like to apply and on what fields.
+     * @example
+     * // Ordered by age ascending
+     * // Where email contains prisma.io
+     * // Limited to the 10 users
+     * const aggregations = await prisma.user.aggregate({
+     *   _avg: {
+     *     age: true,
+     *   },
+     *   where: {
+     *     email: {
+     *       contains: "prisma.io",
+     *     },
+     *   },
+     *   orderBy: {
+     *     age: "asc",
+     *   },
+     *   take: 10,
+     * })
+    **/
+    aggregate<T extends RoiImageAggregateArgs>(args: Subset<T, RoiImageAggregateArgs>): Prisma.PrismaPromise<GetRoiImageAggregateType<T>>
+
+    /**
+     * Group by RoiImage.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {RoiImageGroupByArgs} args - Group by arguments.
+     * @example
+     * // Group by city, order by createdAt, get count
+     * const result = await prisma.user.groupBy({
+     *   by: ['city', 'createdAt'],
+     *   orderBy: {
+     *     createdAt: true
+     *   },
+     *   _count: {
+     *     _all: true
+     *   },
+     * })
+     * 
+    **/
+    groupBy<
+      T extends RoiImageGroupByArgs,
+      HasSelectOrTake extends Or<
+        Extends<'skip', Keys<T>>,
+        Extends<'take', Keys<T>>
+      >,
+      OrderByArg extends True extends HasSelectOrTake
+        ? { orderBy: RoiImageGroupByArgs['orderBy'] }
+        : { orderBy?: RoiImageGroupByArgs['orderBy'] },
+      OrderFields extends ExcludeUnderscoreKeys<Keys<MaybeTupleToUnion<T['orderBy']>>>,
+      ByFields extends MaybeTupleToUnion<T['by']>,
+      ByValid extends Has<ByFields, OrderFields>,
+      HavingFields extends GetHavingFields<T['having']>,
+      HavingValid extends Has<ByFields, HavingFields>,
+      ByEmpty extends T['by'] extends never[] ? True : False,
+      InputErrors extends ByEmpty extends True
+      ? `Error: "by" must not be empty.`
+      : HavingValid extends False
+      ? {
+          [P in HavingFields]: P extends ByFields
+            ? never
+            : P extends string
+            ? `Error: Field "${P}" used in "having" needs to be provided in "by".`
+            : [
+                Error,
+                'Field ',
+                P,
+                ` in "having" needs to be provided in "by"`,
+              ]
+        }[HavingFields]
+      : 'take' extends Keys<T>
+      ? 'orderBy' extends Keys<T>
+        ? ByValid extends True
+          ? {}
+          : {
+              [P in OrderFields]: P extends ByFields
+                ? never
+                : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+            }[OrderFields]
+        : 'Error: If you provide "take", you also need to provide "orderBy"'
+      : 'skip' extends Keys<T>
+      ? 'orderBy' extends Keys<T>
+        ? ByValid extends True
+          ? {}
+          : {
+              [P in OrderFields]: P extends ByFields
+                ? never
+                : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+            }[OrderFields]
+        : 'Error: If you provide "skip", you also need to provide "orderBy"'
+      : ByValid extends True
+      ? {}
+      : {
+          [P in OrderFields]: P extends ByFields
+            ? never
+            : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+        }[OrderFields]
+    >(args: SubsetIntersection<T, RoiImageGroupByArgs, OrderByArg> & InputErrors): {} extends InputErrors ? GetRoiImageGroupByPayload<T> : Prisma.PrismaPromise<InputErrors>
+  /**
+   * Fields of the RoiImage model
+   */
+  readonly fields: RoiImageFieldRefs;
+  }
+
+  /**
+   * The delegate class that acts as a "Promise-like" for RoiImage.
+   * Why is this prefixed with `Prisma__`?
+   * Because we want to prevent naming conflicts as mentioned in
+   * https://github.com/prisma/prisma-client-js/issues/707
+   */
+  export interface Prisma__RoiImageClient<T, Null = never, ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
+    readonly [Symbol.toStringTag]: "PrismaPromise"
+    /**
+     * Attaches callbacks for the resolution and/or rejection of the Promise.
+     * @param onfulfilled The callback to execute when the Promise is resolved.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of which ever callback is executed.
+     */
+    then<TResult1 = T, TResult2 = never>(onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null, onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null): $Utils.JsPromise<TResult1 | TResult2>
+    /**
+     * Attaches a callback for only the rejection of the Promise.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of the callback.
+     */
+    catch<TResult = never>(onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null): $Utils.JsPromise<T | TResult>
+    /**
+     * Attaches a callback that is invoked when the Promise is settled (fulfilled or rejected). The
+     * resolved value cannot be modified from the callback.
+     * @param onfinally The callback to execute when the Promise is settled (fulfilled or rejected).
+     * @returns A Promise for the completion of the callback.
+     */
+    finally(onfinally?: (() => void) | undefined | null): $Utils.JsPromise<T>
+  }
+
+
+
+
+  /**
+   * Fields of the RoiImage model
+   */
+  interface RoiImageFieldRefs {
+    readonly id: FieldRef<"RoiImage", 'String'>
+    readonly productId: FieldRef<"RoiImage", 'String'>
+    readonly sourceTaskUuid: FieldRef<"RoiImage", 'String'>
+    readonly category: FieldRef<"RoiImage", 'String'>
+    readonly modelIsAnomaly: FieldRef<"RoiImage", 'Boolean'>
+    readonly userIsAnomaly: FieldRef<"RoiImage", 'Boolean'>
+    readonly roiType: FieldRef<"RoiImage", 'String'>
+    readonly filePath: FieldRef<"RoiImage", 'String'>
+    readonly fileName: FieldRef<"RoiImage", 'String'>
+    readonly thumbnailPath: FieldRef<"RoiImage", 'String'>
+    readonly usedInRetrain: FieldRef<"RoiImage", 'Boolean'>
+    readonly usedTaskUuid: FieldRef<"RoiImage", 'String'>
+    readonly usedAt: FieldRef<"RoiImage", 'DateTime'>
+    readonly generation: FieldRef<"RoiImage", 'Int'>
+    readonly createdAt: FieldRef<"RoiImage", 'DateTime'>
+    readonly updatedAt: FieldRef<"RoiImage", 'DateTime'>
+  }
+    
+
+  // Custom InputTypes
+  /**
+   * RoiImage findUnique
+   */
+  export type RoiImageFindUniqueArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * Filter, which RoiImage to fetch.
+     */
+    where: RoiImageWhereUniqueInput
+  }
+
+  /**
+   * RoiImage findUniqueOrThrow
+   */
+  export type RoiImageFindUniqueOrThrowArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * Filter, which RoiImage to fetch.
+     */
+    where: RoiImageWhereUniqueInput
+  }
+
+  /**
+   * RoiImage findFirst
+   */
+  export type RoiImageFindFirstArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * Filter, which RoiImage to fetch.
+     */
+    where?: RoiImageWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of RoiImages to fetch.
+     */
+    orderBy?: RoiImageOrderByWithRelationInput | RoiImageOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for searching for RoiImages.
+     */
+    cursor?: RoiImageWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` RoiImages from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` RoiImages.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+     * 
+     * Filter by unique combinations of RoiImages.
+     */
+    distinct?: RoiImageScalarFieldEnum | RoiImageScalarFieldEnum[]
+  }
+
+  /**
+   * RoiImage findFirstOrThrow
+   */
+  export type RoiImageFindFirstOrThrowArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * Filter, which RoiImage to fetch.
+     */
+    where?: RoiImageWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of RoiImages to fetch.
+     */
+    orderBy?: RoiImageOrderByWithRelationInput | RoiImageOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for searching for RoiImages.
+     */
+    cursor?: RoiImageWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` RoiImages from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` RoiImages.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+     * 
+     * Filter by unique combinations of RoiImages.
+     */
+    distinct?: RoiImageScalarFieldEnum | RoiImageScalarFieldEnum[]
+  }
+
+  /**
+   * RoiImage findMany
+   */
+  export type RoiImageFindManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * Filter, which RoiImages to fetch.
+     */
+    where?: RoiImageWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of RoiImages to fetch.
+     */
+    orderBy?: RoiImageOrderByWithRelationInput | RoiImageOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for listing RoiImages.
+     */
+    cursor?: RoiImageWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` RoiImages from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` RoiImages.
+     */
+    skip?: number
+    distinct?: RoiImageScalarFieldEnum | RoiImageScalarFieldEnum[]
+  }
+
+  /**
+   * RoiImage create
+   */
+  export type RoiImageCreateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * The data needed to create a RoiImage.
+     */
+    data: XOR<RoiImageCreateInput, RoiImageUncheckedCreateInput>
+  }
+
+  /**
+   * RoiImage createMany
+   */
+  export type RoiImageCreateManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * The data used to create many RoiImages.
+     */
+    data: RoiImageCreateManyInput | RoiImageCreateManyInput[]
+  }
+
+  /**
+   * RoiImage createManyAndReturn
+   */
+  export type RoiImageCreateManyAndReturnArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelectCreateManyAndReturn<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * The data used to create many RoiImages.
+     */
+    data: RoiImageCreateManyInput | RoiImageCreateManyInput[]
+  }
+
+  /**
+   * RoiImage update
+   */
+  export type RoiImageUpdateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * The data needed to update a RoiImage.
+     */
+    data: XOR<RoiImageUpdateInput, RoiImageUncheckedUpdateInput>
+    /**
+     * Choose, which RoiImage to update.
+     */
+    where: RoiImageWhereUniqueInput
+  }
+
+  /**
+   * RoiImage updateMany
+   */
+  export type RoiImageUpdateManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * The data used to update RoiImages.
+     */
+    data: XOR<RoiImageUpdateManyMutationInput, RoiImageUncheckedUpdateManyInput>
+    /**
+     * Filter which RoiImages to update
+     */
+    where?: RoiImageWhereInput
+    /**
+     * Limit how many RoiImages to update.
+     */
+    limit?: number
+  }
+
+  /**
+   * RoiImage updateManyAndReturn
+   */
+  export type RoiImageUpdateManyAndReturnArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelectUpdateManyAndReturn<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * The data used to update RoiImages.
+     */
+    data: XOR<RoiImageUpdateManyMutationInput, RoiImageUncheckedUpdateManyInput>
+    /**
+     * Filter which RoiImages to update
+     */
+    where?: RoiImageWhereInput
+    /**
+     * Limit how many RoiImages to update.
+     */
+    limit?: number
+  }
+
+  /**
+   * RoiImage upsert
+   */
+  export type RoiImageUpsertArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * The filter to search for the RoiImage to update in case it exists.
+     */
+    where: RoiImageWhereUniqueInput
+    /**
+     * In case the RoiImage found by the `where` argument doesn't exist, create a new RoiImage with this data.
+     */
+    create: XOR<RoiImageCreateInput, RoiImageUncheckedCreateInput>
+    /**
+     * In case the RoiImage was found with the provided `where` argument, update it with this data.
+     */
+    update: XOR<RoiImageUpdateInput, RoiImageUncheckedUpdateInput>
+  }
+
+  /**
+   * RoiImage delete
+   */
+  export type RoiImageDeleteArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+    /**
+     * Filter which RoiImage to delete.
+     */
+    where: RoiImageWhereUniqueInput
+  }
+
+  /**
+   * RoiImage deleteMany
+   */
+  export type RoiImageDeleteManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Filter which RoiImages to delete
+     */
+    where?: RoiImageWhereInput
+    /**
+     * Limit how many RoiImages to delete.
+     */
+    limit?: number
+  }
+
+  /**
+   * RoiImage without action
+   */
+  export type RoiImageDefaultArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the RoiImage
+     */
+    select?: RoiImageSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the RoiImage
+     */
+    omit?: RoiImageOmit<ExtArgs> | null
+  }
+
+
+  /**
    * Enums
    */
 
@@ -9305,7 +10729,18 @@ export namespace Prisma {
     hasBestModel: 'hasBestModel',
     outputPath: 'outputPath',
     createdAt: 'createdAt',
-    updatedAt: 'updatedAt'
+    updatedAt: 'updatedAt',
+    isRetrain: 'isRetrain',
+    baseTaskUuid: 'baseTaskUuid',
+    pathId: 'pathId',
+    taskChain: 'taskChain',
+    generation: 'generation',
+    fpCount: 'fpCount',
+    fnCount: 'fnCount',
+    encoderName: 'encoderName',
+    decoderDepth: 'decoderDepth',
+    epochs: 'epochs',
+    freezeEncoder: 'freezeEncoder'
   };
 
   export type TrainingRecordScalarFieldEnum = (typeof TrainingRecordScalarFieldEnum)[keyof typeof TrainingRecordScalarFieldEnum]
@@ -9325,6 +10760,28 @@ export namespace Prisma {
   };
 
   export type AppSettingsScalarFieldEnum = (typeof AppSettingsScalarFieldEnum)[keyof typeof AppSettingsScalarFieldEnum]
+
+
+  export const RoiImageScalarFieldEnum: {
+    id: 'id',
+    productId: 'productId',
+    sourceTaskUuid: 'sourceTaskUuid',
+    category: 'category',
+    modelIsAnomaly: 'modelIsAnomaly',
+    userIsAnomaly: 'userIsAnomaly',
+    roiType: 'roiType',
+    filePath: 'filePath',
+    fileName: 'fileName',
+    thumbnailPath: 'thumbnailPath',
+    usedInRetrain: 'usedInRetrain',
+    usedTaskUuid: 'usedTaskUuid',
+    usedAt: 'usedAt',
+    generation: 'generation',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt'
+  };
+
+  export type RoiImageScalarFieldEnum = (typeof RoiImageScalarFieldEnum)[keyof typeof RoiImageScalarFieldEnum]
 
 
   export const SortOrder: {
@@ -9740,6 +11197,17 @@ export namespace Prisma {
     outputPath?: StringNullableFilter<"TrainingRecord"> | string | null
     createdAt?: DateTimeFilter<"TrainingRecord"> | Date | string
     updatedAt?: DateTimeFilter<"TrainingRecord"> | Date | string
+    isRetrain?: BoolFilter<"TrainingRecord"> | boolean
+    baseTaskUuid?: StringNullableFilter<"TrainingRecord"> | string | null
+    pathId?: StringNullableFilter<"TrainingRecord"> | string | null
+    taskChain?: StringFilter<"TrainingRecord"> | string
+    generation?: IntFilter<"TrainingRecord"> | number
+    fpCount?: IntFilter<"TrainingRecord"> | number
+    fnCount?: IntFilter<"TrainingRecord"> | number
+    encoderName?: StringNullableFilter<"TrainingRecord"> | string | null
+    decoderDepth?: IntNullableFilter<"TrainingRecord"> | number | null
+    epochs?: IntNullableFilter<"TrainingRecord"> | number | null
+    freezeEncoder?: BoolNullableFilter<"TrainingRecord"> | boolean | null
   }
 
   export type TrainingRecordOrderByWithRelationInput = {
@@ -9764,6 +11232,17 @@ export namespace Prisma {
     outputPath?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
+    isRetrain?: SortOrder
+    baseTaskUuid?: SortOrderInput | SortOrder
+    pathId?: SortOrderInput | SortOrder
+    taskChain?: SortOrder
+    generation?: SortOrder
+    fpCount?: SortOrder
+    fnCount?: SortOrder
+    encoderName?: SortOrderInput | SortOrder
+    decoderDepth?: SortOrderInput | SortOrder
+    epochs?: SortOrderInput | SortOrder
+    freezeEncoder?: SortOrderInput | SortOrder
   }
 
   export type TrainingRecordWhereUniqueInput = Prisma.AtLeast<{
@@ -9792,6 +11271,17 @@ export namespace Prisma {
     outputPath?: StringNullableFilter<"TrainingRecord"> | string | null
     createdAt?: DateTimeFilter<"TrainingRecord"> | Date | string
     updatedAt?: DateTimeFilter<"TrainingRecord"> | Date | string
+    isRetrain?: BoolFilter<"TrainingRecord"> | boolean
+    baseTaskUuid?: StringNullableFilter<"TrainingRecord"> | string | null
+    pathId?: StringNullableFilter<"TrainingRecord"> | string | null
+    taskChain?: StringFilter<"TrainingRecord"> | string
+    generation?: IntFilter<"TrainingRecord"> | number
+    fpCount?: IntFilter<"TrainingRecord"> | number
+    fnCount?: IntFilter<"TrainingRecord"> | number
+    encoderName?: StringNullableFilter<"TrainingRecord"> | string | null
+    decoderDepth?: IntNullableFilter<"TrainingRecord"> | number | null
+    epochs?: IntNullableFilter<"TrainingRecord"> | number | null
+    freezeEncoder?: BoolNullableFilter<"TrainingRecord"> | boolean | null
   }, "id" | "taskUuid_labelName">
 
   export type TrainingRecordOrderByWithAggregationInput = {
@@ -9816,6 +11306,17 @@ export namespace Prisma {
     outputPath?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
+    isRetrain?: SortOrder
+    baseTaskUuid?: SortOrderInput | SortOrder
+    pathId?: SortOrderInput | SortOrder
+    taskChain?: SortOrder
+    generation?: SortOrder
+    fpCount?: SortOrder
+    fnCount?: SortOrder
+    encoderName?: SortOrderInput | SortOrder
+    decoderDepth?: SortOrderInput | SortOrder
+    epochs?: SortOrderInput | SortOrder
+    freezeEncoder?: SortOrderInput | SortOrder
     _count?: TrainingRecordCountOrderByAggregateInput
     _avg?: TrainingRecordAvgOrderByAggregateInput
     _max?: TrainingRecordMaxOrderByAggregateInput
@@ -9848,6 +11349,17 @@ export namespace Prisma {
     outputPath?: StringNullableWithAggregatesFilter<"TrainingRecord"> | string | null
     createdAt?: DateTimeWithAggregatesFilter<"TrainingRecord"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"TrainingRecord"> | Date | string
+    isRetrain?: BoolWithAggregatesFilter<"TrainingRecord"> | boolean
+    baseTaskUuid?: StringNullableWithAggregatesFilter<"TrainingRecord"> | string | null
+    pathId?: StringNullableWithAggregatesFilter<"TrainingRecord"> | string | null
+    taskChain?: StringWithAggregatesFilter<"TrainingRecord"> | string
+    generation?: IntWithAggregatesFilter<"TrainingRecord"> | number
+    fpCount?: IntWithAggregatesFilter<"TrainingRecord"> | number
+    fnCount?: IntWithAggregatesFilter<"TrainingRecord"> | number
+    encoderName?: StringNullableWithAggregatesFilter<"TrainingRecord"> | string | null
+    decoderDepth?: IntNullableWithAggregatesFilter<"TrainingRecord"> | number | null
+    epochs?: IntNullableWithAggregatesFilter<"TrainingRecord"> | number | null
+    freezeEncoder?: BoolNullableWithAggregatesFilter<"TrainingRecord"> | boolean | null
   }
 
   export type AppSettingsWhereInput = {
@@ -9927,6 +11439,115 @@ export namespace Prisma {
     imageSettings?: StringNullableWithAggregatesFilter<"AppSettings"> | string | null
     createdAt?: DateTimeWithAggregatesFilter<"AppSettings"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"AppSettings"> | Date | string
+  }
+
+  export type RoiImageWhereInput = {
+    AND?: RoiImageWhereInput | RoiImageWhereInput[]
+    OR?: RoiImageWhereInput[]
+    NOT?: RoiImageWhereInput | RoiImageWhereInput[]
+    id?: StringFilter<"RoiImage"> | string
+    productId?: StringFilter<"RoiImage"> | string
+    sourceTaskUuid?: StringFilter<"RoiImage"> | string
+    category?: StringFilter<"RoiImage"> | string
+    modelIsAnomaly?: BoolFilter<"RoiImage"> | boolean
+    userIsAnomaly?: BoolFilter<"RoiImage"> | boolean
+    roiType?: StringFilter<"RoiImage"> | string
+    filePath?: StringFilter<"RoiImage"> | string
+    fileName?: StringFilter<"RoiImage"> | string
+    thumbnailPath?: StringNullableFilter<"RoiImage"> | string | null
+    usedInRetrain?: BoolFilter<"RoiImage"> | boolean
+    usedTaskUuid?: StringNullableFilter<"RoiImage"> | string | null
+    usedAt?: DateTimeNullableFilter<"RoiImage"> | Date | string | null
+    generation?: IntFilter<"RoiImage"> | number
+    createdAt?: DateTimeFilter<"RoiImage"> | Date | string
+    updatedAt?: DateTimeFilter<"RoiImage"> | Date | string
+  }
+
+  export type RoiImageOrderByWithRelationInput = {
+    id?: SortOrder
+    productId?: SortOrder
+    sourceTaskUuid?: SortOrder
+    category?: SortOrder
+    modelIsAnomaly?: SortOrder
+    userIsAnomaly?: SortOrder
+    roiType?: SortOrder
+    filePath?: SortOrder
+    fileName?: SortOrder
+    thumbnailPath?: SortOrderInput | SortOrder
+    usedInRetrain?: SortOrder
+    usedTaskUuid?: SortOrderInput | SortOrder
+    usedAt?: SortOrderInput | SortOrder
+    generation?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+  }
+
+  export type RoiImageWhereUniqueInput = Prisma.AtLeast<{
+    id?: string
+    AND?: RoiImageWhereInput | RoiImageWhereInput[]
+    OR?: RoiImageWhereInput[]
+    NOT?: RoiImageWhereInput | RoiImageWhereInput[]
+    productId?: StringFilter<"RoiImage"> | string
+    sourceTaskUuid?: StringFilter<"RoiImage"> | string
+    category?: StringFilter<"RoiImage"> | string
+    modelIsAnomaly?: BoolFilter<"RoiImage"> | boolean
+    userIsAnomaly?: BoolFilter<"RoiImage"> | boolean
+    roiType?: StringFilter<"RoiImage"> | string
+    filePath?: StringFilter<"RoiImage"> | string
+    fileName?: StringFilter<"RoiImage"> | string
+    thumbnailPath?: StringNullableFilter<"RoiImage"> | string | null
+    usedInRetrain?: BoolFilter<"RoiImage"> | boolean
+    usedTaskUuid?: StringNullableFilter<"RoiImage"> | string | null
+    usedAt?: DateTimeNullableFilter<"RoiImage"> | Date | string | null
+    generation?: IntFilter<"RoiImage"> | number
+    createdAt?: DateTimeFilter<"RoiImage"> | Date | string
+    updatedAt?: DateTimeFilter<"RoiImage"> | Date | string
+  }, "id">
+
+  export type RoiImageOrderByWithAggregationInput = {
+    id?: SortOrder
+    productId?: SortOrder
+    sourceTaskUuid?: SortOrder
+    category?: SortOrder
+    modelIsAnomaly?: SortOrder
+    userIsAnomaly?: SortOrder
+    roiType?: SortOrder
+    filePath?: SortOrder
+    fileName?: SortOrder
+    thumbnailPath?: SortOrderInput | SortOrder
+    usedInRetrain?: SortOrder
+    usedTaskUuid?: SortOrderInput | SortOrder
+    usedAt?: SortOrderInput | SortOrder
+    generation?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+    _count?: RoiImageCountOrderByAggregateInput
+    _avg?: RoiImageAvgOrderByAggregateInput
+    _max?: RoiImageMaxOrderByAggregateInput
+    _min?: RoiImageMinOrderByAggregateInput
+    _sum?: RoiImageSumOrderByAggregateInput
+  }
+
+  export type RoiImageScalarWhereWithAggregatesInput = {
+    AND?: RoiImageScalarWhereWithAggregatesInput | RoiImageScalarWhereWithAggregatesInput[]
+    OR?: RoiImageScalarWhereWithAggregatesInput[]
+    NOT?: RoiImageScalarWhereWithAggregatesInput | RoiImageScalarWhereWithAggregatesInput[]
+    id?: StringWithAggregatesFilter<"RoiImage"> | string
+    productId?: StringWithAggregatesFilter<"RoiImage"> | string
+    sourceTaskUuid?: StringWithAggregatesFilter<"RoiImage"> | string
+    category?: StringWithAggregatesFilter<"RoiImage"> | string
+    modelIsAnomaly?: BoolWithAggregatesFilter<"RoiImage"> | boolean
+    userIsAnomaly?: BoolWithAggregatesFilter<"RoiImage"> | boolean
+    roiType?: StringWithAggregatesFilter<"RoiImage"> | string
+    filePath?: StringWithAggregatesFilter<"RoiImage"> | string
+    fileName?: StringWithAggregatesFilter<"RoiImage"> | string
+    thumbnailPath?: StringNullableWithAggregatesFilter<"RoiImage"> | string | null
+    usedInRetrain?: BoolWithAggregatesFilter<"RoiImage"> | boolean
+    usedTaskUuid?: StringNullableWithAggregatesFilter<"RoiImage"> | string | null
+    usedAt?: DateTimeNullableWithAggregatesFilter<"RoiImage"> | Date | string | null
+    generation?: IntWithAggregatesFilter<"RoiImage"> | number
+    createdAt?: DateTimeWithAggregatesFilter<"RoiImage"> | Date | string
+    updatedAt?: DateTimeWithAggregatesFilter<"RoiImage"> | Date | string
   }
 
   export type ProductCreateInput = {
@@ -10314,6 +11935,17 @@ export namespace Prisma {
     outputPath?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
+    isRetrain?: boolean
+    baseTaskUuid?: string | null
+    pathId?: string | null
+    taskChain?: string
+    generation?: number
+    fpCount?: number
+    fnCount?: number
+    encoderName?: string | null
+    decoderDepth?: number | null
+    epochs?: number | null
+    freezeEncoder?: boolean | null
   }
 
   export type TrainingRecordUncheckedCreateInput = {
@@ -10338,6 +11970,17 @@ export namespace Prisma {
     outputPath?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
+    isRetrain?: boolean
+    baseTaskUuid?: string | null
+    pathId?: string | null
+    taskChain?: string
+    generation?: number
+    fpCount?: number
+    fnCount?: number
+    encoderName?: string | null
+    decoderDepth?: number | null
+    epochs?: number | null
+    freezeEncoder?: boolean | null
   }
 
   export type TrainingRecordUpdateInput = {
@@ -10362,6 +12005,17 @@ export namespace Prisma {
     outputPath?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    isRetrain?: BoolFieldUpdateOperationsInput | boolean
+    baseTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    pathId?: NullableStringFieldUpdateOperationsInput | string | null
+    taskChain?: StringFieldUpdateOperationsInput | string
+    generation?: IntFieldUpdateOperationsInput | number
+    fpCount?: IntFieldUpdateOperationsInput | number
+    fnCount?: IntFieldUpdateOperationsInput | number
+    encoderName?: NullableStringFieldUpdateOperationsInput | string | null
+    decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
+    epochs?: NullableIntFieldUpdateOperationsInput | number | null
+    freezeEncoder?: NullableBoolFieldUpdateOperationsInput | boolean | null
   }
 
   export type TrainingRecordUncheckedUpdateInput = {
@@ -10386,6 +12040,17 @@ export namespace Prisma {
     outputPath?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    isRetrain?: BoolFieldUpdateOperationsInput | boolean
+    baseTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    pathId?: NullableStringFieldUpdateOperationsInput | string | null
+    taskChain?: StringFieldUpdateOperationsInput | string
+    generation?: IntFieldUpdateOperationsInput | number
+    fpCount?: IntFieldUpdateOperationsInput | number
+    fnCount?: IntFieldUpdateOperationsInput | number
+    encoderName?: NullableStringFieldUpdateOperationsInput | string | null
+    decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
+    epochs?: NullableIntFieldUpdateOperationsInput | number | null
+    freezeEncoder?: NullableBoolFieldUpdateOperationsInput | boolean | null
   }
 
   export type TrainingRecordCreateManyInput = {
@@ -10410,6 +12075,17 @@ export namespace Prisma {
     outputPath?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
+    isRetrain?: boolean
+    baseTaskUuid?: string | null
+    pathId?: string | null
+    taskChain?: string
+    generation?: number
+    fpCount?: number
+    fnCount?: number
+    encoderName?: string | null
+    decoderDepth?: number | null
+    epochs?: number | null
+    freezeEncoder?: boolean | null
   }
 
   export type TrainingRecordUpdateManyMutationInput = {
@@ -10434,6 +12110,17 @@ export namespace Prisma {
     outputPath?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    isRetrain?: BoolFieldUpdateOperationsInput | boolean
+    baseTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    pathId?: NullableStringFieldUpdateOperationsInput | string | null
+    taskChain?: StringFieldUpdateOperationsInput | string
+    generation?: IntFieldUpdateOperationsInput | number
+    fpCount?: IntFieldUpdateOperationsInput | number
+    fnCount?: IntFieldUpdateOperationsInput | number
+    encoderName?: NullableStringFieldUpdateOperationsInput | string | null
+    decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
+    epochs?: NullableIntFieldUpdateOperationsInput | number | null
+    freezeEncoder?: NullableBoolFieldUpdateOperationsInput | boolean | null
   }
 
   export type TrainingRecordUncheckedUpdateManyInput = {
@@ -10458,6 +12145,17 @@ export namespace Prisma {
     outputPath?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    isRetrain?: BoolFieldUpdateOperationsInput | boolean
+    baseTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    pathId?: NullableStringFieldUpdateOperationsInput | string | null
+    taskChain?: StringFieldUpdateOperationsInput | string
+    generation?: IntFieldUpdateOperationsInput | number
+    fpCount?: IntFieldUpdateOperationsInput | number
+    fnCount?: IntFieldUpdateOperationsInput | number
+    encoderName?: NullableStringFieldUpdateOperationsInput | string | null
+    decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
+    epochs?: NullableIntFieldUpdateOperationsInput | number | null
+    freezeEncoder?: NullableBoolFieldUpdateOperationsInput | boolean | null
   }
 
   export type AppSettingsCreateInput = {
@@ -10547,6 +12245,139 @@ export namespace Prisma {
     backendUrl?: StringFieldUpdateOperationsInput | string
     backendPort?: StringFieldUpdateOperationsInput | string
     imageSettings?: NullableStringFieldUpdateOperationsInput | string | null
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type RoiImageCreateInput = {
+    id?: string
+    productId: string
+    sourceTaskUuid: string
+    category: string
+    modelIsAnomaly: boolean
+    userIsAnomaly: boolean
+    roiType?: string
+    filePath: string
+    fileName: string
+    thumbnailPath?: string | null
+    usedInRetrain?: boolean
+    usedTaskUuid?: string | null
+    usedAt?: Date | string | null
+    generation?: number
+    createdAt?: Date | string
+    updatedAt?: Date | string
+  }
+
+  export type RoiImageUncheckedCreateInput = {
+    id?: string
+    productId: string
+    sourceTaskUuid: string
+    category: string
+    modelIsAnomaly: boolean
+    userIsAnomaly: boolean
+    roiType?: string
+    filePath: string
+    fileName: string
+    thumbnailPath?: string | null
+    usedInRetrain?: boolean
+    usedTaskUuid?: string | null
+    usedAt?: Date | string | null
+    generation?: number
+    createdAt?: Date | string
+    updatedAt?: Date | string
+  }
+
+  export type RoiImageUpdateInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    productId?: StringFieldUpdateOperationsInput | string
+    sourceTaskUuid?: StringFieldUpdateOperationsInput | string
+    category?: StringFieldUpdateOperationsInput | string
+    modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    roiType?: StringFieldUpdateOperationsInput | string
+    filePath?: StringFieldUpdateOperationsInput | string
+    fileName?: StringFieldUpdateOperationsInput | string
+    thumbnailPath?: NullableStringFieldUpdateOperationsInput | string | null
+    usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
+    usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    generation?: IntFieldUpdateOperationsInput | number
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type RoiImageUncheckedUpdateInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    productId?: StringFieldUpdateOperationsInput | string
+    sourceTaskUuid?: StringFieldUpdateOperationsInput | string
+    category?: StringFieldUpdateOperationsInput | string
+    modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    roiType?: StringFieldUpdateOperationsInput | string
+    filePath?: StringFieldUpdateOperationsInput | string
+    fileName?: StringFieldUpdateOperationsInput | string
+    thumbnailPath?: NullableStringFieldUpdateOperationsInput | string | null
+    usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
+    usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    generation?: IntFieldUpdateOperationsInput | number
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type RoiImageCreateManyInput = {
+    id?: string
+    productId: string
+    sourceTaskUuid: string
+    category: string
+    modelIsAnomaly: boolean
+    userIsAnomaly: boolean
+    roiType?: string
+    filePath: string
+    fileName: string
+    thumbnailPath?: string | null
+    usedInRetrain?: boolean
+    usedTaskUuid?: string | null
+    usedAt?: Date | string | null
+    generation?: number
+    createdAt?: Date | string
+    updatedAt?: Date | string
+  }
+
+  export type RoiImageUpdateManyMutationInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    productId?: StringFieldUpdateOperationsInput | string
+    sourceTaskUuid?: StringFieldUpdateOperationsInput | string
+    category?: StringFieldUpdateOperationsInput | string
+    modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    roiType?: StringFieldUpdateOperationsInput | string
+    filePath?: StringFieldUpdateOperationsInput | string
+    fileName?: StringFieldUpdateOperationsInput | string
+    thumbnailPath?: NullableStringFieldUpdateOperationsInput | string | null
+    usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
+    usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    generation?: IntFieldUpdateOperationsInput | number
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type RoiImageUncheckedUpdateManyInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    productId?: StringFieldUpdateOperationsInput | string
+    sourceTaskUuid?: StringFieldUpdateOperationsInput | string
+    category?: StringFieldUpdateOperationsInput | string
+    modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    roiType?: StringFieldUpdateOperationsInput | string
+    filePath?: StringFieldUpdateOperationsInput | string
+    fileName?: StringFieldUpdateOperationsInput | string
+    thumbnailPath?: NullableStringFieldUpdateOperationsInput | string | null
+    usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
+    usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
+    usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    generation?: IntFieldUpdateOperationsInput | number
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -10918,6 +12749,11 @@ export namespace Prisma {
     not?: NestedDateTimeNullableFilter<$PrismaModel> | Date | string | null
   }
 
+  export type BoolNullableFilter<$PrismaModel = never> = {
+    equals?: boolean | BooleanFieldRefInput<$PrismaModel> | null
+    not?: NestedBoolNullableFilter<$PrismaModel> | boolean | null
+  }
+
   export type TrainingRecordTaskUuidLabelNameCompoundUniqueInput = {
     taskUuid: string
     labelName: string
@@ -10945,6 +12781,17 @@ export namespace Prisma {
     outputPath?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
+    isRetrain?: SortOrder
+    baseTaskUuid?: SortOrder
+    pathId?: SortOrder
+    taskChain?: SortOrder
+    generation?: SortOrder
+    fpCount?: SortOrder
+    fnCount?: SortOrder
+    encoderName?: SortOrder
+    decoderDepth?: SortOrder
+    epochs?: SortOrder
+    freezeEncoder?: SortOrder
   }
 
   export type TrainingRecordAvgOrderByAggregateInput = {
@@ -10954,6 +12801,11 @@ export namespace Prisma {
     batchSize?: SortOrder
     learningRate?: SortOrder
     latestIter?: SortOrder
+    generation?: SortOrder
+    fpCount?: SortOrder
+    fnCount?: SortOrder
+    decoderDepth?: SortOrder
+    epochs?: SortOrder
   }
 
   export type TrainingRecordMaxOrderByAggregateInput = {
@@ -10978,6 +12830,17 @@ export namespace Prisma {
     outputPath?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
+    isRetrain?: SortOrder
+    baseTaskUuid?: SortOrder
+    pathId?: SortOrder
+    taskChain?: SortOrder
+    generation?: SortOrder
+    fpCount?: SortOrder
+    fnCount?: SortOrder
+    encoderName?: SortOrder
+    decoderDepth?: SortOrder
+    epochs?: SortOrder
+    freezeEncoder?: SortOrder
   }
 
   export type TrainingRecordMinOrderByAggregateInput = {
@@ -11002,6 +12865,17 @@ export namespace Prisma {
     outputPath?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
+    isRetrain?: SortOrder
+    baseTaskUuid?: SortOrder
+    pathId?: SortOrder
+    taskChain?: SortOrder
+    generation?: SortOrder
+    fpCount?: SortOrder
+    fnCount?: SortOrder
+    encoderName?: SortOrder
+    decoderDepth?: SortOrder
+    epochs?: SortOrder
+    freezeEncoder?: SortOrder
   }
 
   export type TrainingRecordSumOrderByAggregateInput = {
@@ -11011,6 +12885,11 @@ export namespace Prisma {
     batchSize?: SortOrder
     learningRate?: SortOrder
     latestIter?: SortOrder
+    generation?: SortOrder
+    fpCount?: SortOrder
+    fnCount?: SortOrder
+    decoderDepth?: SortOrder
+    epochs?: SortOrder
   }
 
   export type FloatWithAggregatesFilter<$PrismaModel = never> = {
@@ -11075,6 +12954,14 @@ export namespace Prisma {
     _max?: NestedDateTimeNullableFilter<$PrismaModel>
   }
 
+  export type BoolNullableWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: boolean | BooleanFieldRefInput<$PrismaModel> | null
+    not?: NestedBoolNullableWithAggregatesFilter<$PrismaModel> | boolean | null
+    _count?: NestedIntNullableFilter<$PrismaModel>
+    _min?: NestedBoolNullableFilter<$PrismaModel>
+    _max?: NestedBoolNullableFilter<$PrismaModel>
+  }
+
   export type AppSettingsCountOrderByAggregateInput = {
     id?: SortOrder
     dataPath?: SortOrder
@@ -11120,6 +13007,71 @@ export namespace Prisma {
 
   export type AppSettingsSumOrderByAggregateInput = {
     id?: SortOrder
+  }
+
+  export type RoiImageCountOrderByAggregateInput = {
+    id?: SortOrder
+    productId?: SortOrder
+    sourceTaskUuid?: SortOrder
+    category?: SortOrder
+    modelIsAnomaly?: SortOrder
+    userIsAnomaly?: SortOrder
+    roiType?: SortOrder
+    filePath?: SortOrder
+    fileName?: SortOrder
+    thumbnailPath?: SortOrder
+    usedInRetrain?: SortOrder
+    usedTaskUuid?: SortOrder
+    usedAt?: SortOrder
+    generation?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+  }
+
+  export type RoiImageAvgOrderByAggregateInput = {
+    generation?: SortOrder
+  }
+
+  export type RoiImageMaxOrderByAggregateInput = {
+    id?: SortOrder
+    productId?: SortOrder
+    sourceTaskUuid?: SortOrder
+    category?: SortOrder
+    modelIsAnomaly?: SortOrder
+    userIsAnomaly?: SortOrder
+    roiType?: SortOrder
+    filePath?: SortOrder
+    fileName?: SortOrder
+    thumbnailPath?: SortOrder
+    usedInRetrain?: SortOrder
+    usedTaskUuid?: SortOrder
+    usedAt?: SortOrder
+    generation?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+  }
+
+  export type RoiImageMinOrderByAggregateInput = {
+    id?: SortOrder
+    productId?: SortOrder
+    sourceTaskUuid?: SortOrder
+    category?: SortOrder
+    modelIsAnomaly?: SortOrder
+    userIsAnomaly?: SortOrder
+    roiType?: SortOrder
+    filePath?: SortOrder
+    fileName?: SortOrder
+    thumbnailPath?: SortOrder
+    usedInRetrain?: SortOrder
+    usedTaskUuid?: SortOrder
+    usedAt?: SortOrder
+    generation?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+  }
+
+  export type RoiImageSumOrderByAggregateInput = {
+    generation?: SortOrder
   }
 
   export type AnnotationSchemeCreateNestedOneWithoutProductsInput = {
@@ -11286,6 +13238,10 @@ export namespace Prisma {
 
   export type NullableDateTimeFieldUpdateOperationsInput = {
     set?: Date | string | null
+  }
+
+  export type NullableBoolFieldUpdateOperationsInput = {
+    set?: boolean | null
   }
 
   export type NestedStringFilter<$PrismaModel = never> = {
@@ -11459,6 +13415,11 @@ export namespace Prisma {
     not?: NestedDateTimeNullableFilter<$PrismaModel> | Date | string | null
   }
 
+  export type NestedBoolNullableFilter<$PrismaModel = never> = {
+    equals?: boolean | BooleanFieldRefInput<$PrismaModel> | null
+    not?: NestedBoolNullableFilter<$PrismaModel> | boolean | null
+  }
+
   export type NestedFloatWithAggregatesFilter<$PrismaModel = never> = {
     equals?: number | FloatFieldRefInput<$PrismaModel>
     in?: number[]
@@ -11519,6 +13480,14 @@ export namespace Prisma {
     _count?: NestedIntNullableFilter<$PrismaModel>
     _min?: NestedDateTimeNullableFilter<$PrismaModel>
     _max?: NestedDateTimeNullableFilter<$PrismaModel>
+  }
+
+  export type NestedBoolNullableWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: boolean | BooleanFieldRefInput<$PrismaModel> | null
+    not?: NestedBoolNullableWithAggregatesFilter<$PrismaModel> | boolean | null
+    _count?: NestedIntNullableFilter<$PrismaModel>
+    _min?: NestedBoolNullableFilter<$PrismaModel>
+    _max?: NestedBoolNullableFilter<$PrismaModel>
   }
 
   export type AnnotationSchemeCreateWithoutProductsInput = {
