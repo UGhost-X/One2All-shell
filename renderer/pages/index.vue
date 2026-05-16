@@ -994,10 +994,8 @@ const loadCameraServiceUrl = async () => {
   if (window.electronAPI?.getSettings) {
     try {
       const settings = await window.electronAPI.getSettings()
-      console.log('Loaded settings:', settings)
       if (settings?.backendUrl) {
         cameraServiceUrl.value = settings.backendUrl
-        console.log('Updated cameraServiceUrl to:', cameraServiceUrl.value)
       }
     } catch (err) {
       console.error('Failed to load camera service URL:', err)
@@ -1026,7 +1024,6 @@ const stopCameraPreview = () => {
 const backendPort = '8000'
 const getBackendUrl = (path: string) => {
   const base = cameraServiceUrl.value.endsWith('/') ? cameraServiceUrl.value.slice(0, -1) : cameraServiceUrl.value
-  console.log('getBackendUrl called, base:', base, 'path:', path)
   return `${base}${path}`
 }
 
@@ -2227,9 +2224,10 @@ const handleSaveRoiImages = async () => {
       
       roiImages.push({
         category: det.category || det.label || 'unknown',
-        isAnomaly: userIsAnomaly,  // 以用户判断为准
-        modelIsAnomaly: modelIsAnomaly,  // 模型原始判断
-        userIsAnomaly: userIsAnomaly,     // 用户当前判断
+        isAnomaly: userIsAnomaly,
+        modelIsAnomaly: modelIsAnomaly,
+        userIsAnomaly: userIsAnomaly,
+        posId: det.pos_id != null ? String(det.pos_id) : undefined,
         base64
       })
     }
@@ -2398,7 +2396,8 @@ const autoSaveRoiImages = async (imageUrl: string, results: any[], taskUuid: str
         category: det.category || det.label || 'unknown',
         isAnomaly: modelIsAnomaly,
         modelIsAnomaly: modelIsAnomaly,
-        userIsAnomaly: modelIsAnomaly,  // 初始时用户判断与模型一致
+        userIsAnomaly: modelIsAnomaly,
+        posId: det.pos_id != null ? String(det.pos_id) : undefined,
         base64
       })
     }

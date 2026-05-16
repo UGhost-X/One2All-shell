@@ -231,6 +231,7 @@ exports.Prisma.RoiImageScalarFieldEnum = {
   usedInRetrain: 'usedInRetrain',
   usedTaskUuid: 'usedTaskUuid',
   usedAt: 'usedAt',
+  posId: 'posId',
   generation: 'generation',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'

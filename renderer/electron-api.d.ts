@@ -36,7 +36,7 @@ declare global {
       getProductImages: (productId: string) => Promise<string[]>
       saveDataset: (data: { productId: string; versionName: string; moduleName: string; images: any[]; cocoData: any }) => Promise<any>
       loadDataset: (params: { id?: string; savePath?: string }) => Promise<any>
-      saveRoiImages: (data: { productId: string; taskUuid: string; images: Array<{ category: string; isAnomaly: boolean; base64: string }> }) => Promise<{ success: boolean; error?: string }>
+      saveRoiImages: (data: { productId: string; taskUuid: string; images: Array<{ category: string; isAnomaly: boolean; modelIsAnomaly?: boolean; userIsAnomaly?: boolean; posId?: string; base64: string }>; mode?: string; requestTime?: string }) => Promise<{ success: boolean; rois?: Array<{ id?: string; filePath: string; roiType: string; mode: string }>; error?: string }>
       saveDatasetVersion: (data: any) => Promise<any>
       getDatasetVersions: (productId: string) => Promise<any[]>
       deleteDatasetVersion: (id: string) => Promise<any>
@@ -69,6 +69,7 @@ interface RoiImage {
   filePath: string
   fileName: string
   thumbnailPath?: string
+  posId?: string
   usedInRetrain: boolean
   usedTaskUuid?: string
   usedAt?: Date

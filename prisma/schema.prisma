@@ -156,6 +156,8 @@ model RoiImage {
   usedTaskUuid      String?  // 被用于哪个重训任务
   usedAt            DateTime?
   
+  posId             String?  // 位置ID，用于FN图片的SSIM比对分组
+  
   // 支持链式重训
   generation        Int      @default(0)  // 第几代（0=原始训练，1=第一次重训...）
   

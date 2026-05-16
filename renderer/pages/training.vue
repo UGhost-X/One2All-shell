@@ -2551,7 +2551,7 @@ const startRetrain = async () => {
   isStartingRetrain.value = true
   try {
     // 获取选中的ROI base64数据，并按 path_id 分组
-    const feedbackGroupsMap = new Map<string, { fpImages: string[]; fnImages: string[] }>()
+    const feedbackGroupsMap = new Map<string, { fpImages: string[]; fnImages: string[]; fnPosIds: string[] }>()
 
     // 处理 FP ROI
     for (const roiId of selectedFpRois.value) {
@@ -2566,18 +2566,15 @@ const startRetrain = async () => {
         const labelIdx = filteredLabels.findIndex(l => l.name === roi.category || l.id === roi.category)
         pathId = String(labelIdx !== -1 ? labelIdx + 1 : 1)
       } else {
-        // by_pos_id 模式下需要从 ROI 获取 posId，但目前 ROI 数据中没有 posId
-        // 暂时使用 category 作为 fallback
-        pathId = roi.category || '1'
+        pathId = roi.posId || roi.category || '1'
       }
 
       if (!feedbackGroupsMap.has(pathId)) {
-        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [] })
+        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [], fnPosIds: [] })
       }
 
       const base64DataUri = await getRoiBase64(roiId)
       if (base64DataUri) {
-        // 提取纯 base64 数据（去掉 data:image/... 前缀）
         const pureBase64 = base64DataUri.split(',')[1] || base64DataUri
         feedbackGroupsMap.get(pathId)!.fpImages.push(pureBase64)
       }
@@ -2588,28 +2585,24 @@ const startRetrain = async () => {
       const roi = getRoiById(roiId)
       if (!roi) continue
 
-      // 根据训练模式确定 path_id
       let pathId: string
       if (trainMode.value === 'by_category') {
-        // by_category 模式下使用 category 对应的 labelConfigs 索引+1（过滤掉 workpiece-body）
         const filteredLabels = labelConfigs.value.filter(l => l.id !== 'workpiece-body')
         const labelIdx = filteredLabels.findIndex(l => l.name === roi.category || l.id === roi.category)
         pathId = String(labelIdx !== -1 ? labelIdx + 1 : 1)
       } else {
-        // by_pos_id 模式下需要从 ROI 获取 posId，但目前 ROI 数据中没有 posId
-        // 暂时使用 category 作为 fallback
-        pathId = roi.category || '1'
+        pathId = roi.posId || roi.category || '1'
       }
 
       if (!feedbackGroupsMap.has(pathId)) {
-        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [] })
+        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [], fnPosIds: [] })
       }
 
       const base64DataUri = await getRoiBase64(roiId)
       if (base64DataUri) {
-        // 提取纯 base64 数据（去掉 data:image/... 前缀）
         const pureBase64 = base64DataUri.split(',')[1] || base64DataUri
         feedbackGroupsMap.get(pathId)!.fnImages.push(pureBase64)
+        feedbackGroupsMap.get(pathId)!.fnPosIds.push(roi.posId || pathId)
       }
     }
 
@@ -2620,7 +2613,8 @@ const startRetrain = async () => {
     const feedback_groups = Array.from(feedbackGroupsMap.entries()).map(([pathId, group]) => ({
       path_id: pathId,
       false_positive_images: group.fpImages,
-      false_negative_images: group.fnImages
+      false_negative_images: group.fnImages,
+      false_negative_pos_ids: group.fnPosIds
     }))
 
     // 计算总数

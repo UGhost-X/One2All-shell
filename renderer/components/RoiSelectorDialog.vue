@@ -177,6 +177,7 @@ interface RoiImage {
   roiType: string
   filePath: string
   thumbnailPath?: string
+  posId?: string
   createdAt: string | Date
   usedInRetrain: boolean
 }

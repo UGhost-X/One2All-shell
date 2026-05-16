@@ -9495,6 +9495,7 @@ export namespace Prisma {
     usedInRetrain: boolean | null
     usedTaskUuid: string | null
     usedAt: Date | null
+    posId: string | null
     generation: number | null
     createdAt: Date | null
     updatedAt: Date | null
@@ -9514,6 +9515,7 @@ export namespace Prisma {
     usedInRetrain: boolean | null
     usedTaskUuid: string | null
     usedAt: Date | null
+    posId: string | null
     generation: number | null
     createdAt: Date | null
     updatedAt: Date | null
@@ -9533,6 +9535,7 @@ export namespace Prisma {
     usedInRetrain: number
     usedTaskUuid: number
     usedAt: number
+    posId: number
     generation: number
     createdAt: number
     updatedAt: number
@@ -9562,6 +9565,7 @@ export namespace Prisma {
     usedInRetrain?: true
     usedTaskUuid?: true
     usedAt?: true
+    posId?: true
     generation?: true
     createdAt?: true
     updatedAt?: true
@@ -9581,6 +9585,7 @@ export namespace Prisma {
     usedInRetrain?: true
     usedTaskUuid?: true
     usedAt?: true
+    posId?: true
     generation?: true
     createdAt?: true
     updatedAt?: true
@@ -9600,6 +9605,7 @@ export namespace Prisma {
     usedInRetrain?: true
     usedTaskUuid?: true
     usedAt?: true
+    posId?: true
     generation?: true
     createdAt?: true
     updatedAt?: true
@@ -9706,6 +9712,7 @@ export namespace Prisma {
     usedInRetrain: boolean
     usedTaskUuid: string | null
     usedAt: Date | null
+    posId: string | null
     generation: number
     createdAt: Date
     updatedAt: Date
@@ -9744,6 +9751,7 @@ export namespace Prisma {
     usedInRetrain?: boolean
     usedTaskUuid?: boolean
     usedAt?: boolean
+    posId?: boolean
     generation?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -9763,6 +9771,7 @@ export namespace Prisma {
     usedInRetrain?: boolean
     usedTaskUuid?: boolean
     usedAt?: boolean
+    posId?: boolean
     generation?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -9782,6 +9791,7 @@ export namespace Prisma {
     usedInRetrain?: boolean
     usedTaskUuid?: boolean
     usedAt?: boolean
+    posId?: boolean
     generation?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -9801,12 +9811,13 @@ export namespace Prisma {
     usedInRetrain?: boolean
     usedTaskUuid?: boolean
     usedAt?: boolean
+    posId?: boolean
     generation?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }
 
-  export type RoiImageOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "sourceTaskUuid" | "category" | "modelIsAnomaly" | "userIsAnomaly" | "roiType" | "filePath" | "fileName" | "thumbnailPath" | "usedInRetrain" | "usedTaskUuid" | "usedAt" | "generation" | "createdAt" | "updatedAt", ExtArgs["result"]["roiImage"]>
+  export type RoiImageOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "sourceTaskUuid" | "category" | "modelIsAnomaly" | "userIsAnomaly" | "roiType" | "filePath" | "fileName" | "thumbnailPath" | "usedInRetrain" | "usedTaskUuid" | "usedAt" | "posId" | "generation" | "createdAt" | "updatedAt", ExtArgs["result"]["roiImage"]>
 
   export type $RoiImagePayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     name: "RoiImage"
@@ -9825,6 +9836,7 @@ export namespace Prisma {
       usedInRetrain: boolean
       usedTaskUuid: string | null
       usedAt: Date | null
+      posId: string | null
       generation: number
       createdAt: Date
       updatedAt: Date
@@ -10264,6 +10276,7 @@ export namespace Prisma {
     readonly usedInRetrain: FieldRef<"RoiImage", 'Boolean'>
     readonly usedTaskUuid: FieldRef<"RoiImage", 'String'>
     readonly usedAt: FieldRef<"RoiImage", 'DateTime'>
+    readonly posId: FieldRef<"RoiImage", 'String'>
     readonly generation: FieldRef<"RoiImage", 'Int'>
     readonly createdAt: FieldRef<"RoiImage", 'DateTime'>
     readonly updatedAt: FieldRef<"RoiImage", 'DateTime'>
@@ -10776,6 +10789,7 @@ export namespace Prisma {
     usedInRetrain: 'usedInRetrain',
     usedTaskUuid: 'usedTaskUuid',
     usedAt: 'usedAt',
+    posId: 'posId',
     generation: 'generation',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
@@ -11458,6 +11472,7 @@ export namespace Prisma {
     usedInRetrain?: BoolFilter<"RoiImage"> | boolean
     usedTaskUuid?: StringNullableFilter<"RoiImage"> | string | null
     usedAt?: DateTimeNullableFilter<"RoiImage"> | Date | string | null
+    posId?: StringNullableFilter<"RoiImage"> | string | null
     generation?: IntFilter<"RoiImage"> | number
     createdAt?: DateTimeFilter<"RoiImage"> | Date | string
     updatedAt?: DateTimeFilter<"RoiImage"> | Date | string
@@ -11477,6 +11492,7 @@ export namespace Prisma {
     usedInRetrain?: SortOrder
     usedTaskUuid?: SortOrderInput | SortOrder
     usedAt?: SortOrderInput | SortOrder
+    posId?: SortOrderInput | SortOrder
     generation?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -11499,6 +11515,7 @@ export namespace Prisma {
     usedInRetrain?: BoolFilter<"RoiImage"> | boolean
     usedTaskUuid?: StringNullableFilter<"RoiImage"> | string | null
     usedAt?: DateTimeNullableFilter<"RoiImage"> | Date | string | null
+    posId?: StringNullableFilter<"RoiImage"> | string | null
     generation?: IntFilter<"RoiImage"> | number
     createdAt?: DateTimeFilter<"RoiImage"> | Date | string
     updatedAt?: DateTimeFilter<"RoiImage"> | Date | string
@@ -11518,6 +11535,7 @@ export namespace Prisma {
     usedInRetrain?: SortOrder
     usedTaskUuid?: SortOrderInput | SortOrder
     usedAt?: SortOrderInput | SortOrder
+    posId?: SortOrderInput | SortOrder
     generation?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -11545,6 +11563,7 @@ export namespace Prisma {
     usedInRetrain?: BoolWithAggregatesFilter<"RoiImage"> | boolean
     usedTaskUuid?: StringNullableWithAggregatesFilter<"RoiImage"> | string | null
     usedAt?: DateTimeNullableWithAggregatesFilter<"RoiImage"> | Date | string | null
+    posId?: StringNullableWithAggregatesFilter<"RoiImage"> | string | null
     generation?: IntWithAggregatesFilter<"RoiImage"> | number
     createdAt?: DateTimeWithAggregatesFilter<"RoiImage"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"RoiImage"> | Date | string
@@ -12263,6 +12282,7 @@ export namespace Prisma {
     usedInRetrain?: boolean
     usedTaskUuid?: string | null
     usedAt?: Date | string | null
+    posId?: string | null
     generation?: number
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -12282,6 +12302,7 @@ export namespace Prisma {
     usedInRetrain?: boolean
     usedTaskUuid?: string | null
     usedAt?: Date | string | null
+    posId?: string | null
     generation?: number
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -12301,6 +12322,7 @@ export namespace Prisma {
     usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
     usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
     usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    posId?: NullableStringFieldUpdateOperationsInput | string | null
     generation?: IntFieldUpdateOperationsInput | number
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -12320,6 +12342,7 @@ export namespace Prisma {
     usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
     usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
     usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    posId?: NullableStringFieldUpdateOperationsInput | string | null
     generation?: IntFieldUpdateOperationsInput | number
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -12339,6 +12362,7 @@ export namespace Prisma {
     usedInRetrain?: boolean
     usedTaskUuid?: string | null
     usedAt?: Date | string | null
+    posId?: string | null
     generation?: number
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -12358,6 +12382,7 @@ export namespace Prisma {
     usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
     usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
     usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    posId?: NullableStringFieldUpdateOperationsInput | string | null
     generation?: IntFieldUpdateOperationsInput | number
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -12377,6 +12402,7 @@ export namespace Prisma {
     usedInRetrain?: BoolFieldUpdateOperationsInput | boolean
     usedTaskUuid?: NullableStringFieldUpdateOperationsInput | string | null
     usedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    posId?: NullableStringFieldUpdateOperationsInput | string | null
     generation?: IntFieldUpdateOperationsInput | number
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -13023,6 +13049,7 @@ export namespace Prisma {
     usedInRetrain?: SortOrder
     usedTaskUuid?: SortOrder
     usedAt?: SortOrder
+    posId?: SortOrder
     generation?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -13046,6 +13073,7 @@ export namespace Prisma {
     usedInRetrain?: SortOrder
     usedTaskUuid?: SortOrder
     usedAt?: SortOrder
+    posId?: SortOrder
     generation?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -13065,6 +13093,7 @@ export namespace Prisma {
     usedInRetrain?: SortOrder
     usedTaskUuid?: SortOrder
     usedAt?: SortOrder
+    posId?: SortOrder
     generation?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder

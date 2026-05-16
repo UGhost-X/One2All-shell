@@ -921,7 +921,6 @@ app.whenReady().then(async () => {
         let roiRecord = null;
         
         if (mode === 'manual') {
-          // 存入数据库
           roiRecord = await prisma.roiImage.create({
             data: {
               productId: String(productId),
@@ -932,6 +931,7 @@ app.whenReady().then(async () => {
               roiType: roiType,
               filePath: filePath,
               fileName: fileName,
+              posId: img.posId || null,
               generation: 0
             }
           });
