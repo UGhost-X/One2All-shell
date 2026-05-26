@@ -8398,6 +8398,7 @@ export namespace Prisma {
     backendUrl: string | null
     backendPort: string | null
     imageSettings: string | null
+    modbusSettings: string | null
     createdAt: Date | null
     updatedAt: Date | null
   }
@@ -8411,6 +8412,7 @@ export namespace Prisma {
     backendUrl: string | null
     backendPort: string | null
     imageSettings: string | null
+    modbusSettings: string | null
     createdAt: Date | null
     updatedAt: Date | null
   }
@@ -8424,6 +8426,7 @@ export namespace Prisma {
     backendUrl: number
     backendPort: number
     imageSettings: number
+    modbusSettings: number
     createdAt: number
     updatedAt: number
     _all: number
@@ -8447,6 +8450,7 @@ export namespace Prisma {
     backendUrl?: true
     backendPort?: true
     imageSettings?: true
+    modbusSettings?: true
     createdAt?: true
     updatedAt?: true
   }
@@ -8460,6 +8464,7 @@ export namespace Prisma {
     backendUrl?: true
     backendPort?: true
     imageSettings?: true
+    modbusSettings?: true
     createdAt?: true
     updatedAt?: true
   }
@@ -8473,6 +8478,7 @@ export namespace Prisma {
     backendUrl?: true
     backendPort?: true
     imageSettings?: true
+    modbusSettings?: true
     createdAt?: true
     updatedAt?: true
     _all?: true
@@ -8573,6 +8579,7 @@ export namespace Prisma {
     backendUrl: string
     backendPort: string
     imageSettings: string | null
+    modbusSettings: string | null
     createdAt: Date
     updatedAt: Date
     _count: AppSettingsCountAggregateOutputType | null
@@ -8605,6 +8612,7 @@ export namespace Prisma {
     backendUrl?: boolean
     backendPort?: boolean
     imageSettings?: boolean
+    modbusSettings?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }, ExtArgs["result"]["appSettings"]>
@@ -8618,6 +8626,7 @@ export namespace Prisma {
     backendUrl?: boolean
     backendPort?: boolean
     imageSettings?: boolean
+    modbusSettings?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }, ExtArgs["result"]["appSettings"]>
@@ -8631,6 +8640,7 @@ export namespace Prisma {
     backendUrl?: boolean
     backendPort?: boolean
     imageSettings?: boolean
+    modbusSettings?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }, ExtArgs["result"]["appSettings"]>
@@ -8644,11 +8654,12 @@ export namespace Prisma {
     backendUrl?: boolean
     backendPort?: boolean
     imageSettings?: boolean
+    modbusSettings?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }
 
-  export type AppSettingsOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "dataPath" | "locale" | "backendMode" | "backendIp" | "backendUrl" | "backendPort" | "imageSettings" | "createdAt" | "updatedAt", ExtArgs["result"]["appSettings"]>
+  export type AppSettingsOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "dataPath" | "locale" | "backendMode" | "backendIp" | "backendUrl" | "backendPort" | "imageSettings" | "modbusSettings" | "createdAt" | "updatedAt", ExtArgs["result"]["appSettings"]>
 
   export type $AppSettingsPayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     name: "AppSettings"
@@ -8662,6 +8673,7 @@ export namespace Prisma {
       backendUrl: string
       backendPort: string
       imageSettings: string | null
+      modbusSettings: string | null
       createdAt: Date
       updatedAt: Date
     }, ExtArgs["result"]["appSettings"]>
@@ -9095,6 +9107,7 @@ export namespace Prisma {
     readonly backendUrl: FieldRef<"AppSettings", 'String'>
     readonly backendPort: FieldRef<"AppSettings", 'String'>
     readonly imageSettings: FieldRef<"AppSettings", 'String'>
+    readonly modbusSettings: FieldRef<"AppSettings", 'String'>
     readonly createdAt: FieldRef<"AppSettings", 'DateTime'>
     readonly updatedAt: FieldRef<"AppSettings", 'DateTime'>
   }
@@ -10768,6 +10781,7 @@ export namespace Prisma {
     backendUrl: 'backendUrl',
     backendPort: 'backendPort',
     imageSettings: 'imageSettings',
+    modbusSettings: 'modbusSettings',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
   };
@@ -11388,6 +11402,7 @@ export namespace Prisma {
     backendUrl?: StringFilter<"AppSettings"> | string
     backendPort?: StringFilter<"AppSettings"> | string
     imageSettings?: StringNullableFilter<"AppSettings"> | string | null
+    modbusSettings?: StringNullableFilter<"AppSettings"> | string | null
     createdAt?: DateTimeFilter<"AppSettings"> | Date | string
     updatedAt?: DateTimeFilter<"AppSettings"> | Date | string
   }
@@ -11401,6 +11416,7 @@ export namespace Prisma {
     backendUrl?: SortOrder
     backendPort?: SortOrder
     imageSettings?: SortOrderInput | SortOrder
+    modbusSettings?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -11417,6 +11433,7 @@ export namespace Prisma {
     backendUrl?: StringFilter<"AppSettings"> | string
     backendPort?: StringFilter<"AppSettings"> | string
     imageSettings?: StringNullableFilter<"AppSettings"> | string | null
+    modbusSettings?: StringNullableFilter<"AppSettings"> | string | null
     createdAt?: DateTimeFilter<"AppSettings"> | Date | string
     updatedAt?: DateTimeFilter<"AppSettings"> | Date | string
   }, "id">
@@ -11430,6 +11447,7 @@ export namespace Prisma {
     backendUrl?: SortOrder
     backendPort?: SortOrder
     imageSettings?: SortOrderInput | SortOrder
+    modbusSettings?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
     _count?: AppSettingsCountOrderByAggregateInput
@@ -11451,6 +11469,7 @@ export namespace Prisma {
     backendUrl?: StringWithAggregatesFilter<"AppSettings"> | string
     backendPort?: StringWithAggregatesFilter<"AppSettings"> | string
     imageSettings?: StringNullableWithAggregatesFilter<"AppSettings"> | string | null
+    modbusSettings?: StringNullableWithAggregatesFilter<"AppSettings"> | string | null
     createdAt?: DateTimeWithAggregatesFilter<"AppSettings"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"AppSettings"> | Date | string
   }
@@ -12186,6 +12205,7 @@ export namespace Prisma {
     backendUrl?: string
     backendPort?: string
     imageSettings?: string | null
+    modbusSettings?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -12199,6 +12219,7 @@ export namespace Prisma {
     backendUrl?: string
     backendPort?: string
     imageSettings?: string | null
+    modbusSettings?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -12212,6 +12233,7 @@ export namespace Prisma {
     backendUrl?: StringFieldUpdateOperationsInput | string
     backendPort?: StringFieldUpdateOperationsInput | string
     imageSettings?: NullableStringFieldUpdateOperationsInput | string | null
+    modbusSettings?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -12225,6 +12247,7 @@ export namespace Prisma {
     backendUrl?: StringFieldUpdateOperationsInput | string
     backendPort?: StringFieldUpdateOperationsInput | string
     imageSettings?: NullableStringFieldUpdateOperationsInput | string | null
+    modbusSettings?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -12238,6 +12261,7 @@ export namespace Prisma {
     backendUrl?: string
     backendPort?: string
     imageSettings?: string | null
+    modbusSettings?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -12251,6 +12275,7 @@ export namespace Prisma {
     backendUrl?: StringFieldUpdateOperationsInput | string
     backendPort?: StringFieldUpdateOperationsInput | string
     imageSettings?: NullableStringFieldUpdateOperationsInput | string | null
+    modbusSettings?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -12264,6 +12289,7 @@ export namespace Prisma {
     backendUrl?: StringFieldUpdateOperationsInput | string
     backendPort?: StringFieldUpdateOperationsInput | string
     imageSettings?: NullableStringFieldUpdateOperationsInput | string | null
+    modbusSettings?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -12997,6 +13023,7 @@ export namespace Prisma {
     backendUrl?: SortOrder
     backendPort?: SortOrder
     imageSettings?: SortOrder
+    modbusSettings?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -13014,6 +13041,7 @@ export namespace Prisma {
     backendUrl?: SortOrder
     backendPort?: SortOrder
     imageSettings?: SortOrder
+    modbusSettings?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -13027,6 +13055,7 @@ export namespace Prisma {
     backendUrl?: SortOrder
     backendPort?: SortOrder
     imageSettings?: SortOrder
+    modbusSettings?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }

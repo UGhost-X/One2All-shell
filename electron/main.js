@@ -5,6 +5,7 @@ const { exec } = require('child_process');
 const util = require('util');
 const http = require('http');
 const log = require('electron-log');
+const ModbusRTU = require('modbus-serial');
 
 log.transports.file.level = 'info';
 log.transports.file.maxSize = 5 * 1024 * 1024;
@@ -13,6 +14,7 @@ const execAsync = util.promisify(exec);
 
 let mainWindow;
 let staticServer = null;
+let buttonMonitor = null;
 
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
 
@@ -179,6 +181,17 @@ async function initCameraService(backendUrl) {
   return isReady;
 }
 
+async function ensureCameraServiceReady() {
+  if (cameraServiceReady) return true;
+  // 后端可能后启动，尝试重新检测
+  if (cameraServiceUrl) {
+    const isReady = await checkCameraServiceHealth();
+    cameraServiceReady = isReady;
+    return isReady;
+  }
+  return false;
+}
+
 async function makeCameraApiRequest(endpoint, options = {}) {
   const url = `${cameraServiceUrl}${endpoint}`;
   return new Promise((resolve, reject) => {
@@ -214,6 +227,191 @@ async function makeCameraApiRequest(endpoint, options = {}) {
   });
 }
 
+// ========== Modbus 按钮触发配置（默认值，会被DB配置覆盖） ==========
+let modbusConfig = {
+  enabled: true,           // 是否启用按钮监控
+  ip: '192.168.1.12',
+  port: 502,
+  unitId: 1,
+  buttonChannel: 1,      // 拍照按钮 → DI 通道 1（端子 0.1）
+  resetChannel: 2,        // 复位按钮 → DI 通道 2（端子 0.2）
+  lightGreen: 0,          // 绿灯 → 输出点 0.0
+  lightYellow: 1,         // 黄灯 → 输出点 0.1
+  lightRed: 2,            // 红灯 → 输出点 0.2
+  buzzer: 3,              // 蜂鸣器 → 输出点 0.3
+};
+
+// 三色灯 + 蜂鸣器对应的继电器输出通道（通过 modbusConfig 动态引用）
+
+class ButtonMonitor {
+  constructor(ip, port, unit) {
+    this.ip = ip;
+    this.port = port;
+    this.unit = unit;
+    this.client = new ModbusRTU();
+    this.lastButtonState = false;
+    this.lastResetState = false;
+    this.errorState = false;
+    this.running = false;
+  }
+
+  async connect() {
+    try {
+      await this.client.connectTCP(this.ip, { port: this.port });
+      await this.client.setID(this.unit);
+      // TCP手握成功不代表有真实 Modbus 设备，通过实际读取验证
+      await this.client.readDiscreteInputs(modbusConfig.buttonChannel, 1);
+      log.info(`[ButtonMonitor] Modbus 已连接并验证: ${this.ip}:${this.port}`);
+      return true;
+    } catch (err) {
+      log.error(`[ButtonMonitor] Modbus 连接/验证失败: ${err.message}`);
+      try { this.client.close(); } catch (_) {}
+      return false;
+    }
+  }
+
+  async readButtonState(channel) {
+    try {
+      const result = await this.client.readDiscreteInputs(channel, 1);
+      return result.data[0];
+    } catch (err) {
+      log.error(`[ButtonMonitor] 读取 DI 通道 ${channel} 异常: ${err.message}`);
+      return null;
+    }
+  }
+
+  async writeCoil(channel, value) {
+    if (!this.client.isOpen) return;
+    try {
+      await this.client.writeCoil(channel, value);
+    } catch (err) {
+      log.error(`[ButtonMonitor] 写线圈 ${channel} 异常: ${err.message}`);
+    }
+  }
+
+  async lightOn(channel) { await this.writeCoil(channel, true); }
+  async lightOff(channel) { await this.writeCoil(channel, false); }
+  async buzzerOn() { await this.writeCoil(modbusConfig.buzzer, true); }
+  async buzzerOff() { await this.writeCoil(modbusConfig.buzzer, false); }
+
+  async allOff() {
+    for (const ch of [modbusConfig.lightRed, modbusConfig.lightYellow, modbusConfig.lightGreen, modbusConfig.buzzer]) {
+      await this.writeCoil(ch, false);
+    }
+  }
+
+  async run(pollInterval = 100) {
+    if (!this.client.isOpen) {
+      if (!(await this.connect())) {
+        log.error('[ButtonMonitor] 无法连接 Modbus 模块，按钮监控未启动');
+        return;
+      }
+    }
+
+    this.running = true;
+    await this.lightOn(modbusConfig.lightGreen);  // 绿灯：系统就绪
+    log.info(`[ButtonMonitor] 开始监控按钮（拍照: DI${modbusConfig.buttonChannel}, 复位: DI${modbusConfig.resetChannel}），轮询间隔 ${pollInterval}ms`);
+
+    while (this.running) {
+      const btnState = await this.readButtonState(modbusConfig.buttonChannel);
+      const resetState = await this.readButtonState(modbusConfig.resetChannel);
+
+      if (btnState === null || resetState === null) {
+        log.info('[ButtonMonitor] 读取失败，尝试重连...');
+        try { this.client.close(); } catch (_) {}
+        await new Promise(r => setTimeout(r, 1000));
+        await this.connect();
+        await new Promise(r => setTimeout(r, 500));
+        continue;
+      }
+
+      // ---- 拍照按钮（上升沿）----
+      if (btnState && !this.lastButtonState) {
+        log.info('[ButtonMonitor] 拍照按钮按下');
+
+        if (this.errorState) await this.lightOff(modbusConfig.lightRed);
+
+        await this.lightOff(modbusConfig.lightGreen);
+        await this.lightOn(modbusConfig.lightYellow);
+
+        let success = false;
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          // 非阻塞触发拍照：避免长时间 await 导致 Modbus 模块看门狗超时熄灭黄灯
+          let captureDone = false;
+          let captureResult = null;
+
+          mainWindow.webContents.executeJavaScript(
+            'window.__externalCapture ? window.__externalCapture() : ({ success: false, error: "渲染进程未就绪" })'
+          ).then(r => {
+            captureResult = r;
+            captureDone = true;
+          }).catch(err => {
+            log.error(`[ButtonMonitor] 触发拍照异常: ${err.message}`);
+            captureResult = { success: false, error: err.message };
+            captureDone = true;
+          });
+
+          // 轮询等待，同时每 2 秒重写黄灯信号，保持 Modbus 通信活跃
+          while (!captureDone) {
+            await new Promise(r => setTimeout(r, 2000));
+            if (!captureDone) {
+              await this.lightOn(modbusConfig.lightYellow).catch(() => {});
+            }
+          }
+
+          success = captureResult && captureResult.success === true;
+          if (!success) {
+            log.warn(`[ButtonMonitor] 拍照失败: ${captureResult?.error || '未知错误'}`);
+          }
+        } else {
+          log.error('[ButtonMonitor] App 窗口未就绪');
+        }
+
+        await this.lightOff(modbusConfig.lightYellow);
+
+        if (success) {
+          await new Promise(r => setTimeout(r, 300));
+          await this.lightOn(modbusConfig.lightGreen);
+          this.errorState = false;
+          log.info('[ButtonMonitor] 拍照成功，恢复绿灯');
+        } else {
+          await this.buzzerOn();
+          await this.lightOn(modbusConfig.lightRed);
+          await new Promise(r => setTimeout(r, 1000));
+          await this.buzzerOff();
+          this.errorState = true;
+          log.info('[ButtonMonitor] 拍照异常，红灯常亮');
+        }
+      }
+
+      // ---- 复位按钮（上升沿）----
+      if (resetState && !this.lastResetState) {
+        log.info('[ButtonMonitor] 复位按钮按下');
+        if (this.errorState) {
+          await this.lightOff(modbusConfig.lightRed);
+          await this.lightOn(modbusConfig.lightGreen);
+          this.errorState = false;
+        }
+      }
+
+      this.lastButtonState = btnState;
+      this.lastResetState = resetState;
+      await new Promise(r => setTimeout(r, pollInterval));
+    }
+  }
+
+  async stop() {
+    this.running = false;
+    try {
+      await this.allOff();
+      this.client.close();
+      log.info('[ButtonMonitor] 已停止');
+    } catch (_) {}
+  }
+}
+// ==========================================
+
 app.whenReady().then(async () => {
   let staticPort = 0;
   if (!isDev) {
@@ -247,7 +445,8 @@ app.whenReady().then(async () => {
         backendIp: settings.backendIp,
         backendUrl: settings.backendUrl,
         backendPort: settings.backendPort,
-        imageSettings: settings.imageSettings ? JSON.parse(settings.imageSettings) : { exposure: 6084, gain: 1.2, offsetX: 0, offsetY: 0 }
+        imageSettings: settings.imageSettings ? JSON.parse(settings.imageSettings) : { exposure: 6084, gain: 1.2, offsetX: 0, offsetY: 0 },
+        modbusSettings: settings.modbusSettings ? JSON.parse(settings.modbusSettings) : { ...modbusConfig }
       };
     } catch (err) {
       console.error('Failed to load settings from database:', err);
@@ -258,12 +457,38 @@ app.whenReady().then(async () => {
         backendIp: 'localhost',
         backendUrl: 'http://localhost:8000',
         backendPort: '8000',
-        imageSettings: { exposure: 6084, gain: 1.2, offsetX: 0, offsetY: 0 }
+        imageSettings: { exposure: 6084, gain: 1.2, offsetX: 0, offsetY: 0 },
+        modbusSettings: { ...modbusConfig }
       };
     }
   }
 
   let appSettings = await loadSettingsFromDb();
+
+  // 应用 Modbus 配置
+  if (appSettings.modbusSettings) {
+    Object.assign(modbusConfig, appSettings.modbusSettings);
+  }
+
+  async function stopButtonMonitor() {
+    if (buttonMonitor) {
+      await buttonMonitor.stop();
+      buttonMonitor = null;
+    }
+  }
+
+  async function startButtonMonitor() {
+    await stopButtonMonitor();
+    if (!modbusConfig.enabled) {
+      log.info('[ButtonMonitor] 按钮监控已禁用');
+      return;
+    }
+    buttonMonitor = new ButtonMonitor(modbusConfig.ip, modbusConfig.port, modbusConfig.unitId);
+    buttonMonitor.run(100).catch(err => log.error('[ButtonMonitor] 启动异常:', err));
+  }
+
+  // 初始启动
+  startButtonMonitor();
 
   ipcMain.handle('settings:get', () => {
     return appSettings;
@@ -281,6 +506,9 @@ app.whenReady().then(async () => {
       if (newSettings.imageSettings) {
         dataToSave.imageSettings = JSON.stringify(newSettings.imageSettings);
       }
+      if (newSettings.modbusSettings) {
+        dataToSave.modbusSettings = JSON.stringify(newSettings.modbusSettings);
+      }
       const updated = await prisma.appSettings.update({
         where: { id: 1 },
         data: dataToSave
@@ -292,8 +520,14 @@ app.whenReady().then(async () => {
         backendIp: updated.backendIp,
         backendUrl: updated.backendUrl,
         backendPort: updated.backendPort,
-        imageSettings: updated.imageSettings ? JSON.parse(updated.imageSettings) : { exposure: 67, gain: 1.2 }
+        imageSettings: updated.imageSettings ? JSON.parse(updated.imageSettings) : { exposure: 67, gain: 1.2 },
+        modbusSettings: updated.modbusSettings ? JSON.parse(updated.modbusSettings) : { ...modbusConfig }
       };
+      // 应用新的 Modbus 配置并重启监控（如需要）
+      if (appSettings.modbusSettings) {
+        Object.assign(modbusConfig, appSettings.modbusSettings);
+      }
+      startButtonMonitor();
       // 重新初始化相机服务，使用新的后端URL
       await initCameraService(appSettings.backendUrl);
       return true;
@@ -460,7 +694,7 @@ app.whenReady().then(async () => {
       }
     }
 
-    if (cameraServiceReady) {
+    if (await ensureCameraServiceReady()) {
       try {
         const response = await makeCameraApiRequest('/camera/list');
         if (response.success && response.cameras) {
@@ -493,7 +727,7 @@ app.whenReady().then(async () => {
       isNetworkCamera: camera.isNetworkCamera || false
     };
 
-    if (cameraServiceReady && camera.isNetworkCamera) {
+    if (await ensureCameraServiceReady() && camera.isNetworkCamera) {
       try {
         const params = new URLSearchParams();
         params.append('camera_id', cameraData.name);
@@ -530,7 +764,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('db:delete-camera', async (event, { id, isNetworkCamera, dbId }) => {
-    if (cameraServiceReady && isNetworkCamera) {
+    if (await ensureCameraServiceReady() && isNetworkCamera) {
       try {
         const response = await makeCameraApiRequest(`/camera/${id}/remove`, {
           method: 'POST'
@@ -550,7 +784,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('db:update-camera', async (event, { id, data }) => {
-    if (cameraServiceReady && data.isNetworkCamera) {
+    if (await ensureCameraServiceReady() && data.isNetworkCamera) {
       try {
         const params = new URLSearchParams();
         if (data.ip) params.append('ip_address', data.ip);
@@ -576,7 +810,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('camera:connect', async (event, { cameraId, ipAddress, vendor, exposureTime, gain, offsetX, offsetY, width, height }) => {
 
-    if (cameraServiceReady) {
+    if (await ensureCameraServiceReady()) {
       try {
         const params = new URLSearchParams();
         params.append('vendor', vendor || 'Basler');
@@ -628,7 +862,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('camera:disconnect', async (event, cameraId) => {
-    if (cameraServiceReady) {
+    if (await ensureCameraServiceReady()) {
       try {
         const response = await makeCameraApiRequest(`/camera/${cameraId}/disconnect`, {
           method: 'POST'
@@ -636,9 +870,6 @@ app.whenReady().then(async () => {
         return response;
       } catch (err) {
         console.error('Failed to disconnect camera:', err);
-        if (err.message === 'Request timeout') {
-          cameraServiceReady = false;
-        }
         return { success: false, error: err.message };
       }
     }
@@ -646,7 +877,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('camera:capture', async (event, cameraId, savePath) => {
-    if (cameraServiceReady) {
+    if (await ensureCameraServiceReady()) {
       try {
         const query = savePath ? `?save_path=${encodeURIComponent(savePath)}&return_base64=true` : '?return_base64=true';
         const response = await makeCameraApiRequest(`/camera/${cameraId}/capture${query}`, {
@@ -662,7 +893,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('camera:get-status', async (event, cameraId) => {
-    if (cameraServiceReady) {
+    if (await ensureCameraServiceReady()) {
       try {
         const response = await makeCameraApiRequest(`/camera/${cameraId}/status`);
         return response;
@@ -675,7 +906,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('camera:update-parameters', async (event, { cameraId, exposureTime, gain, offsetX, offsetY }) => {
-    if (cameraServiceReady) {
+    if (await ensureCameraServiceReady()) {
       try {
         const params = new URLSearchParams();
         if (exposureTime !== undefined && exposureTime !== null) params.append('exposure_time', String(Math.round(exposureTime)));
@@ -1034,6 +1265,8 @@ app.whenReady().then(async () => {
         orderBy: { createdAt: 'desc' }
       });
 
+      const fs = require('fs');
+
       // 过滤：排除被当前版本（baseTaskUuid）使用过的ROI
       // 但保留被祖先版本（taskChain中的任务）使用过的ROI
       const availableRois = allRois.filter(roi => {
@@ -1041,23 +1274,29 @@ app.whenReady().then(async () => {
           // 未被任何重训使用过的ROI，可用
           return true;
         }
-        
+
         // 检查这个ROI被哪个任务使用过
         // 如果被当前选择的基础模型使用过，则不可用
         if (roi.usedTaskUuid === baseTaskUuid) {
           return false;
         }
-        
+
         // 如果被祖先任务使用过，仍然可用（因为是之前版本使用的）
         if (ancestorTasks.includes(roi.usedTaskUuid)) {
           return true;
         }
-        
+
         // 被其他分支的任务使用过，也显示出来（用户可以选择是否使用）
         return true;
       });
 
-      return { success: true, rois: availableRois };
+      // 检查文件是否存在，添加 fileExists 标记
+      const roisWithFileCheck = availableRois.map(roi => ({
+        ...roi,
+        fileExists: fs.existsSync(roi.filePath)
+      }));
+
+      return { success: true, rois: roisWithFileCheck };
     } catch (err) {
       console.error('Failed to get available ROIs:', err);
       return { success: false, error: err.message };
@@ -1081,6 +1320,46 @@ app.whenReady().then(async () => {
       return { success: true };
     } catch (err) {
       console.error('Failed to mark ROIs as used:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 批量删除 ROI
+  ipcMain.handle('storage:delete-rois', async (event, { roiIds }) => {
+    try {
+      if (!roiIds || !Array.isArray(roiIds) || roiIds.length === 0) {
+        return { success: false, error: 'No ROI IDs provided' };
+      }
+
+      // 先查询要删除的ROI信息（用于删除文件）
+      const roisToDelete = await prisma.roiImage.findMany({
+        where: { id: { in: roiIds } }
+      });
+
+      const fs = require('fs');
+      let deletedFiles = 0;
+      for (const roi of roisToDelete) {
+        try {
+          if (roi.filePath && fs.existsSync(roi.filePath)) {
+            fs.unlinkSync(roi.filePath);
+            deletedFiles++;
+          }
+          if (roi.thumbnailPath && fs.existsSync(roi.thumbnailPath)) {
+            fs.unlinkSync(roi.thumbnailPath);
+          }
+        } catch (fileErr) {
+          console.warn(`Failed to delete ROI file: ${roi.filePath}`, fileErr);
+        }
+      }
+
+      // 从数据库删除
+      await prisma.roiImage.deleteMany({
+        where: { id: { in: roiIds } }
+      });
+
+      return { success: true, deletedCount: roiIds.length, deletedFiles };
+    } catch (err) {
+      console.error('Failed to delete ROIs:', err);
       return { success: false, error: err.message };
     }
   });
@@ -1555,7 +1834,10 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('window-all-closed', function () {
+app.on('window-all-closed', async function () {
+  if (buttonMonitor) {
+    await buttonMonitor.stop();
+  }
   if (staticServer) {
     staticServer.close();
   }

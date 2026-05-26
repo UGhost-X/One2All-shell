@@ -9,7 +9,7 @@ import {
   Server,
   Wifi
 } from 'lucide-vue-next'
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onActivated, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Input from '@/components/ui/input/Input.vue'
 import Label from '@/components/ui/label/Label.vue'
@@ -21,6 +21,18 @@ const router = useRouter()
 const dataPath = ref('C:/Users/Public/One2All/Data')
 const isSaving = ref(false)
 const showSavedMessage = ref(false)
+
+// Modbus 配置
+const modbusEnabled = ref(true)
+const modbusIp = ref('192.168.1.12')
+const modbusPort = ref(502)
+const modbusUnitId = ref(1)
+const modbusButtonChannel = ref(1)
+const modbusResetChannel = ref(2)
+const modbusLightGreen = ref(0)
+const modbusLightYellow = ref(1)
+const modbusLightRed = ref(2)
+const modbusBuzzer = ref(3)
 
 const backendMode = ref<'local' | 'remote'>('local')
 const backendIp = ref('127.0.0.1')
@@ -45,32 +57,46 @@ const handleBack = async () => {
   await router.push('/')
 }
 
-onMounted(async () => {
-  if (window.electronAPI?.getSettings) {
-    const settings = await window.electronAPI.getSettings()
-    if (settings.dataPath) dataPath.value = settings.dataPath
-    if (settings.backendMode) backendMode.value = settings.backendMode
-    if (settings.backendUrl) {
-      backendUrl.value = settings.backendUrl
-      try {
-        const url = new URL(settings.backendUrl)
-        if (settings.backendMode === 'remote') {
-          remoteBackendIp.value = url.hostname
-        } else {
-          backendIp.value = url.hostname
-        }
-        backendPort.value = url.port || '8000'
-      } catch {
-        if (settings.backendMode === 'remote') {
-          remoteBackendIp.value = ''
-        }
+async function loadSettings() {
+  if (!window.electronAPI?.getSettings) return
+  const settings = await window.electronAPI.getSettings()
+  if (settings.dataPath) dataPath.value = settings.dataPath
+  if (settings.backendMode) backendMode.value = settings.backendMode
+  if (settings.backendUrl) {
+    backendUrl.value = settings.backendUrl
+    try {
+      const url = new URL(settings.backendUrl)
+      if (settings.backendMode === 'remote') {
+        remoteBackendIp.value = url.hostname
+      } else {
+        backendIp.value = url.hostname
       }
-    } else if (settings.backendIp) {
-      backendIp.value = settings.backendIp
+      backendPort.value = url.port || '8000'
+    } catch {
+      if (settings.backendMode === 'remote') {
+        remoteBackendIp.value = ''
+      }
     }
-    if (settings.backendPort) backendPort.value = settings.backendPort
+  } else if (settings.backendIp) {
+    backendIp.value = settings.backendIp
   }
-})
+  if (settings.backendPort) backendPort.value = settings.backendPort
+  if (settings.modbusSettings) {
+    modbusEnabled.value = settings.modbusSettings.enabled !== false
+    modbusIp.value = settings.modbusSettings.ip || '192.168.1.12'
+    modbusPort.value = settings.modbusSettings.port || 502
+    modbusUnitId.value = settings.modbusSettings.unitId || 1
+    modbusButtonChannel.value = settings.modbusSettings.buttonChannel ?? 1
+    modbusResetChannel.value = settings.modbusSettings.resetChannel ?? 2
+    modbusLightGreen.value = settings.modbusSettings.lightGreen ?? 0
+    modbusLightYellow.value = settings.modbusSettings.lightYellow ?? 1
+    modbusLightRed.value = settings.modbusSettings.lightRed ?? 2
+    modbusBuzzer.value = settings.modbusSettings.buzzer ?? 3
+  }
+}
+
+onMounted(loadSettings)
+onActivated(loadSettings)
 
 const handleSave = async () => {
   isSaving.value = true
@@ -86,7 +112,19 @@ const handleSave = async () => {
       backendMode: backendMode.value,
       backendIp: backendMode.value === 'local' ? '127.0.0.1' : remoteBackendIp.value,
       backendUrl: finalUrl,
-      backendPort: backendPort.value
+      backendPort: backendPort.value,
+      modbusSettings: {
+        enabled: modbusEnabled.value,
+        ip: modbusIp.value,
+        port: Number(modbusPort.value),
+        unitId: Number(modbusUnitId.value),
+        buttonChannel: Number(modbusButtonChannel.value),
+        resetChannel: Number(modbusResetChannel.value),
+        lightGreen: Number(modbusLightGreen.value),
+        lightYellow: Number(modbusLightYellow.value),
+        lightRed: Number(modbusLightRed.value),
+        buzzer: Number(modbusBuzzer.value)
+      }
     })
 
     if (success) {
@@ -223,6 +261,83 @@ const changeBackendMode = (mode: 'local' | 'remote') => {
                     {{ backendMode === 'local' ? `http://127.0.0.1:${backendPort}` : `http://${remoteBackendIp}:${backendPort}` }}
                   </code>
                 </span>
+              </div>
+            </UiCardContent>
+          </UiCard>
+        </section>
+
+        <section class="space-y-3">
+          <UiCard>
+            <UiCardContent class="pt-6 space-y-4">
+              <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                  <div class="space-y-1">
+                    <Label>Modbus 按钮监控配置</Label>
+                    <p class="text-xs text-muted-foreground">配置外部按钮的 Modbus 通信参数</p>
+                  </div>
+                  <UiButton
+                    :variant="modbusEnabled ? 'default' : 'outline'"
+                    size="sm"
+                    @click="modbusEnabled = !modbusEnabled"
+                  >
+                    {{ modbusEnabled ? '已启用' : '已禁用' }}
+                  </UiButton>
+                </div>
+                <div v-if="modbusEnabled" class="grid grid-cols-2 gap-4">
+                  <div class="space-y-1.5">
+                    <Label class="text-xs">IP 地址</Label>
+                    <Input v-model="modbusIp" placeholder="192.168.1.12" class="font-mono text-sm" />
+                  </div>
+                  <div class="space-y-1.5">
+                    <Label class="text-xs">端口</Label>
+                    <Input v-model.number="modbusPort" type="number" placeholder="502" class="font-mono text-sm" />
+                  </div>
+                  <div class="space-y-1.5">
+                    <Label class="text-xs">从站 ID</Label>
+                    <Input v-model.number="modbusUnitId" type="number" placeholder="1" class="font-mono text-sm" />
+                  </div>
+                  <div class="space-y-1.5">
+                    <Label class="text-xs">拍照按钮 DI 通道</Label>
+                    <Input v-model.number="modbusButtonChannel" type="number" placeholder="1" class="font-mono text-sm" />
+                  </div>
+                  <div class="space-y-1.5">
+                    <Label class="text-xs">复位按钮 DI 通道</Label>
+                    <Input v-model.number="modbusResetChannel" type="number" placeholder="2" class="font-mono text-sm" />
+                  </div>
+                </div>
+                <div v-if="modbusEnabled" class="mt-3 pt-3 border-t">
+                  <Label class="text-xs text-muted-foreground mb-3 block">三色灯与蜂鸣器输出通道（线圈）</Label>
+                  <div class="grid grid-cols-2 gap-4">
+                    <div class="space-y-1.5">
+                      <Label class="text-xs">
+                        <span class="inline-block w-2.5 h-2.5 bg-green-500 rounded-full mr-1.5 align-middle"></span>
+                        绿灯通道
+                      </Label>
+                      <Input v-model.number="modbusLightGreen" type="number" placeholder="0" class="font-mono text-sm" />
+                    </div>
+                    <div class="space-y-1.5">
+                      <Label class="text-xs">
+                        <span class="inline-block w-2.5 h-2.5 bg-yellow-500 rounded-full mr-1.5 align-middle"></span>
+                        黄灯通道
+                      </Label>
+                      <Input v-model.number="modbusLightYellow" type="number" placeholder="1" class="font-mono text-sm" />
+                    </div>
+                    <div class="space-y-1.5">
+                      <Label class="text-xs">
+                        <span class="inline-block w-2.5 h-2.5 bg-red-500 rounded-full mr-1.5 align-middle"></span>
+                        红灯通道
+                      </Label>
+                      <Input v-model.number="modbusLightRed" type="number" placeholder="2" class="font-mono text-sm" />
+                    </div>
+                    <div class="space-y-1.5">
+                      <Label class="text-xs">
+                        <span class="inline-block w-2.5 h-2.5 bg-amber-700 rounded-full mr-1.5 align-middle"></span>
+                        蜂鸣器通道
+                      </Label>
+                      <Input v-model.number="modbusBuzzer" type="number" placeholder="3" class="font-mono text-sm" />
+                    </div>
+                  </div>
+                </div>
               </div>
             </UiCardContent>
           </UiCard>

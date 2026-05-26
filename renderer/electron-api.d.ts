@@ -2,6 +2,8 @@ export {}
 
 declare global {
   interface Window {
+    /** 供主进程 Modbus 按钮触发的外部拍照入口 */
+    __externalCapture?: () => Promise<{ success: boolean; error?: string }>
     electronAPI?: {
       toggleAlwaysOnTop: () => Promise<boolean>
       isAlwaysOnTop: () => Promise<boolean>
@@ -14,7 +16,7 @@ declare global {
       updateCamera: (id: string, data: any) => Promise<any>
       getSystemCameras: () => Promise<Array<{ id: string; name: string; deviceId: string; isSystemCamera: boolean }>>
       // Network Camera API
-      connectCamera: (cameraId: string, params?: { vendor?: string; exposureTime?: number; gain?: number; offsetX?: number; offsetY?: number; width?: number; height?: number }) => Promise<{ success: boolean; message?: string; error?: string; status?: any }>
+      connectCamera: (cameraId: string, params?: { vendor?: string; ipAddress?: string; exposureTime?: number; gain?: number; offsetX?: number; offsetY?: number; width?: number; height?: number }) => Promise<{ success: boolean; message?: string; error?: string; status?: any }>
       disconnectCamera: (cameraId: string) => Promise<{ success: boolean; message?: string; error?: string }>
       captureFromCamera: (cameraId: string, savePath?: string) => Promise<{ success: boolean; data?: any; error?: string }>
       getCameraStatus: (cameraId: string) => Promise<{ success: boolean; status?: any; error?: string }>
@@ -49,6 +51,7 @@ declare global {
       updateRoiType: (data: { productId: string; taskUuid: string; category: string; fileName: string; userIsAnomaly: boolean }) => Promise<{ success: boolean; roiType?: string; error?: string }>
       getAvailableRois: (data: { productId: string; baseTaskUuid: string; roiType?: 'FP' | 'FN' }) => Promise<{ success: boolean; rois?: RoiImage[]; error?: string }>
       markRoisUsed: (data: { roiIds: string[]; usedTaskUuid: string }) => Promise<{ success: boolean; error?: string }>
+      deleteRois: (data: { roiIds: string[] }) => Promise<{ success: boolean; deletedCount?: number; deletedFiles?: number; error?: string }>
       // Retrain Tasks - 使用 TrainingRecord
       createRetrainTask: (data: any) => Promise<{ success: boolean; task?: TrainingRecord; error?: string }>
       updateRetrainTask: (data: { taskId: string; status: string; message?: string }) => Promise<{ success: boolean; task?: TrainingRecord; error?: string }>
@@ -73,6 +76,7 @@ interface RoiImage {
   usedInRetrain: boolean
   usedTaskUuid?: string
   usedAt?: Date
+  fileExists?: boolean  // 文件是否实际存在于磁盘
   generation: number
   createdAt: Date
   updatedAt: Date

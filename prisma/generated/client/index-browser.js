@@ -213,6 +213,7 @@ exports.Prisma.AppSettingsScalarFieldEnum = {
   backendUrl: 'backendUrl',
   backendPort: 'backendPort',
   imageSettings: 'imageSettings',
+  modbusSettings: 'modbusSettings',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 };

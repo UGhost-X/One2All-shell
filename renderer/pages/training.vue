@@ -77,35 +77,35 @@ const presetsData = ref<Record<string, any>>({
     brightness: { enabled: false, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [30]
+    num_results: [100]
   },
   basic: {
     rotate: { enabled: true, angle: [15] },
     brightness: { enabled: false, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [30]
+    num_results: [100]
   },
   standard: {
     rotate: { enabled: true, angle: [30] },
     brightness: { enabled: true, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [30]
+    num_results: [100]
   },
   heavy: {
     rotate: { enabled: true, angle: [45] },
     brightness: { enabled: true, min: 0.7, max: 1.3 },
     contrast: { enabled: true, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [30]
+    num_results: [100]
   },
   custom: {
     rotate: { enabled: false, angle: [30] },
     brightness: { enabled: false, min: 0.8, max: 1.2 },
     contrast: { enabled: false, min: 0.8, max: 1.2 },
     blur: { enabled: false, ksize: [3] },
-    num_results: [30]
+    num_results: [100]
   }
 })
 
@@ -2473,21 +2473,54 @@ const startTraining = async () => {
 
 // 加载可用的基础模型列表
 const loadAvailableBaseTasks = async () => {
-  if (!productId.value || !window.electronAPI) return
+  if (!productId.value) return
   try {
-    // 从本地数据库获取训练记录
-    const records = await window.electronAPI.getTrainingRecords(productId.value)
-    // 去重，按 taskUuid 分组
-    const taskMap = new Map()
+    const apiBase = getApiBase()
+    // 参考 deploy.vue：先从后端获取实际存在的模型，再与本地记录交叉比对
+    const res = await fetch(`${apiBase.replace(/\/$/, '')}/project/${productId.value}/models`)
+    if (!res.ok) {
+      availableBaseTasks.value = []
+      return
+    }
+    const data = await res.json()
+    const backendModels = data.models || []
+    // 从后端模型提取所有唯一的 task_uuid
+    const backendTaskUuids = new Set(backendModels.map((m: any) => m.task_uuid).filter(Boolean))
+
+    // 从本地数据库获取训练记录（用于获取时间等元信息）
+    let records: any[] = []
+    if (window.electronAPI) {
+      try {
+        records = await window.electronAPI.getTrainingRecords(productId.value)
+      } catch { /* ignore */ }
+    }
+
+    // 去重，只保留后端实际存在的模型
+    const taskMap = new Map<string, { task_uuid: string; created_at: string }>()
     for (const record of records) {
-      if (record.taskUuid && !taskMap.has(record.taskUuid)) {
+      if (record.taskUuid && backendTaskUuids.has(record.taskUuid) && !taskMap.has(record.taskUuid)) {
         taskMap.set(record.taskUuid, {
           task_uuid: record.taskUuid,
           created_at: record.startTime || record.createdAt
         })
       }
     }
-    availableBaseTasks.value = Array.from(taskMap.values())
+    // 补充后端有但本地记录没有的模型
+    for (const uuid of backendTaskUuids) {
+      if (!taskMap.has(uuid)) {
+        const backendModel = backendModels.find((m: any) => m.task_uuid === uuid)
+        taskMap.set(uuid, {
+          task_uuid: uuid,
+          created_at: backendModel?.created_at || ''
+        })
+      }
+    }
+
+    availableBaseTasks.value = Array.from(taskMap.values()).sort((a, b) => {
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0
+      return timeB - timeA
+    })
   } catch (err) {
     console.error('Failed to load base tasks:', err)
   }
@@ -4541,7 +4574,7 @@ onBeforeUnmount(() => {
                        class="w-8 h-8 rounded border overflow-hidden relative"
                      >
                        <img
-                         v-if="getRoiById(roiId)?.filePath"
+                         v-if="getRoiById(roiId)?.filePath && getRoiById(roiId)?.fileExists !== false"
                          :src="`file://${getRoiById(roiId)?.filePath}`"
                          class="w-full h-full object-cover"
                        />
@@ -4572,7 +4605,7 @@ onBeforeUnmount(() => {
                        class="w-8 h-8 rounded border overflow-hidden relative"
                      >
                        <img
-                         v-if="getRoiById(roiId)?.filePath"
+                         v-if="getRoiById(roiId)?.filePath && getRoiById(roiId)?.fileExists !== false"
                          :src="`file://${getRoiById(roiId)?.filePath}`"
                          class="w-full h-full object-cover"
                        />
@@ -5213,6 +5246,7 @@ onBeforeUnmount(() => {
       v-model:selected="selectedFpRois"
       :empty-text="t('training.retrain.noFpRois')"
       @confirm="showFpDialog = false"
+      @deleted="loadAvailableRois"
     />
 
     <!-- ROI 选择弹窗 - False Negatives -->
@@ -5224,6 +5258,7 @@ onBeforeUnmount(() => {
       v-model:selected="selectedFnRois"
       :empty-text="t('training.retrain.noFnRois')"
       @confirm="showFnDialog = false"
+      @deleted="loadAvailableRois"
     />
   </div>
 </template>

@@ -59,12 +59,28 @@
 
         <!-- 统计信息 -->
         <div class="text-xs text-muted-foreground">
-          已选择 {{ localSelected.length }} / {{ filteredRois.length }}
+          <template v-if="deleteMode">
+            待删除 {{ deleteSelected.size }} / {{ filteredRois.length }}
+          </template>
+          <template v-else>
+            已选择 {{ localSelected.length }} / {{ filteredRois.length }}
+          </template>
         </div>
 
         <!-- 全选/取消全选 -->
         <Button variant="outline" size="sm" class="h-8 text-xs" @click="toggleSelectAll">
           {{ isAllSelected ? '取消全选' : '全选' }}
+        </Button>
+
+        <!-- 删除模式切换 -->
+        <Button
+          :variant="deleteMode ? 'destructive' : 'outline'"
+          size="sm"
+          class="h-8 text-xs"
+          @click="toggleDeleteMode"
+        >
+          <Trash2 class="w-3 h-3 mr-1" />
+          {{ deleteMode ? '退出删除' : '删除' }}
         </Button>
       </div>
 
@@ -87,29 +103,36 @@
                 v-for="roi in group.rois"
                 :key="roi.id"
                 class="relative group cursor-pointer rounded-lg overflow-hidden border-2 transition-all"
-                :class="[
-                  isSelected(roi.id) ? 'border-primary ring-2 ring-primary/20' : 'border-transparent hover:border-muted'
-                ]"
-                @click="toggleSelection(roi)"
+                :class="getRoiBorderClass(roi)"
+                @click="handleRoiClick(roi)"
               >
                 <!-- ROI 图片 -->
                 <div class="aspect-square bg-muted relative">
                   <img
-                    v-if="roi.thumbnailPath || roi.filePath"
-                    :src="`file://${roi.thumbnailPath || roi.filePath}`"
+                    v-if="roi.filePath && roi.fileExists !== false"
+                    :src="`file://${roi.filePath}`"
                     class="w-full h-full object-cover"
                     :alt="roi.category"
                   />
-                  <div v-else class="w-full h-full flex items-center justify-center text-muted-foreground">
+                  <div v-else class="w-full h-full flex flex-col items-center justify-center text-muted-foreground gap-1">
                     <ImageOff class="w-8 h-8" />
+                    <span v-if="roi.filePath && roi.fileExists === false" class="text-[10px] text-destructive">文件丢失</span>
                   </div>
 
-                  <!-- 选中标记 -->
+                  <!-- 选中标记 (选择模式) -->
                   <div
-                    v-if="isSelected(roi.id)"
+                    v-if="!deleteMode && isSelected(roi.id)"
                     class="absolute top-1 right-1 w-5 h-5 bg-primary rounded-full flex items-center justify-center"
                   >
                     <Check class="w-3 h-3 text-primary-foreground" />
+                  </div>
+
+                  <!-- 删除选中标记 (删除模式) -->
+                  <div
+                    v-if="deleteMode && deleteSelected.has(roi.id)"
+                    class="absolute top-1 right-1 w-5 h-5 bg-destructive rounded-full flex items-center justify-center"
+                  >
+                    <X class="w-3 h-3 text-destructive-foreground" />
                   </div>
                 </div>
 
@@ -143,11 +166,51 @@
 
       <!-- 底部操作栏 -->
       <DialogFooter class="px-6 py-4 border-t gap-3">
-        <Button variant="outline" @click="$emit('update:open', false)">
+        <template v-if="deleteMode">
+          <Button variant="outline" @click="toggleDeleteMode">
+            取消
+          </Button>
+          <Button
+            variant="destructive"
+            :disabled="deleteSelected.size === 0 || isDeleting"
+            @click="confirmBatchDelete"
+          >
+            <Loader2 v-if="isDeleting" class="w-4 h-4 mr-2 animate-spin" />
+            <Trash2 v-else class="w-4 h-4 mr-2" />
+            {{ isDeleting ? '删除中...' : `删除所选 (${deleteSelected.size})` }}
+          </Button>
+        </template>
+        <template v-else>
+          <Button variant="outline" @click="$emit('update:open', false)">
+            取消
+          </Button>
+          <Button @click="confirmSelection">
+            确认选择 ({{ localSelected.length }})
+          </Button>
+        </template>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+
+  <!-- 删除确认对话框 -->
+  <Dialog :open="showDeleteConfirm" @update:open="showDeleteConfirm = $event">
+    <DialogContent class="max-w-sm">
+      <DialogHeader>
+        <DialogTitle class="flex items-center gap-2 text-destructive">
+          <Trash2 class="w-5 h-5" />
+          确认删除
+        </DialogTitle>
+        <DialogDescription>
+          确定要删除选中的 {{ deleteSelected.size }} 个 ROI 吗？此操作不可撤销，会同时删除磁盘上的图片文件。
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter class="gap-3">
+        <Button variant="outline" class="flex-1" @click="showDeleteConfirm = false" :disabled="isDeleting">
           取消
         </Button>
-        <Button @click="confirmSelection">
-          确认选择 ({{ localSelected.length }})
+        <Button variant="destructive" class="flex-1" @click="executeBatchDelete" :disabled="isDeleting">
+          <Loader2 v-if="isDeleting" class="w-4 h-4 mr-2 animate-spin" />
+          确认删除
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -169,7 +232,7 @@ import SelectContent from "@/components/ui/select/SelectContent.vue";
 import SelectItem from "@/components/ui/select/SelectItem.vue";
 import SelectTrigger from "@/components/ui/select/SelectTrigger.vue";
 import SelectValue from "@/components/ui/select/SelectValue.vue";
-import { Calendar, Tag, Filter, Check, ImageOff } from 'lucide-vue-next'
+import { Calendar, Tag, Filter, Check, ImageOff, Trash2, X, Loader2 } from 'lucide-vue-next'
 
 interface RoiImage {
   id: string
@@ -180,6 +243,7 @@ interface RoiImage {
   posId?: string
   createdAt: string | Date
   usedInRetrain: boolean
+  fileExists?: boolean
 }
 
 const props = defineProps<{
@@ -195,10 +259,17 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
   'update:selected': [value: string[]]
   'confirm': []
+  'deleted': []
 }>()
 
 // 本地选择状态
 const localSelected = ref<string[]>([...props.selected])
+
+// 删除模式
+const deleteMode = ref(false)
+const deleteSelected = ref<Set<string>>(new Set())
+const isDeleting = ref(false)
+const showDeleteConfirm = ref(false)
 
 // 筛选条件
 const selectedDate = ref('all')
@@ -236,7 +307,7 @@ const availableCategories = computed(() => {
 // 按日期分组的 ROI
 const groupedRois = computed(() => {
   const groups = new Map<string, RoiImage[]>()
-  
+
   filteredRois.value.forEach(roi => {
     const dateStr = typeof roi.createdAt === 'string' ? roi.createdAt : new Date(roi.createdAt).toISOString()
     const date = dateStr.split('T')[0]
@@ -245,7 +316,7 @@ const groupedRois = computed(() => {
     }
     groups.get(date)!.push(roi)
   })
-  
+
   return Array.from(groups.entries())
     .map(([date, rois]) => ({ date, rois }))
     .sort((a, b) => b.date.localeCompare(a.date))
@@ -255,6 +326,9 @@ const groupedRois = computed(() => {
 const isAllSelected = computed(() => {
   const allRois = filteredRois.value
   if (allRois.length === 0) return false
+  if (deleteMode.value) {
+    return allRois.every(r => deleteSelected.value.has(r.id))
+  }
   return allRois.every(r => localSelected.value.includes(r.id))
 })
 
@@ -267,6 +341,14 @@ watch(() => props.rois, () => {
   filterRois()
 }, { immediate: true })
 
+// 关闭时重置删除模式
+watch(() => props.open, (val) => {
+  if (!val) {
+    deleteMode.value = false
+    deleteSelected.value = new Set()
+  }
+})
+
 // 筛选 ROI
 function filterRois() {
   let result = [...props.rois]
@@ -278,49 +360,100 @@ function filterRois() {
       return dateStr.startsWith(selectedDate.value)
     })
   }
-  
+
   // 按类别筛选
   if (selectedCategory.value !== 'all') {
     result = result.filter(roi => roi.category === selectedCategory.value)
   }
-  
+
   // 按类型筛选
   if (selectedType.value !== 'all') {
     result = result.filter(roi => roi.roiType === selectedType.value)
   }
-  
+
   filteredRois.value = result
 }
 
-// 判断是否选中
+// 获取 ROI 边框样式
+function getRoiBorderClass(roi: RoiImage) {
+  const classes: string[] = []
+  if (deleteMode.value) {
+    if (deleteSelected.value.has(roi.id)) {
+      classes.push('border-destructive ring-2 ring-destructive/20')
+    } else {
+      classes.push('border-transparent hover:border-destructive/50')
+    }
+  } else {
+    if (isSelected(roi.id)) {
+      classes.push('border-primary ring-2 ring-primary/20')
+    } else {
+      classes.push('border-transparent hover:border-muted')
+    }
+  }
+  return classes
+}
+
+// 判断是否选中（选择模式）
 function isSelected(roiId: string): boolean {
   return localSelected.value.includes(roiId)
 }
 
-// 切换选择
+// 处理 ROI 点击
+function handleRoiClick(roi: RoiImage) {
+  if (deleteMode.value) {
+    toggleDeleteSelection(roi.id)
+  } else {
+    toggleSelection(roi)
+  }
+}
+
+// 切换选择（选择模式）
 function toggleSelection(roi: RoiImage) {
   const index = localSelected.value.indexOf(roi.id)
   if (index > -1) {
-    // 取消选择 - 创建新数组触发响应式更新
     localSelected.value = localSelected.value.filter(id => id !== roi.id)
   } else {
-    // 选择 - 创建新数组触发响应式更新
     localSelected.value = [...localSelected.value, roi.id]
+  }
+}
+
+// 切换删除选择（删除模式）
+function toggleDeleteSelection(roiId: string) {
+  const newSet = new Set(deleteSelected.value)
+  if (newSet.has(roiId)) {
+    newSet.delete(roiId)
+  } else {
+    newSet.add(roiId)
+  }
+  deleteSelected.value = newSet
+}
+
+// 切换删除模式
+function toggleDeleteMode() {
+  deleteMode.value = !deleteMode.value
+  if (!deleteMode.value) {
+    deleteSelected.value = new Set()
   }
 }
 
 // 全选/取消全选
 function toggleSelectAll() {
   const allRois = filteredRois.value
-  if (isAllSelected.value) {
-    // 取消全选
-    localSelected.value = localSelected.value.filter(id =>
-      !allRois.find(r => r.id === id)
-    )
+  if (deleteMode.value) {
+    if (isAllSelected.value) {
+      deleteSelected.value = new Set()
+    } else {
+      deleteSelected.value = new Set(allRois.map(r => r.id))
+    }
   } else {
-    // 全选
-    const allIds = allRois.map(r => r.id)
-    localSelected.value = [...new Set([...localSelected.value, ...allIds])]
+    if (isAllSelected.value) {
+      localSelected.value = localSelected.value.filter(id =>
+        !allRois.find(r => r.id === id)
+      )
+    } else {
+      const allIds = allRois.map(r => r.id)
+      localSelected.value = [...new Set([...localSelected.value, ...allIds])]
+    }
   }
 }
 
@@ -329,6 +462,38 @@ function confirmSelection() {
   emit('update:selected', [...localSelected.value])
   emit('confirm')
   emit('update:open', false)
+}
+
+// 确认批量删除（打开二次确认）
+function confirmBatchDelete() {
+  if (deleteSelected.value.size === 0) return
+  showDeleteConfirm.value = true
+}
+
+// 执行批量删除
+async function executeBatchDelete() {
+  if (deleteSelected.value.size === 0) return
+  isDeleting.value = true
+  try {
+    const roiIds = Array.from(deleteSelected.value)
+    if (window.electronAPI?.deleteRois) {
+      const result = await window.electronAPI.deleteRois({ roiIds })
+      if (result.success) {
+        // 从本地选择中移除已删除的
+        localSelected.value = localSelected.value.filter(id => !roiIds.includes(id))
+        deleteSelected.value = new Set()
+        showDeleteConfirm.value = false
+        deleteMode.value = false
+        emit('deleted')
+      } else {
+        console.error('Failed to delete ROIs:', result.error)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to delete ROIs:', err)
+  } finally {
+    isDeleting.value = false
+  }
 }
 
 // 格式化时间

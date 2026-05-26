@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateRoiType: (data) => ipcRenderer.invoke('storage:update-roi-type', data),
   getAvailableRois: (data) => ipcRenderer.invoke('storage:get-available-rois', data),
   markRoisUsed: (data) => ipcRenderer.invoke('storage:mark-rois-used', data),
+  deleteRois: (data) => ipcRenderer.invoke('storage:delete-rois', data),
   // Retrain Tasks
   createRetrainTask: (data) => ipcRenderer.invoke('storage:create-retrain-task', data),
   updateRetrainTask: (data) => ipcRenderer.invoke('storage:update-retrain-task', data),

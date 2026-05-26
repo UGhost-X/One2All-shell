@@ -2,10 +2,10 @@
 import { computed, ref, onMounted, onUnmounted, inject, watch, onActivated } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useRuntimeConfig } from '#app'
-import { Play, Square, Trash2, RefreshCw, Server, Box, Loader2, Zap, FolderOpen, CheckCircle, XCircle, Clock, ImageIcon, BarChart3, FileText, X, Plus, Minus } from 'lucide-vue-next'
+
+import { Play, Square, Trash2, RefreshCw, Box, Loader2, FolderOpen, CheckCircle, XCircle, FileText, X } from 'lucide-vue-next'
 import Switch from '@/components/ui/switch/Switch.vue'
-import Progress from '@/components/ui/progress/Progress.vue'
+
 import UiButton from '@/components/ui/button/Button.vue'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Separator from '@/components/ui/separator/Separator.vue'
@@ -19,7 +19,6 @@ definePageMeta({ keepalive: true })
 
 const { t } = useI18n()
 const route = useRoute()
-const config = useRuntimeConfig()
 const toast = inject<any>('toast')
 
 interface Product {
@@ -55,24 +54,6 @@ if (typeof window !== 'undefined') {
 
 const backendPort = '8000'
 const getBackendUrl = (path: string) => `http://${apiBase.value}:${backendPort}${path}`
-
-const getInferenceUrl = async (inferenceUrl?: string) => {
-  if (!inferenceUrl) return ''
-  if (!apiBase.value) {
-    await loadSettings()
-  }
-  let url = inferenceUrl.replace('0.0.0.0', 'localhost')
-  if (url.includes('localhost') || url.includes('127.0.0.1')) {
-    const base = `http://${apiBase.value}:${backendPort}`
-    if (apiBase.value) {
-      try {
-        const urlObj = new URL(base)
-        url = url.replace('localhost', urlObj.hostname).replace('127.0.0.1', urlObj.hostname)
-      } catch {}
-    }
-  }
-  return url
-}
 
 interface DeployableModel {
   task_uuid: string
@@ -115,47 +96,6 @@ const startingUuid = ref<string | null>(null)
 const stoppingId = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
 const isProductSelectOpen = ref(false)
-
-// 推理测试相关
-const inferenceFileInput = ref<HTMLInputElement | null>(null)
-const inferenceImageUrl = ref('')
-const inferenceFile = ref<File | null>(null)
-const inferenceCanvasRef = ref<HTMLCanvasElement | null>(null)
-const inferenceCanvasResultRef = ref<HTMLCanvasElement | null>(null)
-const selectedInferenceService = ref('')
-const isInferring = ref(false)
-const inferenceResult = ref<any>(null)
-
-interface WorkpieceResult {
-  workpieceId: number
-  workpieceKey: string
-  bbox: [number, number, number, number]
-  results: Array<{
-    label: string
-    score: number
-    bbox: [number, number, number, number]
-    isAnomaly?: boolean
-    error?: number
-    threshold?: number
-    alignmentStrategy?: string
-  }>
-  strategy: string
-  hasAnomaly: boolean
-}
-
-interface InferenceSummary {
-  totalWorkpieces: number
-  anomalyWorkpieces: number
-  totalRois: number
-  anomalyRois: number
-}
-
-const workpieceResults = ref<WorkpieceResult[]>([])
-const inferenceSummary = ref<InferenceSummary | null>(null)
-
-const detectionResults = ref<Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }>>([])
-const classificationResults = ref<Array<{ label: string; score: number }>>([])
-const inferenceServiceOpen = ref(false)
 
 // 日志查看相关
 const showLogModal = ref(false)
@@ -294,50 +234,6 @@ watch(autoRefreshLogs, (enabled) => {
     stopLogsAutoRefresh()
   }
 })
-
-// 在图片上绘制检测框
-const drawDetectionBoxes = (imageUrl: string, detections: Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }>) => {
-  const drawOnCanvas = (canvas: HTMLCanvasElement | null) => {
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const img = new Image()
-    img.onload = () => {
-      canvas.width = img.width
-      canvas.height = img.height
-      ctx.drawImage(img, 0, 0)
-
-      detections.forEach((det, index) => {
-        const [x, y, width, height] = det.bbox
-
-        const colors = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']
-        const color = det.isAnomaly ? '#ef4444' : colors[index % colors.length]
-
-        ctx.strokeStyle = color
-        ctx.lineWidth = Math.max(2, img.width / 200)
-        ctx.strokeRect(x, y, width, height)
-
-        const anomalyText = det.isAnomaly ? `[${t('deploy.anomaly')}] ` : ''
-        const labelText = `${anomalyText}${det.label} ${(det.score).toFixed(1)}%`
-        ctx.font = `bold ${Math.max(12, img.width / 50)}px sans-serif`
-        const textMetrics = ctx.measureText(labelText)
-        const textHeight = Math.max(16, img.width / 40)
-        const padding = 4
-
-        ctx.fillStyle = color
-        ctx.fillRect(x, y - textHeight - padding * 2, textMetrics.width + padding * 2, textHeight + padding * 2)
-
-        ctx.fillStyle = '#ffffff'
-        ctx.fillText(labelText, x + padding, y - padding - 2)
-      })
-    }
-    img.src = imageUrl
-  }
-
-  drawOnCanvas(inferenceCanvasRef.value)
-  drawOnCanvas(inferenceCanvasResultRef.value)
-}
 
 // 运行中的服务（包括启动中、运行中、异常等状态）
 const runningServices = computed(() => services.value.filter(s => 
@@ -631,200 +527,6 @@ const loadServiceLogs = async () => {
 
 const refreshLogs = () => {
   loadServiceLogs()
-}
-
-// 推理测试函数
-const triggerInferenceFileInput = () => {
-  inferenceFileInput.value?.click()
-}
-
-const handleInferenceFileChange = async (e: Event) => {
-  const input = e.target as HTMLInputElement | null
-  const file = input?.files?.[0]
-  if (!file) return
-
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-
-  inferenceImageUrl.value = dataUrl
-  inferenceFile.value = file
-  inferenceResult.value = null
-  workpieceResults.value = []
-  inferenceSummary.value = null
-  detectionResults.value = []
-  classificationResults.value = []
-  if (input) input.value = ''
-}
-
-const runInference = async () => {
-  if (!selectedInferenceService.value || !inferenceImageUrl.value) {
-    toast?.error(t('deploy.messages.selectServiceAndImage'))
-    return
-  }
-
-  const selectedService = services.value.find(s => s.service_id === selectedInferenceService.value)
-
-  if (!selectedService || !selectedService.inference_url) {
-    toast?.error(t('deploy.messages.serviceInfoError'))
-    return
-  }
-  if (selectedService.status === 'starting') {
-    toast?.error(t('deploy.messages.serviceStarting'))
-    return
-  }
-
-  isInferring.value = true
-  inferenceResult.value = null
-  workpieceResults.value = []
-  inferenceSummary.value = null
-  detectionResults.value = []
-  classificationResults.value = []
-
-  try {
-    const formData = new FormData()
-    formData.append('file', inferenceFile.value!)
-    formData.append('service_id', selectedInferenceService.value)
-
-    const inferenceUrl = await getInferenceUrl(selectedService.inference_url)
-    const res = await fetch(`${inferenceUrl}/predict`, {
-      method: 'POST',
-      body: formData
-    })
-
-    const data = await res.json()
-
-    if (res.ok) {
-      inferenceResult.value = data
-
-      // 处理多工件预测结果格式
-      if (data.workpieces && Array.isArray(data.workpieces)) {
-        workpieceResults.value = data.workpieces.map((wp: any) => ({
-          workpieceId: wp.workpiece_id,
-          workpieceKey: wp.workpiece_key,
-          bbox: wp.bbox || [0, 0, 0, 0],
-          results: (wp.results || []).map((r: any) => ({
-            label: r.category || t('deploy.unknown'),
-            score: (r.anomaly_score || 0) * 100,
-            bbox: r.bbox || r.bbox_clipped || [0, 0, 0, 0],
-            isAnomaly: r.is_anomaly || false,
-            error: r.error || 0,
-            threshold: r.threshold || 0,
-            alignmentStrategy: r.alignment_strategy || 'ORB'
-          })),
-          strategy: wp.strategy || 'unknown',
-          hasAnomaly: wp.has_anomaly || false
-        }))
-
-        if (data.summary) {
-          inferenceSummary.value = {
-            totalWorkpieces: data.summary.total_workpieces || 0,
-            anomalyWorkpieces: data.summary.anomaly_workpieces || 0,
-            totalRois: data.summary.total_rois || 0,
-            anomalyRois: data.summary.anomaly_rois || 0
-          }
-        }
-
-        // 合并所有工件的检测结果用于绘制
-        const allResults: Array<{ label: string; score: number; bbox: [number, number, number, number]; isAnomaly?: boolean; error?: number; threshold?: number; alignmentStrategy?: string }> = []
-        workpieceResults.value.forEach(wp => {
-          wp.results.forEach(r => {
-            allResults.push({
-              ...r,
-              label: `${wp.workpieceKey}: ${r.label}`
-            })
-          })
-        })
-        detectionResults.value = allResults
-
-        toast?.success(t('deploy.multiWorkpieceDetected', {
-          workpieces: workpieceResults.value.length,
-          anomaly: inferenceSummary.value?.anomalyWorkpieces || 0
-        }))
-
-        if (inferenceImageUrl.value && detectionResults.value.length > 0) {
-          setTimeout(() => {
-            drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
-          }, 100)
-        }
-      }
-      // 处理 /predict_roi 返回格式 - results 是数组，每个元素是一个标注框的检测结果
-      else if (data.result?.results && Array.isArray(data.result.results)) {
-        const roiResults = data.result.results
-        detectionResults.value = roiResults.map((r: any) => ({
-          label: r.category || t('deploy.unknown'),
-          score: (r.anomaly_score || 0) * 100,
-          bbox: r.bbox || r.bbox_clipped || [0, 0, 0, 0],
-          isAnomaly: r.is_anomaly || false,
-          error: r.error || 0,
-          threshold: r.threshold || 0,
-          alignmentStrategy: r.alignment_strategy || 'ORB'
-        }))
-        const anomalyCount = roiResults.filter((r: any) => r.is_anomaly).length
-        toast?.success(t('deploy.anomalyDetected', { count: detectionResults.value.length, anomaly: anomalyCount }))
-        if (inferenceImageUrl.value && detectionResults.value.length > 0) {
-          setTimeout(() => {
-            drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
-          }, 100)
-        }
-      }
-      // 处理目标检测结果（兼容旧格式）
-      else if (data.detections && Array.isArray(data.detections)) {
-        detectionResults.value = data.detections.map((d: any) => ({
-          label: d.label || d.class || t('deploy.unknown'),
-          score: (d.score || d.confidence || d.probability || 0) * 100,
-          bbox: d.bbox || d.box || [0, 0, 0, 0]
-        }))
-        toast?.success(t('deploy.targetDetected', { count: detectionResults.value.length }))
-        if (inferenceImageUrl.value && detectionResults.value.length > 0) {
-          setTimeout(() => {
-            drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
-          }, 100)
-        }
-      }
-      // 处理分类结果
-      else if (data.classifications && Array.isArray(data.classifications)) {
-        classificationResults.value = data.classifications.map((c: any) => ({
-          label: c.label || c.class || t('deploy.unknown'),
-          score: (c.score || c.confidence || c.probability || 0) * 100
-        }))
-        toast?.success(t('deploy.inferenceComplete'))
-      }
-      else if (data.predictions && Array.isArray(data.predictions)) {
-        classificationResults.value = data.predictions.map((p: any) => ({
-          label: p.label || p.name || t('deploy.unknown'),
-          score: (p.score || p.confidence || p.probability || 0) * 100
-        }))
-        toast?.success(t('deploy.inferenceComplete'))
-      }
-      else if (data.result?.detections) {
-        detectionResults.value = data.result.detections.map((d: any) => ({
-          label: d.label || d.class || t('deploy.unknown'),
-          score: (d.score || d.confidence || d.probability || 0) * 100,
-          bbox: d.bbox || d.box || [0, 0, 0, 0]
-        }))
-        toast?.success(t('deploy.targetDetected', { count: detectionResults.value.length }))
-        if (inferenceImageUrl.value && detectionResults.value.length > 0) {
-          setTimeout(() => {
-            drawDetectionBoxes(inferenceImageUrl.value, detectionResults.value)
-          }, 100)
-        }
-      }
-      else {
-        toast?.success(t('deploy.inferenceComplete'))
-      }
-    } else {
-      toast?.error(data.message || t('deploy.inferenceFailed'))
-    }
-  } catch (err: any) {
-    console.error('Inference error:', err)
-    toast?.error(err.message || t('deploy.inferenceFailed'))
-  } finally {
-    isInferring.value = false
-  }
 }
 
 const hasOnnxModel = (model: DeployableModel) => {

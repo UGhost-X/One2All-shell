@@ -117,16 +117,17 @@ model TrainingRecord {
 }
 
 model AppSettings {
-  id            Int      @id @default(1)
-  dataPath      String
-  locale        String   @default("zh")
-  backendMode   String   @default("local")
-  backendIp     String   @default("localhost")
-  backendUrl    String   @default("http://localhost:8000")
-  backendPort   String   @default("8000")
-  imageSettings String?  @default("{\"exposure\":6084,\"gain\":1.2}")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             Int      @id @default(1)
+  dataPath       String
+  locale         String   @default("zh")
+  backendMode    String   @default("local")
+  backendIp      String   @default("localhost")
+  backendUrl     String   @default("http://localhost:8000")
+  backendPort    String   @default("8000")
+  imageSettings  String?  @default("{\"exposure\":6084,\"gain\":1.2}")
+  modbusSettings String?  @default("{\"ip\":\"192.168.1.12\",\"port\":502,\"unitId\":1,\"buttonChannel\":1,\"resetChannel\":2,\"lightGreen\":0,\"lightYellow\":1,\"lightRed\":2,\"buzzer\":3}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 // ROI 图片记录表 - 用于重训管理
@@ -155,6 +156,8 @@ model RoiImage {
   usedInRetrain Boolean   @default(false)
   usedTaskUuid  String? // 被用于哪个重训任务
   usedAt        DateTime?
+
+  posId String? // 位置ID，用于FN图片的SSIM比对分组
 
   // 支持链式重训
   generation Int @default(0) // 第几代（0=原始训练，1=第一次重训...）

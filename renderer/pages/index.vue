@@ -502,6 +502,55 @@ const fetchInferenceServices = async () => {
   }
 }
 
+/**
+ * 供主进程通过 executeJavaScript 调用的外部拍照入口
+ * 返回 { success: boolean, error?: string }，主进程据此控制指示灯
+ */
+async function externalCapture() {
+  if (!selectedProductId.value) {
+    showToast('请先选择一个产品', 'error')
+    return { success: false, error: '请先在界面中选择一个产品' }
+  }
+  if (!selectedCameraId.value) {
+    showToast('请先在相机设置中选择一个相机', 'error')
+    return { success: false, error: '请先在界面中选择一个相机' }
+  }
+
+  const targetCamera = cameras.value.find(c => c.id === selectedCameraId.value)
+  if (!targetCamera) {
+    showToast('请先在相机设置中选择一个相机', 'error')
+    return { success: false, error: '未找到所选相机' }
+  }
+  if (targetCamera.isEnabled === false) {
+    showToast('当前相机已禁用，请先启用相机', 'error')
+    return { success: false, error: '当前相机已禁用' }
+  }
+  if (targetCamera.isNetworkCamera && targetCamera.status !== 'online') {
+    showToast('网络相机未连接，请先连接相机', 'error')
+    return { success: false, error: '网络相机未连接' }
+  }
+
+  try {
+    const ok = await takeCapture()
+    // 防御：等待推理（含 autoSaveRoiImages）彻底完成再返回
+    // takeCapture 内部已 await runCaptureInference，此处轮询 isInferring 作为兜底
+    if (isInferring.value) {
+      await new Promise<void>((resolve) => {
+        const check = setInterval(() => {
+          if (!isInferring.value) {
+            clearInterval(check)
+            resolve()
+          }
+        }, 200)
+      })
+    }
+    return { success: ok }
+  } catch (err: any) {
+    showToast(err?.message || '拍照失败', 'error')
+    return { success: false, error: err?.message || '拍照失败' }
+  }
+}
+
 onMounted(async () => {
   if (window.electronAPI) {
     await loadCameraServiceUrl()
@@ -524,6 +573,7 @@ onMounted(async () => {
 
     restoreSelectedCamera()
   }
+  window.__externalCapture = externalCapture
   document.addEventListener('fullscreenchange', syncFullscreenState)
 })
 
@@ -860,15 +910,15 @@ const handleDisconnectCamera = async (camera: any) => {
   await fetchInitialData()
 }
 
-const handleCaptureFromCamera = async (camera: any) => {
+const handleCaptureFromCamera = async (camera: any): Promise<boolean> => {
   if (!camera.isNetworkCamera) {
     showToast('请使用主界面的拍照功能拍摄USB相机', 'info')
-    return
+    return false
   }
-  if (!window.electronAPI?.captureFromCamera) return
+  if (!window.electronAPI?.captureFromCamera) return false
   if (!selectedProductId.value) {
     showToast('请先选择一个产品', 'error')
-    return
+    return false
   }
 
   const timestamp = new Date().getTime()
@@ -884,6 +934,7 @@ const handleCaptureFromCamera = async (camera: any) => {
         showToast('相机正在重新连接...', 'info')
         const config = camera.config ? JSON.parse(camera.config) : {}
         const connectResult = await window.electronAPI.connectCamera(cameraId, {
+          ipAddress: camera.ip || config.ipAddress,
           vendor: config.vendor || 'Basler',
           exposureTime: exposureValue.value * 52,
           gain: gainValue.value,
@@ -913,7 +964,7 @@ const handleCaptureFromCamera = async (camera: any) => {
           offsetX: Math.round(offsetXValue.value),
           offsetY: Math.round(offsetYValue.value)
         })
-        if (paramResult.statusCode === 404) {
+        if (isReconnectableError(paramResult)) {
           needReconnect = true
           if (attempt < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, 1000))
@@ -924,7 +975,7 @@ const handleCaptureFromCamera = async (camera: any) => {
 
       const result = await window.electronAPI.captureFromCamera(cameraId)
 
-      if (result.statusCode === 404) {
+      if (isReconnectableError(result)) {
         needReconnect = true
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 1000))
@@ -968,7 +1019,7 @@ const handleCaptureFromCamera = async (camera: any) => {
             }
             showToast('拍照成功', 'info')
           }
-          return
+          return true
         }
       }
 
@@ -986,6 +1037,7 @@ const handleCaptureFromCamera = async (camera: any) => {
   }
 
   showToast(`${lastError}，已重试${maxRetries}次`, 'error')
+  return false
 }
 
 const cameraServiceUrl = ref('')
@@ -1215,6 +1267,7 @@ const liveStream = ref<MediaStream | null>(null)
 const isLiveStreaming = ref(false)
 const isLiveInferring = ref(false)
 const liveNetworkCamera = ref<any>(null)
+let updateCameraDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const isLiveInferenceProcessing = ref(false)
 const liveInferenceInterval = ref<number | null>(null)
 const liveInferenceIntervalMs = ref(1000)
@@ -1321,6 +1374,7 @@ const startLive = async () => {
     liveNetworkCamera.value = targetCamera
     mainViewState.value = 'live'
     isLiveStreaming.value = true
+    updateCameraSettings()
     return
   }
 
@@ -1349,66 +1403,87 @@ const startLive = async () => {
   }
 }
 
+/**
+ * 判断相机 API 响应是否表明连接已断开需要重连
+ */
+function isReconnectableError(response: any): boolean {
+  if (!response) return false
+  // 404 状态码
+  if (response.statusCode === 404) return true
+  // success: false 且错误信息提示相机不可达
+  if (response.success === false) {
+    const msg = (response.error || response.message || '').toLowerCase()
+    if (msg.includes('not found') || msg.includes('disconnected') || msg.includes('no camera')) return true
+  }
+  return false
+}
+
 const updateCameraSettings = async () => {
   const targetCamera = liveNetworkCamera.value || cameras.value.find(c => c.id === selectedCameraId.value)
   if (targetCamera && targetCamera.isNetworkCamera) {
     if (window.electronAPI?.updateCameraParameters) {
-      const cameraId = targetCamera.name
-      const actualExposure = exposureValue.value * 52
-      const maxRetries = 3
-      let needReconnect = false
+      // 防抖: 避免滑块快速拖动时产生并发请求
+      if (updateCameraDebounceTimer) clearTimeout(updateCameraDebounceTimer)
+      updateCameraDebounceTimer = setTimeout(async () => {
+        const cameraId = targetCamera.name
+        const actualExposure = exposureValue.value * 52
+        const maxRetries = 3
+        let needReconnect = false
 
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          if (needReconnect && window.electronAPI?.connectCamera) {
-            const config = targetCamera.config ? JSON.parse(targetCamera.config) : {}
-            const connectResult = await window.electronAPI.connectCamera(cameraId, {
-              vendor: config.vendor || 'Basler',
-              exposureTime: actualExposure,
-              gain: gainValue.value,
-              offsetX: offsetXValue.value,
-              offsetY: offsetYValue.value,
-              width: widthValue.value || config.width,
-              height: heightValue.value || config.height,
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            if (needReconnect && window.electronAPI?.connectCamera) {
+              const config = targetCamera.config ? JSON.parse(targetCamera.config) : {}
+              const connectResult = await window.electronAPI.connectCamera(cameraId, {
+                ipAddress: targetCamera.ip || config.ipAddress,
+                vendor: config.vendor || 'Basler',
+                exposureTime: actualExposure,
+                gain: gainValue.value,
+                offsetX: offsetXValue.value,
+                offsetY: offsetYValue.value,
+                width: widthValue.value || config.width,
+                height: heightValue.value || config.height,
+              })
+              if (!connectResult.success) {
+                console.error('重新连接相机失败:', connectResult.error)
+                if (attempt < maxRetries) {
+                  await new Promise(resolve => setTimeout(resolve, 1000))
+                  continue
+                }
+                break
+              }
+              needReconnect = false
+              await fetchInitialData()
+            }
+
+            const response = await window.electronAPI.updateCameraParameters(cameraId, {
+              exposureTime: Math.round(actualExposure),
+              gain: Math.round(gainValue.value),
+              offsetX: Math.round(offsetXValue.value),
+              offsetY: Math.round(offsetYValue.value)
             })
-            if (!connectResult.success) {
-              console.error('重新连接相机失败:', connectResult.error)
+
+            // 增强 404/断连检测: 同时检查 statusCode 和 success 字段
+            if (response.statusCode === 404 || (response.success === false && isReconnectableError(response))) {
+              needReconnect = true
               if (attempt < maxRetries) {
                 await new Promise(resolve => setTimeout(resolve, 1000))
                 continue
               }
-              break
             }
-            needReconnect = false
-            await fetchInitialData()
-          }
 
-          const response = await window.electronAPI.updateCameraParameters(cameraId, {
-            exposureTime: Math.round(actualExposure),
-            gain: Math.round(gainValue.value),
-            offsetX: Math.round(offsetXValue.value),
-            offsetY: Math.round(offsetYValue.value)
-          })
-
-          if (response.statusCode === 404) {
-            needReconnect = true
+            if (isLiveStreaming.value && cameraPreviewUrl.value) {
+              cameraPreviewUrl.value = `${cameraServiceUrl.value}/camera/${cameraId}/preview?t=${Date.now()}`
+            }
+            return
+          } catch (err) {
+            console.error(`Failed to update network camera parameters (attempt ${attempt}/${maxRetries}):`, err)
             if (attempt < maxRetries) {
               await new Promise(resolve => setTimeout(resolve, 1000))
-              continue
             }
           }
-
-          if (isLiveStreaming.value && cameraPreviewUrl.value) {
-            cameraPreviewUrl.value = `${cameraServiceUrl.value}/camera/${cameraId}/preview?t=${Date.now()}`
-          }
-          return
-        } catch (err) {
-          console.error(`Failed to update network camera parameters (attempt ${attempt}/${maxRetries}):`, err)
-          if (attempt < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, 1000))
-          }
         }
-      }
+      }, 150)
     }
     return
   }
@@ -1605,35 +1680,34 @@ const restoreSelectedCamera = () => {
   }
 }
 
-const takeCapture = async () => {
+const takeCapture = async (): Promise<boolean> => {
   if (!selectedProductId.value) {
     alert('请先选择一个产品')
-    return
+    return false
   }
 
   if (!selectedCameraId.value) {
     showToast('请先在相机设置中选择一个相机', 'error')
-    return
+    return false
   }
 
   const targetCamera = cameras.value.find(c => c.id === selectedCameraId.value)
   if (!targetCamera) {
     showToast('请先在相机设置中选择一个相机', 'error')
-    return
+    return false
   }
 
   if (targetCamera.isEnabled === false) {
     showToast('当前相机已禁用，请先启用相机', 'error')
-    return
+    return false
   }
 
   if (targetCamera.isNetworkCamera) {
     if (targetCamera.status !== 'online') {
       showToast('网络相机未连接，请先连接相机', 'error')
-      return
+      return false
     }
-    await handleCaptureFromCamera(targetCamera)
-    return
+    return await handleCaptureFromCamera(targetCamera)
   }
 
   let stream: MediaStream | null = null
@@ -1723,9 +1797,11 @@ const takeCapture = async () => {
         mainViewState.value = 'image'
       }
     }
+    return true
   } catch (err) {
     console.error('Failed to capture from camera:', err)
     showToast('拍照失败：无法访问相机', 'error')
+    return false
   }
 }
 
@@ -1759,10 +1835,23 @@ const runCaptureInference = async (dataUrl: string) => {
     const result = data.status === 'success' && data.result ? data.result : data
     let allResults: any[] = []
 
+    // 处理多工件结果，保留工件信息
     if (result.workpiece_results && Array.isArray(result.workpiece_results)) {
-      allResults = result.workpiece_results.flatMap((wp: any) => wp.results || [])
+      allResults = result.workpiece_results.flatMap((wp: any, idx: number) =>
+        (wp.results || []).map((r: any) => ({
+          ...r,
+          workpiece_id: wp.workpiece_id || idx,
+          workpiece_key: wp.workpiece_key || `wp${idx}`
+        }))
+      )
     } else if (result.workpieces && Array.isArray(result.workpieces)) {
-      allResults = result.workpieces.flatMap((wp: any) => wp.results || [])
+      allResults = result.workpieces.flatMap((wp: any, idx: number) =>
+        (wp.results || []).map((r: any) => ({
+          ...r,
+          workpiece_id: wp.workpiece_id || idx,
+          workpiece_key: wp.workpiece_key || `wp${idx}`
+        }))
+      )
     } else if (result.results && Array.isArray(result.results)) {
       allResults = result.results
     } else if (result.detections && Array.isArray(result.detections)) {
@@ -1778,6 +1867,8 @@ const runCaptureInference = async (dataUrl: string) => {
         isAnomaly: r.is_anomaly || r.anomaly === true || false,
         visible: true,
         pos_id: r.pos_id,
+        workpiece_id: r.workpiece_id,
+        workpiece_key: r.workpiece_key,
         anomaly_type: r.anomaly_type || (r.is_anomaly ? 'anomaly' : 'normal'),
         category: r.category
       }))
@@ -2100,7 +2191,6 @@ const handleToggleAnomaly = async (index: number, isAnomaly: boolean) => {
         
         if (result.success) {
           item.roiType = result.roiType
-          console.log(`ROI ${item.roiId} updated to type: ${result.roiType}`)
         }
       } catch (err) {
         console.error('Failed to update ROI type:', err)
@@ -2156,15 +2246,8 @@ const handleSaveRoiImages = async () => {
   }
 
   try {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = reject
-      img.src = imageUrl
-    })
-
     const roiImages = []
+    const fnRoiInfos = []
     const now = new Date()
     const requestTime = formatDateTime(now)
 
@@ -2175,61 +2258,134 @@ const handleSaveRoiImages = async () => {
       // 只保存用户修改过的ROI（modelIsAnomaly 和 userIsAnomaly 不一致）
       const modelIsAnomaly = det.modelIsAnomaly ?? det.isAnomaly
       const userIsAnomaly = det.isAnomaly
-      
-      console.log(`[Manual Save] Checking ROI ${i}:`, {
-        label: det.label,
-        modelIsAnomaly,
-        userIsAnomaly,
-        isModified: modelIsAnomaly !== userIsAnomaly
-      })
-      
+
       // 如果模型判断和用户判断一致，说明用户没有修改，跳过
       if (modelIsAnomaly === userIsAnomaly) continue
 
-      const hasSegmentation = det.segmentation && det.segmentation.length >= 8
-      let minX: number, minY: number, width: number, height: number
-
-      if (hasSegmentation) {
-        // 使用 segmentation 计算包围盒
-        const points: [number, number][] = []
-        for (let j = 0; j < det.segmentation!.length; j += 2) {
-          points.push([det.segmentation![j], det.segmentation![j + 1]])
-        }
-        minX = Math.min(...points.map(p => p[0]))
-        minY = Math.min(...points.map(p => p[1]))
-        const maxX = Math.max(...points.map(p => p[0]))
-        const maxY = Math.max(...points.map(p => p[1]))
-        width = maxX - minX
-        height = maxY - minY
-      } else {
-        // 使用 bbox
-        const [x, y, w, h] = det.bbox
-        minX = x
-        minY = y
-        width = w
-        height = h
+      // 计算ROI类型
+      let roiType = 'NORMAL'
+      if (modelIsAnomaly === true && userIsAnomaly === false) {
+        roiType = 'FP'
+      } else if (modelIsAnomaly === false && userIsAnomaly === true) {
+        roiType = 'FN'
       }
 
-      if (width <= 0 || height <= 0) continue
+      const category = det.category || det.label || 'unknown'
+      const posId = det.pos_id != null ? String(det.pos_id) : undefined
 
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.round(width)
-      canvas.height = Math.round(height)
-      const ctx = canvas.getContext('2d')
-      if (!ctx) continue
+      // 使用workpiece_id字段（从推理结果传递过来的）
+      const workpieceId = (det as any).workpiece_id != null ? String((det as any).workpiece_id) : selectedProductId.value
 
-      ctx.drawImage(img, minX, minY, width, height, 0, 0, width, height)
+      // FN类型的ROI通过后端接口获取图片
+      if (roiType === 'FN' && selectedService && posId) {
+        fnRoiInfos.push({
+          category,
+          posId,
+          workpieceId,
+          isAnomaly: userIsAnomaly,
+          modelIsAnomaly,
+          userIsAnomaly,
+          roiType
+        })
+      } else {
+        // FP和NORMAL类型使用前端裁剪
+        const hasSegmentation = det.segmentation && det.segmentation.length >= 8
+        let base64: string
 
-      const base64 = canvas.toDataURL('image/jpeg', 0.95)
-      
-      roiImages.push({
-        category: det.category || det.label || 'unknown',
-        isAnomaly: userIsAnomaly,
-        modelIsAnomaly: modelIsAnomaly,
-        userIsAnomaly: userIsAnomaly,
-        posId: det.pos_id != null ? String(det.pos_id) : undefined,
-        base64
-      })
+        if (hasSegmentation) {
+          // 使用多边形裁剪，与标注显示一致
+          const blob = await cropImageBySegmentation(imageUrl, det.segmentation)
+          base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result as string)
+            reader.onerror = reject
+            reader.readAsDataURL(blob)
+          })
+        } else {
+          // 使用bbox矩形裁剪
+          const [x, y, w, h] = det.bbox
+          if (w <= 0 || h <= 0) continue
+
+          const img = new Image()
+          img.crossOrigin = 'anonymous'
+          await new Promise((resolve, reject) => {
+            img.onload = resolve
+            img.onerror = reject
+            img.src = imageUrl
+          })
+
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.round(w)
+          canvas.height = Math.round(h)
+          const ctx = canvas.getContext('2d')
+          if (!ctx) continue
+
+          ctx.drawImage(img, x, y, w, h, 0, 0, w, h)
+          base64 = canvas.toDataURL('image/jpeg', 0.95)
+        }
+
+        roiImages.push({
+          category,
+          isAnomaly: userIsAnomaly,
+          modelIsAnomaly,
+          userIsAnomaly,
+          posId,
+          base64
+        })
+      }
+    }
+
+    // 处理FN类型的ROI，调用后端接口获取图片
+    if (fnRoiInfos.length > 0 && selectedService) {
+      try {
+        const inferenceUrl = await getInferenceUrl(selectedService.inference_url)
+        console.log('[FN ROI] Inference URL:', inferenceUrl, 'FN count:', fnRoiInfos.length)
+        if (inferenceUrl) {
+          for (const fnRoi of fnRoiInfos) {
+            console.log('[FN ROI] Fetching for posId:', fnRoi.posId, 'category:', fnRoi.category)
+            const response = await fetch(`${inferenceUrl}/get_roi_images`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                task_uuid: taskUuid,
+                workpiece_id: fnRoi.workpieceId,
+                pos_id: fnRoi.posId,
+                normalize_brightness: false,
+                normalize_contrast: false
+              })
+            })
+
+            console.log('[FN ROI] Response status:', response.status)
+            if (response.ok) {
+              const data = await response.json()
+              console.log('[FN ROI] Response data:', { success: data.success, roiCount: data.rois?.length })
+              if (data.success && data.rois && data.rois.length > 0) {
+                const roiData = data.rois[0]
+                roiImages.push({
+                  category: fnRoi.category,
+                  isAnomaly: fnRoi.isAnomaly,
+                  modelIsAnomaly: fnRoi.modelIsAnomaly,
+                  userIsAnomaly: fnRoi.userIsAnomaly,
+                  posId: fnRoi.posId,
+                  base64: `data:image/jpeg;base64,${roiData.image_b64}`
+                })
+                console.log('[FN ROI] Successfully added ROI image')
+              } else {
+                console.warn('[FN ROI] No ROI data in response')
+              }
+            } else {
+              const errorText = await response.text()
+              console.error('[FN ROI] Response not OK:', response.status, errorText)
+            }
+          }
+        } else {
+          console.warn('[FN ROI] No inference URL available')
+        }
+      } catch (err) {
+        console.error('Failed to get FN ROI images from backend:', err)
+      }
+    } else {
+      console.log('[FN ROI] No FN ROIs to process or no selected service')
     }
 
     if (roiImages.length === 0) {
@@ -2241,12 +2397,13 @@ const handleSaveRoiImages = async () => {
       productId: selectedProductId.value,
       taskUuid,
       images: roiImages,
-      mode: 'manual',  // 手动保存模式
+      mode: 'manual',
       requestTime
     })
 
     if (result.success) {
       showToast(`已保存 ${roiImages.length} 个修改过的ROI图片`, 'success')
+
       // 保存ROI记录ID到detectionResults，用于后续更新
       let roiIndex = 0
       for (let i = 0; i < detectionResults.value.length; i++) {
@@ -2254,8 +2411,8 @@ const handleSaveRoiImages = async () => {
         if (det.label === '工件主体') continue
         const modelIsAnomaly = det.modelIsAnomaly ?? det.isAnomaly
         const userIsAnomaly = det.isAnomaly
-        if (modelIsAnomaly === userIsAnomaly) continue  // 跳过未修改的
-        
+        if (modelIsAnomaly === userIsAnomaly) continue
+
         if (roiIndex < result.rois.length) {
           det.roiId = result.rois[roiIndex].id
           det.roiType = result.rois[roiIndex].roiType
@@ -2286,45 +2443,86 @@ const cropImageBySegmentation = (imageUrl: string, segmentation: number[]): Prom
         points.push({ x: segmentation[i], y: segmentation[i + 1] })
       }
 
+      // ---- 1. 计算旋转角：遍历所有边，找最接近水平/垂直的角度 ----
+      let angle = 0
+      let minDelta = Infinity
+      for (let i = 0; i < points.length; i++) {
+        const p1 = points[i]
+        const p2 = points[(i + 1) % points.length]
+        const dx = p2.x - p1.x
+        const dy = p2.y - p1.y
+        if (Math.sqrt(dx * dx + dy * dy) < 1) continue
+
+        let edgeAngle = Math.atan2(dy, dx)
+        // 归一化到 (-PI/4, PI/4]，使角度偏差最小
+        edgeAngle = edgeAngle % (Math.PI / 2)
+        if (edgeAngle > Math.PI / 4) edgeAngle -= Math.PI / 2
+        if (edgeAngle <= -Math.PI / 4) edgeAngle += Math.PI / 2
+
+        if (Math.abs(edgeAngle) < minDelta) {
+          minDelta = Math.abs(edgeAngle)
+          angle = edgeAngle
+        }
+      }
+
+      // ---- 2. 把整图旋转 -angle，使 ROI 水平 ----
+      const cos = Math.abs(Math.cos(angle))
+      const sin = Math.abs(Math.sin(angle))
+      const rotW = Math.ceil(img.width * cos + img.height * sin)
+      const rotH = Math.ceil(img.width * sin + img.height * cos)
+
+      const rotCanvas = document.createElement('canvas')
+      rotCanvas.width = rotW
+      rotCanvas.height = rotH
+      const rotCtx = rotCanvas.getContext('2d')
+      if (!rotCtx) { reject(new Error('No context')); return }
+
+      rotCtx.translate(rotW / 2, rotH / 2)
+      rotCtx.rotate(-angle)
+      rotCtx.drawImage(img, -img.width / 2, -img.height / 2)
+
+      // ---- 3. 把 segmentation 点同步变换到旋转后坐标系 ----
+      const cx = img.width / 2
+      const cy = img.height / 2
+      const newCx = rotW / 2
+      const newCy = rotH / 2
+      const ca = Math.cos(-angle)
+      const sa = Math.sin(-angle)
+
+      const rotatedPoints = points.map(p => ({
+        x: (p.x - cx) * ca - (p.y - cy) * sa + newCx,
+        y: (p.x - cx) * sa + (p.y - cy) * ca + newCy
+      }))
+
+      // ---- 4. 轴对齐 bounding box 裁切 ----
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-      points.forEach(p => {
+      rotatedPoints.forEach(p => {
         minX = Math.min(minX, p.x)
         minY = Math.min(minY, p.y)
         maxX = Math.max(maxX, p.x)
         maxY = Math.max(maxY, p.y)
       })
 
-      const width = maxX - minX
-      const height = maxY - minY
+      const cropX = Math.max(0, Math.floor(minX))
+      const cropY = Math.max(0, Math.floor(minY))
+      const cropW = Math.min(rotW - cropX, Math.ceil(maxX - minX))
+      const cropH = Math.min(rotH - cropY, Math.ceil(maxY - minY))
 
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const ctx = canvas.getContext('2d')
-      if (!ctx) {
-        reject(new Error('Failed to get canvas context'))
-        return
-      }
+      if (cropW <= 0 || cropH <= 0) { reject(new Error('Invalid crop size')); return }
 
-      ctx.beginPath()
-      ctx.moveTo(points[0].x - minX, points[0].y - minY)
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i].x - minX, points[i].y - minY)
-      }
-      ctx.closePath()
-      ctx.clip()
+      const outCanvas = document.createElement('canvas')
+      outCanvas.width = cropW
+      outCanvas.height = cropH
+      const outCtx = outCanvas.getContext('2d')
+      if (!outCtx) { reject(new Error('No output context')); return }
 
-      ctx.drawImage(img, minX, minY, width, height, 0, 0, width, height)
+      outCtx.drawImage(rotCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH)
 
-      canvas.toBlob((blob) => {
-        if (blob) {
-          resolve(blob)
-        } else {
-          reject(new Error('Failed to create blob from canvas'))
-        }
+      outCanvas.toBlob(blob => {
+        blob ? resolve(blob) : reject(new Error('Blob creation failed'))
       }, 'image/jpeg', 0.95)
     }
-    img.onerror = () => reject(new Error('Failed to load image'))
+    img.onerror = () => reject(new Error('Image load failed'))
     img.src = imageUrl
   })
 }
@@ -2332,10 +2530,8 @@ const cropImageBySegmentation = (imageUrl: string, segmentation: number[]): Prom
 // 自动保存ROI - 每次推理请求后自动保存所有ROI
 // 保存路径: request-result/{taskUuid}/{datetime}/{category}/NG|OK
 const autoSaveRoiImages = async (imageUrl: string, results: any[], taskUuid: string) => {
-  console.log('[Auto Save] Function called:', { imageUrl: !!imageUrl, resultsCount: results.length, taskUuid })
   
   if (!selectedProductId.value || results.length === 0) {
-    console.log('[Auto Save] Early return:', { hasProductId: !!selectedProductId.value, resultsCount: results.length })
     return
   }
 
@@ -2357,41 +2553,33 @@ const autoSaveRoiImages = async (imageUrl: string, results: any[], taskUuid: str
       if (det.label === '工件主体') continue
 
       const hasSegmentation = det.segmentation && det.segmentation.length >= 8
-      let minX: number, minY: number, width: number, height: number
+      const modelIsAnomaly = det.modelIsAnomaly ?? det.isAnomaly
+      let base64: string
 
       if (hasSegmentation) {
-        const points: [number, number][] = []
-        for (let j = 0; j < det.segmentation!.length; j += 2) {
-          points.push([det.segmentation![j], det.segmentation![j + 1]])
-        }
-        minX = Math.min(...points.map(p => p[0]))
-        minY = Math.min(...points.map(p => p[1]))
-        const maxX = Math.max(...points.map(p => p[0]))
-        const maxY = Math.max(...points.map(p => p[1]))
-        width = maxX - minX
-        height = maxY - minY
+        // 使用多边形裁剪（包含去旋转逻辑）
+        const blob = await cropImageBySegmentation(imageUrl, det.segmentation)
+        base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onloadend = () => resolve(reader.result as string)
+          reader.onerror = reject
+          reader.readAsDataURL(blob)
+        })
       } else {
+        // 使用bbox矩形裁剪
         const [x, y, w, h] = det.bbox
-        minX = x
-        minY = y
-        width = w
-        height = h
+        if (w <= 0 || h <= 0) continue
+
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.round(w)
+        canvas.height = Math.round(h)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) continue
+
+        ctx.drawImage(img, x, y, w, h, 0, 0, w, h)
+        base64 = canvas.toDataURL('image/jpeg', 0.95)
       }
 
-      if (width <= 0 || height <= 0) continue
-
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.round(width)
-      canvas.height = Math.round(height)
-      const ctx = canvas.getContext('2d')
-      if (!ctx) continue
-
-      ctx.drawImage(img, minX, minY, width, height, 0, 0, width, height)
-
-      const base64 = canvas.toDataURL('image/jpeg', 0.95)
-      
-      const modelIsAnomaly = det.modelIsAnomaly ?? det.isAnomaly
-      
       roiImages.push({
         category: det.category || det.label || 'unknown',
         isAnomaly: modelIsAnomaly,
@@ -2412,7 +2600,6 @@ const autoSaveRoiImages = async (imageUrl: string, results: any[], taskUuid: str
       requestTime
     })
 
-    console.log(`[Auto Save] Saved ${roiImages.length} ROI images to request-result/${taskUuid}/${requestTime}`)
   } catch (err) {
     console.error('[Auto Save] Failed to save ROI images:', err)
   }
@@ -2828,16 +3015,11 @@ const runInference = async () => {
       }
 
       // 自动保存ROI（每次推理请求后）
-      console.log('[Auto Save] Checking conditions:', {
-        detectionResultsCount: detectionResults.value.length,
-        hasProductId: !!selectedProductId.value,
-        hasInferenceService: !!selectedInferenceService.value
-      })
+
       if (detectionResults.value.length > 0 && selectedProductId.value) {
         const selectedService = inferenceServices.value.find(s => s.service_id === selectedInferenceService.value)
         const taskUuid = selectedService?.task_uuid || 'unknown'
         const imageToUse = inferenceImageUrl.value || mainViewUrl.value
-        console.log('[Auto Save] Triggering auto save:', { taskUuid, hasImage: !!imageToUse })
         if (imageToUse) {
           // 先为每个结果设置 modelIsAnomaly
           detectionResults.value = detectionResults.value.map(r => ({
@@ -2865,7 +3047,6 @@ const runInference = async () => {
 
 // 绘制检测框
 const drawDetectionBoxes = () => {
-  console.log('drawDetectionBoxes called, results:', detectionResults.value.map(d => ({ label: d.label, isAnomaly: d.isAnomaly, anomaly_type: d.anomaly_type })))
   const canvas = detectionCanvasRef.value
   const img = viewerImageRef.value
   if (!canvas || !img) return
@@ -2891,7 +3072,6 @@ const drawDetectionBoxes = () => {
     const boxColor = isNG ? '#ef4444' : '#22c55e'
     const textColor = isNG ? '#ef4444' : '#22c55e'
     const labelText = isNG ? 'NG' : 'OK'
-    console.log(`Drawing item ${index}: ${labelText}, isAnomaly=${det.isAnomaly}`)
 
     const hasSegmentation = det.segmentation && det.segmentation.length >= 8
 
@@ -3060,6 +3240,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  delete window.__externalCapture
   document.removeEventListener('fullscreenchange', syncFullscreenState)
   document.removeEventListener('click', handleGlobalClick)
   viewerResizeObserver?.disconnect()
@@ -3067,6 +3248,10 @@ onBeforeUnmount(() => {
   if (inferenceAbortController) {
     inferenceAbortController.abort()
     inferenceAbortController = null
+  }
+  if (updateCameraDebounceTimer) {
+    clearTimeout(updateCameraDebounceTimer)
+    updateCameraDebounceTimer = null
   }
 })
 
@@ -3374,7 +3559,7 @@ onMounted(() => {
                   variant="outline"
                   size="sm"
                   class="h-14 flex flex-col gap-1 text-[10px] font-bold"
-                  :disabled="isInferring"
+                  :disabled="isInferring || !selectedProductId"
                   @click="takeCapture"
                 >
                   <Loader2 v-if="isInferring && selectedProductHasImage && selectedProductHasAnnotation" class="h-4 w-4 animate-spin text-primary" />

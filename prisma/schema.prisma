@@ -124,7 +124,8 @@ model AppSettings {
   backendIp     String   @default("localhost")
   backendUrl    String   @default("http://localhost:8000")
   backendPort   String   @default("8000")
-  imageSettings String?  @default("{\"exposure\":6084,\"gain\":1.2}")
+  imageSettings  String?  @default("{\"exposure\":6084,\"gain\":1.2}")
+  modbusSettings String?  @default("{\"enabled\":true,\"ip\":\"192.168.1.12\",\"port\":502,\"unitId\":1,\"buttonChannel\":1,\"resetChannel\":2,\"lightGreen\":0,\"lightYellow\":1,\"lightRed\":2,\"buzzer\":3}")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
