@@ -6973,6 +6973,7 @@ export namespace Prisma {
     generation: number | null
     fpCount: number | null
     fnCount: number | null
+    yoloFpCount: number | null
     decoderDepth: number | null
     epochs: number | null
   }
@@ -6987,6 +6988,7 @@ export namespace Prisma {
     generation: number | null
     fpCount: number | null
     fnCount: number | null
+    yoloFpCount: number | null
     decoderDepth: number | null
     epochs: number | null
   }
@@ -7020,6 +7022,7 @@ export namespace Prisma {
     generation: number | null
     fpCount: number | null
     fnCount: number | null
+    yoloFpCount: number | null
     encoderName: string | null
     decoderDepth: number | null
     epochs: number | null
@@ -7055,6 +7058,7 @@ export namespace Prisma {
     generation: number | null
     fpCount: number | null
     fnCount: number | null
+    yoloFpCount: number | null
     encoderName: string | null
     decoderDepth: number | null
     epochs: number | null
@@ -7090,6 +7094,7 @@ export namespace Prisma {
     generation: number
     fpCount: number
     fnCount: number
+    yoloFpCount: number
     encoderName: number
     decoderDepth: number
     epochs: number
@@ -7108,6 +7113,7 @@ export namespace Prisma {
     generation?: true
     fpCount?: true
     fnCount?: true
+    yoloFpCount?: true
     decoderDepth?: true
     epochs?: true
   }
@@ -7122,6 +7128,7 @@ export namespace Prisma {
     generation?: true
     fpCount?: true
     fnCount?: true
+    yoloFpCount?: true
     decoderDepth?: true
     epochs?: true
   }
@@ -7155,6 +7162,7 @@ export namespace Prisma {
     generation?: true
     fpCount?: true
     fnCount?: true
+    yoloFpCount?: true
     encoderName?: true
     decoderDepth?: true
     epochs?: true
@@ -7190,6 +7198,7 @@ export namespace Prisma {
     generation?: true
     fpCount?: true
     fnCount?: true
+    yoloFpCount?: true
     encoderName?: true
     decoderDepth?: true
     epochs?: true
@@ -7225,6 +7234,7 @@ export namespace Prisma {
     generation?: true
     fpCount?: true
     fnCount?: true
+    yoloFpCount?: true
     encoderName?: true
     decoderDepth?: true
     epochs?: true
@@ -7347,6 +7357,7 @@ export namespace Prisma {
     generation: number
     fpCount: number
     fnCount: number
+    yoloFpCount: number
     encoderName: string | null
     decoderDepth: number | null
     epochs: number | null
@@ -7401,6 +7412,7 @@ export namespace Prisma {
     generation?: boolean
     fpCount?: boolean
     fnCount?: boolean
+    yoloFpCount?: boolean
     encoderName?: boolean
     decoderDepth?: boolean
     epochs?: boolean
@@ -7436,6 +7448,7 @@ export namespace Prisma {
     generation?: boolean
     fpCount?: boolean
     fnCount?: boolean
+    yoloFpCount?: boolean
     encoderName?: boolean
     decoderDepth?: boolean
     epochs?: boolean
@@ -7471,6 +7484,7 @@ export namespace Prisma {
     generation?: boolean
     fpCount?: boolean
     fnCount?: boolean
+    yoloFpCount?: boolean
     encoderName?: boolean
     decoderDepth?: boolean
     epochs?: boolean
@@ -7506,13 +7520,14 @@ export namespace Prisma {
     generation?: boolean
     fpCount?: boolean
     fnCount?: boolean
+    yoloFpCount?: boolean
     encoderName?: boolean
     decoderDepth?: boolean
     epochs?: boolean
     freezeEncoder?: boolean
   }
 
-  export type TrainingRecordOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "taskUuid" | "labelName" | "modelName" | "config" | "status" | "progress" | "totalEpochs" | "currentEpoch" | "batchSize" | "learningRate" | "latestIter" | "metrics" | "logs" | "startTime" | "endTime" | "hasBestModel" | "outputPath" | "createdAt" | "updatedAt" | "isRetrain" | "baseTaskUuid" | "pathId" | "taskChain" | "generation" | "fpCount" | "fnCount" | "encoderName" | "decoderDepth" | "epochs" | "freezeEncoder", ExtArgs["result"]["trainingRecord"]>
+  export type TrainingRecordOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "taskUuid" | "labelName" | "modelName" | "config" | "status" | "progress" | "totalEpochs" | "currentEpoch" | "batchSize" | "learningRate" | "latestIter" | "metrics" | "logs" | "startTime" | "endTime" | "hasBestModel" | "outputPath" | "createdAt" | "updatedAt" | "isRetrain" | "baseTaskUuid" | "pathId" | "taskChain" | "generation" | "fpCount" | "fnCount" | "yoloFpCount" | "encoderName" | "decoderDepth" | "epochs" | "freezeEncoder", ExtArgs["result"]["trainingRecord"]>
 
   export type $TrainingRecordPayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     name: "TrainingRecord"
@@ -7546,6 +7561,7 @@ export namespace Prisma {
       generation: number
       fpCount: number
       fnCount: number
+      yoloFpCount: number
       encoderName: string | null
       decoderDepth: number | null
       epochs: number | null
@@ -8001,6 +8017,7 @@ export namespace Prisma {
     readonly generation: FieldRef<"TrainingRecord", 'Int'>
     readonly fpCount: FieldRef<"TrainingRecord", 'Int'>
     readonly fnCount: FieldRef<"TrainingRecord", 'Int'>
+    readonly yoloFpCount: FieldRef<"TrainingRecord", 'Int'>
     readonly encoderName: FieldRef<"TrainingRecord", 'String'>
     readonly decoderDepth: FieldRef<"TrainingRecord", 'Int'>
     readonly epochs: FieldRef<"TrainingRecord", 'Int'>
@@ -9487,10 +9504,12 @@ export namespace Prisma {
   }
 
   export type RoiImageAvgAggregateOutputType = {
+    dinomalyScore: number | null
     generation: number | null
   }
 
   export type RoiImageSumAggregateOutputType = {
+    dinomalyScore: number | null
     generation: number | null
   }
 
@@ -9501,6 +9520,8 @@ export namespace Prisma {
     category: string | null
     modelIsAnomaly: boolean | null
     userIsAnomaly: boolean | null
+    isYoloAnomaly: boolean | null
+    dinomalyScore: number | null
     roiType: string | null
     filePath: string | null
     fileName: string | null
@@ -9521,6 +9542,8 @@ export namespace Prisma {
     category: string | null
     modelIsAnomaly: boolean | null
     userIsAnomaly: boolean | null
+    isYoloAnomaly: boolean | null
+    dinomalyScore: number | null
     roiType: string | null
     filePath: string | null
     fileName: string | null
@@ -9541,6 +9564,8 @@ export namespace Prisma {
     category: number
     modelIsAnomaly: number
     userIsAnomaly: number
+    isYoloAnomaly: number
+    dinomalyScore: number
     roiType: number
     filePath: number
     fileName: number
@@ -9557,10 +9582,12 @@ export namespace Prisma {
 
 
   export type RoiImageAvgAggregateInputType = {
+    dinomalyScore?: true
     generation?: true
   }
 
   export type RoiImageSumAggregateInputType = {
+    dinomalyScore?: true
     generation?: true
   }
 
@@ -9571,6 +9598,8 @@ export namespace Prisma {
     category?: true
     modelIsAnomaly?: true
     userIsAnomaly?: true
+    isYoloAnomaly?: true
+    dinomalyScore?: true
     roiType?: true
     filePath?: true
     fileName?: true
@@ -9591,6 +9620,8 @@ export namespace Prisma {
     category?: true
     modelIsAnomaly?: true
     userIsAnomaly?: true
+    isYoloAnomaly?: true
+    dinomalyScore?: true
     roiType?: true
     filePath?: true
     fileName?: true
@@ -9611,6 +9642,8 @@ export namespace Prisma {
     category?: true
     modelIsAnomaly?: true
     userIsAnomaly?: true
+    isYoloAnomaly?: true
+    dinomalyScore?: true
     roiType?: true
     filePath?: true
     fileName?: true
@@ -9718,6 +9751,8 @@ export namespace Prisma {
     category: string
     modelIsAnomaly: boolean
     userIsAnomaly: boolean
+    isYoloAnomaly: boolean
+    dinomalyScore: number | null
     roiType: string
     filePath: string
     fileName: string
@@ -9757,6 +9792,8 @@ export namespace Prisma {
     category?: boolean
     modelIsAnomaly?: boolean
     userIsAnomaly?: boolean
+    isYoloAnomaly?: boolean
+    dinomalyScore?: boolean
     roiType?: boolean
     filePath?: boolean
     fileName?: boolean
@@ -9777,6 +9814,8 @@ export namespace Prisma {
     category?: boolean
     modelIsAnomaly?: boolean
     userIsAnomaly?: boolean
+    isYoloAnomaly?: boolean
+    dinomalyScore?: boolean
     roiType?: boolean
     filePath?: boolean
     fileName?: boolean
@@ -9797,6 +9836,8 @@ export namespace Prisma {
     category?: boolean
     modelIsAnomaly?: boolean
     userIsAnomaly?: boolean
+    isYoloAnomaly?: boolean
+    dinomalyScore?: boolean
     roiType?: boolean
     filePath?: boolean
     fileName?: boolean
@@ -9817,6 +9858,8 @@ export namespace Prisma {
     category?: boolean
     modelIsAnomaly?: boolean
     userIsAnomaly?: boolean
+    isYoloAnomaly?: boolean
+    dinomalyScore?: boolean
     roiType?: boolean
     filePath?: boolean
     fileName?: boolean
@@ -9830,7 +9873,7 @@ export namespace Prisma {
     updatedAt?: boolean
   }
 
-  export type RoiImageOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "sourceTaskUuid" | "category" | "modelIsAnomaly" | "userIsAnomaly" | "roiType" | "filePath" | "fileName" | "thumbnailPath" | "usedInRetrain" | "usedTaskUuid" | "usedAt" | "posId" | "generation" | "createdAt" | "updatedAt", ExtArgs["result"]["roiImage"]>
+  export type RoiImageOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "productId" | "sourceTaskUuid" | "category" | "modelIsAnomaly" | "userIsAnomaly" | "isYoloAnomaly" | "dinomalyScore" | "roiType" | "filePath" | "fileName" | "thumbnailPath" | "usedInRetrain" | "usedTaskUuid" | "usedAt" | "posId" | "generation" | "createdAt" | "updatedAt", ExtArgs["result"]["roiImage"]>
 
   export type $RoiImagePayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     name: "RoiImage"
@@ -9842,6 +9885,8 @@ export namespace Prisma {
       category: string
       modelIsAnomaly: boolean
       userIsAnomaly: boolean
+      isYoloAnomaly: boolean
+      dinomalyScore: number | null
       roiType: string
       filePath: string
       fileName: string
@@ -10282,6 +10327,8 @@ export namespace Prisma {
     readonly category: FieldRef<"RoiImage", 'String'>
     readonly modelIsAnomaly: FieldRef<"RoiImage", 'Boolean'>
     readonly userIsAnomaly: FieldRef<"RoiImage", 'Boolean'>
+    readonly isYoloAnomaly: FieldRef<"RoiImage", 'Boolean'>
+    readonly dinomalyScore: FieldRef<"RoiImage", 'Float'>
     readonly roiType: FieldRef<"RoiImage", 'String'>
     readonly filePath: FieldRef<"RoiImage", 'String'>
     readonly fileName: FieldRef<"RoiImage", 'String'>
@@ -10763,6 +10810,7 @@ export namespace Prisma {
     generation: 'generation',
     fpCount: 'fpCount',
     fnCount: 'fnCount',
+    yoloFpCount: 'yoloFpCount',
     encoderName: 'encoderName',
     decoderDepth: 'decoderDepth',
     epochs: 'epochs',
@@ -10796,6 +10844,8 @@ export namespace Prisma {
     category: 'category',
     modelIsAnomaly: 'modelIsAnomaly',
     userIsAnomaly: 'userIsAnomaly',
+    isYoloAnomaly: 'isYoloAnomaly',
+    dinomalyScore: 'dinomalyScore',
     roiType: 'roiType',
     filePath: 'filePath',
     fileName: 'fileName',
@@ -11232,6 +11282,7 @@ export namespace Prisma {
     generation?: IntFilter<"TrainingRecord"> | number
     fpCount?: IntFilter<"TrainingRecord"> | number
     fnCount?: IntFilter<"TrainingRecord"> | number
+    yoloFpCount?: IntFilter<"TrainingRecord"> | number
     encoderName?: StringNullableFilter<"TrainingRecord"> | string | null
     decoderDepth?: IntNullableFilter<"TrainingRecord"> | number | null
     epochs?: IntNullableFilter<"TrainingRecord"> | number | null
@@ -11267,6 +11318,7 @@ export namespace Prisma {
     generation?: SortOrder
     fpCount?: SortOrder
     fnCount?: SortOrder
+    yoloFpCount?: SortOrder
     encoderName?: SortOrderInput | SortOrder
     decoderDepth?: SortOrderInput | SortOrder
     epochs?: SortOrderInput | SortOrder
@@ -11306,6 +11358,7 @@ export namespace Prisma {
     generation?: IntFilter<"TrainingRecord"> | number
     fpCount?: IntFilter<"TrainingRecord"> | number
     fnCount?: IntFilter<"TrainingRecord"> | number
+    yoloFpCount?: IntFilter<"TrainingRecord"> | number
     encoderName?: StringNullableFilter<"TrainingRecord"> | string | null
     decoderDepth?: IntNullableFilter<"TrainingRecord"> | number | null
     epochs?: IntNullableFilter<"TrainingRecord"> | number | null
@@ -11341,6 +11394,7 @@ export namespace Prisma {
     generation?: SortOrder
     fpCount?: SortOrder
     fnCount?: SortOrder
+    yoloFpCount?: SortOrder
     encoderName?: SortOrderInput | SortOrder
     decoderDepth?: SortOrderInput | SortOrder
     epochs?: SortOrderInput | SortOrder
@@ -11384,6 +11438,7 @@ export namespace Prisma {
     generation?: IntWithAggregatesFilter<"TrainingRecord"> | number
     fpCount?: IntWithAggregatesFilter<"TrainingRecord"> | number
     fnCount?: IntWithAggregatesFilter<"TrainingRecord"> | number
+    yoloFpCount?: IntWithAggregatesFilter<"TrainingRecord"> | number
     encoderName?: StringNullableWithAggregatesFilter<"TrainingRecord"> | string | null
     decoderDepth?: IntNullableWithAggregatesFilter<"TrainingRecord"> | number | null
     epochs?: IntNullableWithAggregatesFilter<"TrainingRecord"> | number | null
@@ -11484,6 +11539,8 @@ export namespace Prisma {
     category?: StringFilter<"RoiImage"> | string
     modelIsAnomaly?: BoolFilter<"RoiImage"> | boolean
     userIsAnomaly?: BoolFilter<"RoiImage"> | boolean
+    isYoloAnomaly?: BoolFilter<"RoiImage"> | boolean
+    dinomalyScore?: FloatNullableFilter<"RoiImage"> | number | null
     roiType?: StringFilter<"RoiImage"> | string
     filePath?: StringFilter<"RoiImage"> | string
     fileName?: StringFilter<"RoiImage"> | string
@@ -11504,6 +11561,8 @@ export namespace Prisma {
     category?: SortOrder
     modelIsAnomaly?: SortOrder
     userIsAnomaly?: SortOrder
+    isYoloAnomaly?: SortOrder
+    dinomalyScore?: SortOrderInput | SortOrder
     roiType?: SortOrder
     filePath?: SortOrder
     fileName?: SortOrder
@@ -11527,6 +11586,8 @@ export namespace Prisma {
     category?: StringFilter<"RoiImage"> | string
     modelIsAnomaly?: BoolFilter<"RoiImage"> | boolean
     userIsAnomaly?: BoolFilter<"RoiImage"> | boolean
+    isYoloAnomaly?: BoolFilter<"RoiImage"> | boolean
+    dinomalyScore?: FloatNullableFilter<"RoiImage"> | number | null
     roiType?: StringFilter<"RoiImage"> | string
     filePath?: StringFilter<"RoiImage"> | string
     fileName?: StringFilter<"RoiImage"> | string
@@ -11547,6 +11608,8 @@ export namespace Prisma {
     category?: SortOrder
     modelIsAnomaly?: SortOrder
     userIsAnomaly?: SortOrder
+    isYoloAnomaly?: SortOrder
+    dinomalyScore?: SortOrderInput | SortOrder
     roiType?: SortOrder
     filePath?: SortOrder
     fileName?: SortOrder
@@ -11575,6 +11638,8 @@ export namespace Prisma {
     category?: StringWithAggregatesFilter<"RoiImage"> | string
     modelIsAnomaly?: BoolWithAggregatesFilter<"RoiImage"> | boolean
     userIsAnomaly?: BoolWithAggregatesFilter<"RoiImage"> | boolean
+    isYoloAnomaly?: BoolWithAggregatesFilter<"RoiImage"> | boolean
+    dinomalyScore?: FloatNullableWithAggregatesFilter<"RoiImage"> | number | null
     roiType?: StringWithAggregatesFilter<"RoiImage"> | string
     filePath?: StringWithAggregatesFilter<"RoiImage"> | string
     fileName?: StringWithAggregatesFilter<"RoiImage"> | string
@@ -11980,6 +12045,7 @@ export namespace Prisma {
     generation?: number
     fpCount?: number
     fnCount?: number
+    yoloFpCount?: number
     encoderName?: string | null
     decoderDepth?: number | null
     epochs?: number | null
@@ -12015,6 +12081,7 @@ export namespace Prisma {
     generation?: number
     fpCount?: number
     fnCount?: number
+    yoloFpCount?: number
     encoderName?: string | null
     decoderDepth?: number | null
     epochs?: number | null
@@ -12050,6 +12117,7 @@ export namespace Prisma {
     generation?: IntFieldUpdateOperationsInput | number
     fpCount?: IntFieldUpdateOperationsInput | number
     fnCount?: IntFieldUpdateOperationsInput | number
+    yoloFpCount?: IntFieldUpdateOperationsInput | number
     encoderName?: NullableStringFieldUpdateOperationsInput | string | null
     decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
     epochs?: NullableIntFieldUpdateOperationsInput | number | null
@@ -12085,6 +12153,7 @@ export namespace Prisma {
     generation?: IntFieldUpdateOperationsInput | number
     fpCount?: IntFieldUpdateOperationsInput | number
     fnCount?: IntFieldUpdateOperationsInput | number
+    yoloFpCount?: IntFieldUpdateOperationsInput | number
     encoderName?: NullableStringFieldUpdateOperationsInput | string | null
     decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
     epochs?: NullableIntFieldUpdateOperationsInput | number | null
@@ -12120,6 +12189,7 @@ export namespace Prisma {
     generation?: number
     fpCount?: number
     fnCount?: number
+    yoloFpCount?: number
     encoderName?: string | null
     decoderDepth?: number | null
     epochs?: number | null
@@ -12155,6 +12225,7 @@ export namespace Prisma {
     generation?: IntFieldUpdateOperationsInput | number
     fpCount?: IntFieldUpdateOperationsInput | number
     fnCount?: IntFieldUpdateOperationsInput | number
+    yoloFpCount?: IntFieldUpdateOperationsInput | number
     encoderName?: NullableStringFieldUpdateOperationsInput | string | null
     decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
     epochs?: NullableIntFieldUpdateOperationsInput | number | null
@@ -12190,6 +12261,7 @@ export namespace Prisma {
     generation?: IntFieldUpdateOperationsInput | number
     fpCount?: IntFieldUpdateOperationsInput | number
     fnCount?: IntFieldUpdateOperationsInput | number
+    yoloFpCount?: IntFieldUpdateOperationsInput | number
     encoderName?: NullableStringFieldUpdateOperationsInput | string | null
     decoderDepth?: NullableIntFieldUpdateOperationsInput | number | null
     epochs?: NullableIntFieldUpdateOperationsInput | number | null
@@ -12301,6 +12373,8 @@ export namespace Prisma {
     category: string
     modelIsAnomaly: boolean
     userIsAnomaly: boolean
+    isYoloAnomaly?: boolean
+    dinomalyScore?: number | null
     roiType?: string
     filePath: string
     fileName: string
@@ -12321,6 +12395,8 @@ export namespace Prisma {
     category: string
     modelIsAnomaly: boolean
     userIsAnomaly: boolean
+    isYoloAnomaly?: boolean
+    dinomalyScore?: number | null
     roiType?: string
     filePath: string
     fileName: string
@@ -12341,6 +12417,8 @@ export namespace Prisma {
     category?: StringFieldUpdateOperationsInput | string
     modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
     userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    isYoloAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    dinomalyScore?: NullableFloatFieldUpdateOperationsInput | number | null
     roiType?: StringFieldUpdateOperationsInput | string
     filePath?: StringFieldUpdateOperationsInput | string
     fileName?: StringFieldUpdateOperationsInput | string
@@ -12361,6 +12439,8 @@ export namespace Prisma {
     category?: StringFieldUpdateOperationsInput | string
     modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
     userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    isYoloAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    dinomalyScore?: NullableFloatFieldUpdateOperationsInput | number | null
     roiType?: StringFieldUpdateOperationsInput | string
     filePath?: StringFieldUpdateOperationsInput | string
     fileName?: StringFieldUpdateOperationsInput | string
@@ -12381,6 +12461,8 @@ export namespace Prisma {
     category: string
     modelIsAnomaly: boolean
     userIsAnomaly: boolean
+    isYoloAnomaly?: boolean
+    dinomalyScore?: number | null
     roiType?: string
     filePath: string
     fileName: string
@@ -12401,6 +12483,8 @@ export namespace Prisma {
     category?: StringFieldUpdateOperationsInput | string
     modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
     userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    isYoloAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    dinomalyScore?: NullableFloatFieldUpdateOperationsInput | number | null
     roiType?: StringFieldUpdateOperationsInput | string
     filePath?: StringFieldUpdateOperationsInput | string
     fileName?: StringFieldUpdateOperationsInput | string
@@ -12421,6 +12505,8 @@ export namespace Prisma {
     category?: StringFieldUpdateOperationsInput | string
     modelIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
     userIsAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    isYoloAnomaly?: BoolFieldUpdateOperationsInput | boolean
+    dinomalyScore?: NullableFloatFieldUpdateOperationsInput | number | null
     roiType?: StringFieldUpdateOperationsInput | string
     filePath?: StringFieldUpdateOperationsInput | string
     fileName?: StringFieldUpdateOperationsInput | string
@@ -12840,6 +12926,7 @@ export namespace Prisma {
     generation?: SortOrder
     fpCount?: SortOrder
     fnCount?: SortOrder
+    yoloFpCount?: SortOrder
     encoderName?: SortOrder
     decoderDepth?: SortOrder
     epochs?: SortOrder
@@ -12856,6 +12943,7 @@ export namespace Prisma {
     generation?: SortOrder
     fpCount?: SortOrder
     fnCount?: SortOrder
+    yoloFpCount?: SortOrder
     decoderDepth?: SortOrder
     epochs?: SortOrder
   }
@@ -12889,6 +12977,7 @@ export namespace Prisma {
     generation?: SortOrder
     fpCount?: SortOrder
     fnCount?: SortOrder
+    yoloFpCount?: SortOrder
     encoderName?: SortOrder
     decoderDepth?: SortOrder
     epochs?: SortOrder
@@ -12924,6 +13013,7 @@ export namespace Prisma {
     generation?: SortOrder
     fpCount?: SortOrder
     fnCount?: SortOrder
+    yoloFpCount?: SortOrder
     encoderName?: SortOrder
     decoderDepth?: SortOrder
     epochs?: SortOrder
@@ -12940,6 +13030,7 @@ export namespace Prisma {
     generation?: SortOrder
     fpCount?: SortOrder
     fnCount?: SortOrder
+    yoloFpCount?: SortOrder
     decoderDepth?: SortOrder
     epochs?: SortOrder
   }
@@ -13071,6 +13162,8 @@ export namespace Prisma {
     category?: SortOrder
     modelIsAnomaly?: SortOrder
     userIsAnomaly?: SortOrder
+    isYoloAnomaly?: SortOrder
+    dinomalyScore?: SortOrder
     roiType?: SortOrder
     filePath?: SortOrder
     fileName?: SortOrder
@@ -13085,6 +13178,7 @@ export namespace Prisma {
   }
 
   export type RoiImageAvgOrderByAggregateInput = {
+    dinomalyScore?: SortOrder
     generation?: SortOrder
   }
 
@@ -13095,6 +13189,8 @@ export namespace Prisma {
     category?: SortOrder
     modelIsAnomaly?: SortOrder
     userIsAnomaly?: SortOrder
+    isYoloAnomaly?: SortOrder
+    dinomalyScore?: SortOrder
     roiType?: SortOrder
     filePath?: SortOrder
     fileName?: SortOrder
@@ -13115,6 +13211,8 @@ export namespace Prisma {
     category?: SortOrder
     modelIsAnomaly?: SortOrder
     userIsAnomaly?: SortOrder
+    isYoloAnomaly?: SortOrder
+    dinomalyScore?: SortOrder
     roiType?: SortOrder
     filePath?: SortOrder
     fileName?: SortOrder
@@ -13129,6 +13227,7 @@ export namespace Prisma {
   }
 
   export type RoiImageSumOrderByAggregateInput = {
+    dinomalyScore?: SortOrder
     generation?: SortOrder
   }
 

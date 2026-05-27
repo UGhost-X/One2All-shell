@@ -101,8 +101,9 @@ model TrainingRecord {
   pathId          String?   // 路径ID（重训时使用）
   taskChain       String    @default("")     // 任务血缘链
   generation      Int       @default(0)      // 第几代（0=原始训练，1=第一次重训...）
-  fpCount         Int       @default(0)      // False Positive数量
+  fpCount         Int       @default(0)      // Dinomaly False Positive数量
   fnCount         Int       @default(0)      // False Negative数量
+  yoloFpCount     Int       @default(0)      // YOLO False Positive数量
   encoderName     String?   // 编码器名称
   decoderDepth    Int?      // 解码器深度
   epochs          Int?      // 训练轮数
@@ -141,8 +142,9 @@ model RoiImage {
   modelIsAnomaly    Boolean
   // 用户修正后的判断
   userIsAnomaly     Boolean
-  
-  // ROI类型：根据模型和用户的判断差异自动计算
+  // 检测器来源
+  isYoloAnomaly     Boolean  @default(false)  // YOLO检测的异常（false=Dinomaly检测）
+  dinomalyScore     Float?   // Dinomaly模型分数
   // 'FP' = False Positive (模型NG, 用户OK) → 用于微调
   // 'FN' = False Negative (模型OK, 用户NG) → 用于原型库
   // 'NORMAL' = 判断一致或用户未修改

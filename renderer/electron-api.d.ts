@@ -68,6 +68,8 @@ interface RoiImage {
   category: string
   modelIsAnomaly: boolean
   userIsAnomaly: boolean
+  isYoloAnomaly?: boolean
+  dinomalyScore?: number
   roiType: 'FP' | 'FN' | 'NORMAL'
   filePath: string
   fileName: string
@@ -106,6 +108,7 @@ interface TrainingRecordData {
   generation?: number
   fpCount?: number
   fnCount?: number
+  yoloFpCount?: number
   encoderName?: string
   decoderDepth?: number
   epochs?: number

@@ -1018,11 +1018,15 @@ const startGroupPolling = () => {
 
       // 同步每个任务的状态
       let targetE = 0
+      let jobTaskType: string | undefined
       for (const t of trainTasks.value) {
         const taskData = taskStatusMap[t.task_id]
         if (taskData) {
           const te = Number(taskData.total_epochs || taskData.config?.train_epochs || taskData.config?.train_iters || 0)
           if (te > targetE) targetE = te
+          if (!jobTaskType && taskData.task_type) {
+            jobTaskType = taskData.task_type
+          }
         }
       }
       if (targetE > 0) {
@@ -1034,23 +1038,26 @@ const startGroupPolling = () => {
       // 更新每个任务的状态
       trainTasks.value = trainTasks.value.map(t => {
         const taskData = taskStatusMap[t.task_id]
-        if (!taskData) return t
-        
+        const backendType = jobTaskType || (taskData && taskData.task_type) || t.backendTaskType
+
+        if (!taskData) return { ...t, backendTaskType: backendType || t.backendTaskType }
+
         const status = String(taskData.status || '').toLowerCase()
         const isCompleted = status === 'completed' || status === 'success'
-        
+
         // 同步状态到 trainTasks
         if (t.taskType === 'fn' || t.taskType === 'copy') {
           // FN/copy 任务已在列表中标记为 completed，不需要更新
-          return t
+          return { ...t, backendTaskType: backendType || t.backendTaskType }
         }
-        
+
         return {
           ...t,
           status: taskData.status || t.status,
           progress: taskData.progress || t.progress,
           current_epoch: taskData.current_epoch || t.current_epoch,
-          total_epochs: targetE || t.total_epochs
+          total_epochs: targetE || t.total_epochs,
+          backendTaskType: backendType
         }
       })
 
@@ -2039,6 +2046,9 @@ const applyMonitorPayload = (taskId: string, data: any) => {
       if (data.total_epochs != null) {
         trainTasks.value[taskIndex].total_epochs = data.total_epochs
       }
+      if (data.task_type) {
+        trainTasks.value[taskIndex].backendTaskType = data.task_type
+      }
     }
   }
 
@@ -2573,6 +2583,16 @@ const getRoiBase64 = async (roiId: string): Promise<string> => {
   }
 }
 
+// 映射后端 task_type 到简短标识
+const getBackendTaskTypeLabel = (taskType?: string): string => {
+  switch (taskType) {
+    case 'yolo_only_retrain': return 'YOLO'
+    case 'dinomaly_fp_retrain': return 'DIN'
+    case 'dinomaly_initial': return 'DIN'
+    default: return ''
+  }
+}
+
 // 启动重训
 const startRetrain = async () => {
   if (!productId.value || !selectedBaseTask.value) return
@@ -2584,12 +2604,14 @@ const startRetrain = async () => {
   isStartingRetrain.value = true
   try {
     // 获取选中的ROI base64数据，并按 path_id 分组
-    const feedbackGroupsMap = new Map<string, { fpImages: string[]; fnImages: string[]; fnPosIds: string[] }>()
+    const feedbackGroupsMap = new Map<string, { fpImages: string[]; fnImages: string[]; fnPosIds: string[]; yoloFpImages: string[] }>()
 
     // 处理 FP ROI
+    console.log('[startRetrain] Selected FP ROI IDs:', selectedFpRois.value)
     for (const roiId of selectedFpRois.value) {
       const roi = getRoiById(roiId)
       if (!roi) continue
+      console.log(`[startRetrain] FP ROI ${roiId}: isYoloAnomaly=${(roi as any).isYoloAnomaly}, category=${roi.category}`)
 
       // 根据训练模式确定 path_id
       let pathId: string
@@ -2603,13 +2625,17 @@ const startRetrain = async () => {
       }
 
       if (!feedbackGroupsMap.has(pathId)) {
-        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [], fnPosIds: [] })
+        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [], fnPosIds: [], yoloFpImages: [] })
       }
 
       const base64DataUri = await getRoiBase64(roiId)
       if (base64DataUri) {
         const pureBase64 = base64DataUri.split(',')[1] || base64DataUri
-        feedbackGroupsMap.get(pathId)!.fpImages.push(pureBase64)
+        if ((roi as any).isYoloAnomaly) {
+          feedbackGroupsMap.get(pathId)!.yoloFpImages.push(pureBase64)
+        } else {
+          feedbackGroupsMap.get(pathId)!.fpImages.push(pureBase64)
+        }
       }
     }
 
@@ -2628,7 +2654,7 @@ const startRetrain = async () => {
       }
 
       if (!feedbackGroupsMap.has(pathId)) {
-        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [], fnPosIds: [] })
+        feedbackGroupsMap.set(pathId, { fpImages: [], fnImages: [], fnPosIds: [], yoloFpImages: [] })
       }
 
       const base64DataUri = await getRoiBase64(roiId)
@@ -2647,12 +2673,14 @@ const startRetrain = async () => {
       path_id: pathId,
       false_positive_images: group.fpImages,
       false_negative_images: group.fnImages,
-      false_negative_pos_ids: group.fnPosIds
+      false_negative_pos_ids: group.fnPosIds,
+      yolo_false_positive_images: group.yoloFpImages
     }))
 
     // 计算总数
     const totalFp = feedback_groups.reduce((sum, g) => sum + g.false_positive_images.length, 0)
     const totalFn = feedback_groups.reduce((sum, g) => sum + g.false_negative_images.length, 0)
+    const totalYoloFp = feedback_groups.reduce((sum, g) => sum + g.yolo_false_positive_images.length, 0)
 
     const payload = {
       project_id: String(productId.value),
@@ -2708,6 +2736,7 @@ const startRetrain = async () => {
         generation,
         fpCount: totalFp,
         fnCount: totalFn,
+        yoloFpCount: totalYoloFp,
         encoderName: trainConfig.value.encoderName,
         decoderDepth: trainConfig.value.decoderDepth,
         epochs: trainConfig.value.epochs,
@@ -4697,7 +4726,12 @@ onBeforeUnmount(() => {
                         {{ t('training.monitor.batchCancel') }} ({{ selectedTaskIds.size }})
                       </UiButton>
                     </div>
-                    <span class="text-[10px] font-bold px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/10">{{ t('training.monitor.labelsTotal', { count: trainTasks.length }) }}</span>
+                    <div class="flex items-center gap-2">
+                      <span v-if="trainTasks[0]?.backendTaskType" class="text-[10px] font-bold px-2.5 py-1 rounded-full bg-accent/10 text-accent-foreground border border-accent/10">
+                        {{ getBackendTaskTypeLabel(trainTasks[0].backendTaskType) }}
+                      </span>
+                      <span class="text-[10px] font-bold px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/10">{{ t('training.monitor.labelsTotal', { count: trainTasks.length }) }}</span>
+                    </div>
                   </div>
                   <div class="divide-y divide-border/50 overflow-y-auto custom-scrollbar flex-1">
                     <div v-for="tItem in trainTasks" :key="tItem.task_id" 
@@ -4720,14 +4754,14 @@ onBeforeUnmount(() => {
                             <span class="truncate shrink-0 max-w-[120px]" :title="tItem.label">{{ tItem.label }}</span>
 
                             <!-- 类型徽章 -->
-                            <span
-                              v-if="tItem.taskType === 'fp'"
-                              class="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 font-bold shrink-0"
-                            >FP 微调</span>
-                            <span
-                              v-else-if="tItem.taskType === 'fn'"
-                              class="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-bold shrink-0"
-                            >FN 原型库</span>
+                            <span v-if="tItem.taskType === 'fp'"
+                              class="text-[9px] px-1.5 py-0.5 rounded-full font-bold shrink-0"
+                              :class="tItem.backendTaskType === 'yolo_only_retrain' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'"
+                            >{{ tItem.backendTaskType === 'yolo_only_retrain' ? 'YOLO-FP' : 'DIN-FP' }}</span>
+                            <span v-else-if="tItem.taskType === 'fn'"
+                              class="text-[9px] px-1.5 py-0.5 rounded-full font-bold shrink-0"
+                              :class="tItem.backendTaskType === 'yolo_only_retrain' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'"
+                            >{{ tItem.backendTaskType === 'yolo_only_retrain' ? 'YOLO-FN' : 'DIN-FN' }}</span>
                             <span
                               v-else-if="tItem.taskType === 'copy'"
                               class="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400 font-bold shrink-0"

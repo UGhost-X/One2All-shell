@@ -139,10 +139,18 @@
                 <!-- ROI 信息 -->
                 <div class="p-2 bg-background">
                   <div class="flex items-center justify-between gap-1">
-                    <span class="text-[10px] truncate flex-1" :title="roi.category">{{ roi.category }}</span>
+                    <span class="text-[10px] truncate flex-1 min-w-0" :title="roi.category">{{ roi.category }}</span>
                     <Badge
-                      :variant="roi.roiType === 'FP' ? 'destructive' : roi.roiType === 'FN' ? 'warning' : 'secondary'"
-                      class="text-[10px] px-1 py-0 h-4"
+                      v-if="roi.roiType === 'FP'"
+                      :variant="roi.isYoloAnomaly ? 'outline' : 'destructive'"
+                      :class="roi.isYoloAnomaly ? 'text-[8px] px-0.5 py-0 h-4 leading-none shrink-0 text-amber-600 border-amber-300' : 'text-[8px] px-0.5 py-0 h-4 leading-none shrink-0'"
+                    >
+                      {{ roi.isYoloAnomaly ? 'YOLO' : 'DIN' }}
+                    </Badge>
+                    <Badge
+                      v-else
+                      :variant="roi.roiType === 'FN' ? 'warning' : 'secondary'"
+                      class="text-[8px] px-0.5 py-0 h-4 leading-none shrink-0"
                     >
                       {{ roi.roiType }}
                     </Badge>
@@ -244,6 +252,7 @@ interface RoiImage {
   createdAt: string | Date
   usedInRetrain: boolean
   fileExists?: boolean
+  isYoloAnomaly?: boolean
 }
 
 const props = defineProps<{

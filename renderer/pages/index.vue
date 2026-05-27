@@ -460,6 +460,8 @@ const detectionResults = ref<Array<{
   anomaly_type?: string
   category?: string
   pos_id?: string | number
+  yoloAnomaly?: boolean
+  dinomalyScore?: number
 }>>([])
 
 const inferenceServices = ref<Array<{ service_id: string; task_uuid: string; port: number; inference_url: string; labels: string[] }>>([])
@@ -958,12 +960,17 @@ const handleCaptureFromCamera = async (camera: any): Promise<boolean> => {
       if (window.electronAPI?.updateCameraParameters) {
         const actualExposure = exposureValue.value * 52
         const config = camera.config ? JSON.parse(camera.config) : {}
+        console.log(`[capture] 设置相机参数: exposureTime=${Math.round(actualExposure)}, gain=${Math.round(gainValue.value)}, offsetX=${Math.round(offsetXValue.value)}, offsetY=${Math.round(offsetYValue.value)}`)
         const paramResult = await window.electronAPI.updateCameraParameters(cameraId, {
           exposureTime: Math.round(actualExposure),
           gain: Math.round(gainValue.value),
           offsetX: Math.round(offsetXValue.value),
           offsetY: Math.round(offsetYValue.value)
         })
+        console.log(`[capture] 参数设置结果:`, paramResult)
+        if (!paramResult?.success && !isReconnectableError(paramResult)) {
+          console.warn(`[capture] 相机参数设置可能失败: ${paramResult?.error || '未知错误'}`)
+        }
         if (isReconnectableError(paramResult)) {
           needReconnect = true
           if (attempt < maxRetries) {
@@ -1281,6 +1288,8 @@ const liveDetectionResults = ref<Array<{
   segmentation?: number[]
   isAnomaly?: boolean
   visible: boolean
+  yoloAnomaly?: boolean
+  dinomalyScore?: number
 }>>([])
 const livePredictionConfidence = ref(0)
 
@@ -1569,6 +1578,8 @@ const runLiveInference = async () => {
         bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || r.anomaly === true || false,
+        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
+        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1582,6 +1593,8 @@ const runLiveInference = async () => {
         bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || r.anomaly === true || false,
+        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
+        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1594,6 +1607,8 @@ const runLiveInference = async () => {
         bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || false,
+        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
+        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1606,6 +1621,8 @@ const runLiveInference = async () => {
         bbox: d.bbox || d.box || [0, 0, 0, 0],
         segmentation: d.segmentation || [],
         isAnomaly: d.is_anomaly || false,
+        yoloAnomaly: d.yolo_anomaly ?? (d.anomaly_type === 'yolo_defect'),
+        dinomalyScore: d.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1865,6 +1882,8 @@ const runCaptureInference = async (dataUrl: string) => {
         bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || r.anomaly === true || false,
+        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
+        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true,
         pos_id: r.pos_id,
         workpiece_id: r.workpiece_id,
@@ -2285,7 +2304,9 @@ const handleSaveRoiImages = async () => {
           isAnomaly: userIsAnomaly,
           modelIsAnomaly,
           userIsAnomaly,
-          roiType
+          roiType,
+          yoloAnomaly: (det as any).yoloAnomaly ?? false,
+          dinomalyScore: (det as any).dinomalyScore ?? 0
         })
       } else {
         // FP和NORMAL类型使用前端裁剪
@@ -2330,6 +2351,8 @@ const handleSaveRoiImages = async () => {
           modelIsAnomaly,
           userIsAnomaly,
           posId,
+          isYoloAnomaly: (det as any).yoloAnomaly ?? false,
+          dinomalyScore: (det as any).dinomalyScore ?? 0,
           base64
         })
       }
@@ -2367,6 +2390,8 @@ const handleSaveRoiImages = async () => {
                   modelIsAnomaly: fnRoi.modelIsAnomaly,
                   userIsAnomaly: fnRoi.userIsAnomaly,
                   posId: fnRoi.posId,
+                  isYoloAnomaly: (fnRoi as any).yoloAnomaly ?? false,
+                  dinomalyScore: (fnRoi as any).dinomalyScore ?? 0,
                   base64: `data:image/jpeg;base64,${roiData.image_b64}`
                 })
                 console.log('[FN ROI] Successfully added ROI image')
@@ -2586,6 +2611,8 @@ const autoSaveRoiImages = async (imageUrl: string, results: any[], taskUuid: str
         modelIsAnomaly: modelIsAnomaly,
         userIsAnomaly: modelIsAnomaly,
         posId: det.pos_id != null ? String(det.pos_id) : undefined,
+        isYoloAnomaly: det.yoloAnomaly ?? false,
+        dinomalyScore: det.dinomalyScore ?? 0,
         base64
       })
     }
@@ -2873,6 +2900,8 @@ const runInference = async () => {
             bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || [0, 0, 0, 0],
             segmentation: r.segmentation_in_pred || r.segmentation || [],
             isAnomaly: r.is_anomaly || r.isAnomaly || false,
+            yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
+            dinomalyScore: r.dinomaly_score ?? 0,
             error: r.error || 0,
             threshold: r.threshold || 0,
             alignmentStrategy: r.alignment_strategy || wp.alignment_strategy || 'ORB',
@@ -2923,6 +2952,8 @@ const runInference = async () => {
             bbox: r.bbox || r.bbox_clipped || [0, 0, 0, 0],
             segmentation: r.segmentation_in_pred || r.segmentation || [],
             isAnomaly: r.is_anomaly || r.isAnomaly || false,
+            yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
+            dinomalyScore: r.dinomaly_score ?? 0,
             error: r.error || 0,
             threshold: r.threshold || 0,
             alignmentStrategy: r.alignment_strategy || wp.alignment_strategy || 'ORB',
@@ -2956,6 +2987,8 @@ const runInference = async () => {
           bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
           segmentation: r.segmentation_in_pred || r.segmentation || [],
           isAnomaly: r.is_anomaly || false,
+          yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
+          dinomalyScore: r.dinomaly_score ?? 0,
           error: r.error || 0,
           threshold: r.threshold || 0,
           alignmentStrategy: r.alignment_strategy || 'ORB',
@@ -2977,6 +3010,9 @@ const runInference = async () => {
           label: d.label || d.class || '未知',
           score: (d.score || d.confidence || d.probability || 0) * 100,
           bbox: d.bbox || d.box || [0, 0, 0, 0],
+          isAnomaly: d.is_anomaly || false,
+          yoloAnomaly: d.yolo_anomaly ?? (d.anomaly_type === 'yolo_defect'),
+          dinomalyScore: d.dinomaly_score ?? 0,
           visible: true
         }))
         if (detectionResults.value.length > 0) {
