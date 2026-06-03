@@ -37,7 +37,7 @@
         <div class="roi-info">
           <span class="roi-category">{{ roi.category }}</span>
           <span class="roi-type" :class="`type-${roi.roiType.toLowerCase()}`">
-            {{ getRoiTypeLabel(roi) }}
+            {{ getRoiTypeLabel(roi.roiType) }}
           </span>
           <span v-if="roi.usedInRetrain" class="roi-used-badge">
             {{ $t('training.retrain.used') }}
@@ -65,7 +65,6 @@ interface RoiImage {
   category: string
   modelIsAnomaly: boolean
   userIsAnomaly: boolean
-  isYoloAnomaly?: boolean
   roiType: 'FP' | 'FN' | 'NORMAL'
   filePath: string
   fileName: string
@@ -106,15 +105,13 @@ const toggleSelection = (roiId: string) => {
   }
 }
 
-const getRoiTypeLabel = (roi: RoiImage) => {
-  if (roi.roiType === 'FP') {
-    return roi.isYoloAnomaly ? 'YOLO-FP' : 'DIN-FP'
-  }
+const getRoiTypeLabel = (type: string) => {
   const labels: Record<string, string> = {
+    'FP': t('training.retrain.fp'),
     'FN': t('training.retrain.fn'),
     'NORMAL': t('training.retrain.normal')
   }
-  return labels[roi.roiType] || roi.roiType
+  return labels[type] || type
 }
 
 const handleImageError = (e: Event) => {

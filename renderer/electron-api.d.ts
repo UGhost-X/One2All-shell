@@ -9,6 +9,7 @@ declare global {
       isAlwaysOnTop: () => Promise<boolean>
       getProducts: () => Promise<any[]>
       addProduct: (product: any) => Promise<any>
+      updateProduct: (id: string, data: any) => Promise<any>
       deleteProduct: (id: string) => Promise<void>
       getCameras: () => Promise<any[]>
       addCamera: (camera: any) => Promise<any>
@@ -31,6 +32,9 @@ declare global {
       saveAnnotations: (productId: string, imagePath: string, data: string) => Promise<any>
       openFile: () => Promise<null | { path: string; data: string }>
       selectDirectory: () => Promise<string | null>
+      getModbusStatus: () => Promise<{ enabled: boolean; ip: string; port: number; connected: boolean }>
+      stopModbus: () => Promise<{ success: boolean }>
+      restartModbus: () => Promise<{ success: boolean; connected: boolean }>
       getSettings: () => Promise<any>
       saveSettings: (settings: any) => Promise<any>
       saveImage: (data: { productId: string; fileName: string; dataUrl: string }) => Promise<string>
@@ -49,7 +53,7 @@ declare global {
       deleteTrainingRecord: (taskId: string, labelName?: string) => Promise<any>
       // ROI Management
       updateRoiType: (data: { productId: string; taskUuid: string; category: string; fileName: string; userIsAnomaly: boolean }) => Promise<{ success: boolean; roiType?: string; error?: string }>
-      getAvailableRois: (data: { productId: string; baseTaskUuid: string; roiType?: 'FP' | 'FN' }) => Promise<{ success: boolean; rois?: RoiImage[]; error?: string }>
+      getAvailableRois: (data: { productId: string; baseTaskUuid?: string; roiType?: 'FP' | 'FN' }) => Promise<{ success: boolean; rois?: RoiImage[]; error?: string }>
       markRoisUsed: (data: { roiIds: string[]; usedTaskUuid: string }) => Promise<{ success: boolean; error?: string }>
       deleteRois: (data: { roiIds: string[] }) => Promise<{ success: boolean; deletedCount?: number; deletedFiles?: number; error?: string }>
       // Retrain Tasks - 使用 TrainingRecord
@@ -68,8 +72,6 @@ interface RoiImage {
   category: string
   modelIsAnomaly: boolean
   userIsAnomaly: boolean
-  isYoloAnomaly?: boolean
-  dinomalyScore?: number
   roiType: 'FP' | 'FN' | 'NORMAL'
   filePath: string
   fileName: string
@@ -93,8 +95,9 @@ interface TrainingRecordData {
   progress?: number
   totalEpochs?: number
   currentEpoch?: number
-  batchSize?: number
-  learningRate?: number
+  yoloEpochs?: number
+  yoloBatch?: number
+  yoloImgsz?: number
   metrics?: any[]
   logs?: string[]
   outputPath?: string
@@ -108,11 +111,6 @@ interface TrainingRecordData {
   generation?: number
   fpCount?: number
   fnCount?: number
-  yoloFpCount?: number
-  encoderName?: string
-  decoderDepth?: number
-  epochs?: number
-  freezeEncoder?: boolean
 }
 
 interface TrainingRecord extends TrainingRecordData {

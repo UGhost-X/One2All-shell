@@ -123,6 +123,7 @@ exports.Prisma.ProductScalarFieldEnum = {
   name: 'name',
   model: 'model',
   lastImagePath: 'lastImagePath',
+  cameraId: 'cameraId',
   schemeId: 'schemeId',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'

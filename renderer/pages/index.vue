@@ -12,6 +12,7 @@ import {
   Upload,
   Plus,
   Trash2,
+  Save,
   RotateCcw,
   RotateCw,
   RefreshCcw,
@@ -20,6 +21,7 @@ import {
   Download,
   Maximize2,
   Minimize2,
+  Minus,
   Power,
   PowerOff,
   Settings,
@@ -37,19 +39,27 @@ import {
   Aperture,
   Package,
   Usb,
-  AlertTriangle
+  AlertTriangle,
+  MoreVertical,
+  X
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, onActivated, watch, nextTick, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import Input from '@/components/ui/input/Input.vue'
 import Label from '@/components/ui/label/Label.vue'
 import Separator from '@/components/ui/separator/Separator.vue'
-import Slider from '@/components/ui/slider/Slider.vue'
-import Tabs from '@/components/ui/tabs/Tabs.vue'
-import TabsContent from '@/components/ui/tabs/TabsContent.vue'
-import TabsList from '@/components/ui/tabs/TabsList.vue'
-import TabsTrigger from '@/components/ui/tabs/TabsTrigger.vue'
-import Progress from '@/components/ui/progress/Progress.vue'
+import Dialog from '@/components/ui/dialog/Dialog.vue'
+import DialogContent from '@/components/ui/dialog/DialogContent.vue'
+import DialogDescription from '@/components/ui/dialog/DialogDescription.vue'
+import DialogFooter from '@/components/ui/dialog/DialogFooter.vue'
+import DialogHeader from '@/components/ui/dialog/DialogHeader.vue'
+import DialogTitle from '@/components/ui/dialog/DialogTitle.vue'
+import Badge from '@/components/ui/badge/Badge.vue'
+import Select from '@/components/ui/select/Select.vue'
+import SelectContent from '@/components/ui/select/SelectContent.vue'
+import SelectItem from '@/components/ui/select/SelectItem.vue'
+import SelectTrigger from '@/components/ui/select/SelectTrigger.vue'
+import SelectValue from '@/components/ui/select/SelectValue.vue'
 import UiCard from '@/components/ui/card/Card.vue'
 import UiCardHeader from '@/components/ui/card/CardHeader.vue'
 import UiCardTitle from '@/components/ui/card/CardTitle.vue'
@@ -87,7 +97,6 @@ const handleToolbarHover = (hovering: boolean) => {
   }
 }
 
-const activeTab = ref<'image' | 'camera'>('image')
 const mainViewState = ref<'empty' | 'image' | 'live'>('empty')
 const mainViewUrl = ref('')
 
@@ -460,8 +469,6 @@ const detectionResults = ref<Array<{
   anomaly_type?: string
   category?: string
   pos_id?: string | number
-  yoloAnomaly?: boolean
-  dinomalyScore?: number
 }>>([])
 
 const inferenceServices = ref<Array<{ service_id: string; task_uuid: string; port: number; inference_url: string; labels: string[] }>>([])
@@ -476,6 +483,7 @@ const inferenceFileInput = ref<HTMLInputElement | null>(null)
 const showProductModal = ref(false)
 const newProductName = ref('')
 const newProductModel = ref('')
+const newProductCameraId = ref<string | undefined>(undefined)
 
 // Product & Camera Data
 const products = ref<any[]>([])
@@ -513,23 +521,19 @@ async function externalCapture() {
     showToast('请先选择一个产品', 'error')
     return { success: false, error: '请先在界面中选择一个产品' }
   }
-  if (!selectedCameraId.value) {
-    showToast('请先在相机设置中选择一个相机', 'error')
-    return { success: false, error: '请先在界面中选择一个相机' }
-  }
 
-  const targetCamera = cameras.value.find(c => c.id === selectedCameraId.value)
+  const targetCamera = getEffectiveCamera()
   if (!targetCamera) {
-    showToast('请先在相机设置中选择一个相机', 'error')
-    return { success: false, error: '未找到所选相机' }
+    showToast('请先在产品设置中绑定相机', 'error')
+    return { success: false, error: '未找到绑定的相机' }
   }
   if (targetCamera.isEnabled === false) {
     showToast('当前相机已禁用，请先启用相机', 'error')
     return { success: false, error: '当前相机已禁用' }
   }
   if (targetCamera.isNetworkCamera && targetCamera.status !== 'online') {
-    showToast('网络相机未连接，请先连接相机', 'error')
-    return { success: false, error: '网络相机未连接' }
+    const connected = await ensureCameraConnected(targetCamera)
+    if (!connected) return { success: false, error: '相机连接失败' }
   }
 
   try {
@@ -574,6 +578,10 @@ onMounted(async () => {
     }
 
     restoreSelectedCamera()
+    restoreSidebarWidth()
+    restoreSectionHeights()
+    await fetchModbusStatus()
+    await loadModbusConfig()
   }
   window.__externalCapture = externalCapture
   document.addEventListener('fullscreenchange', syncFullscreenState)
@@ -582,13 +590,17 @@ onMounted(async () => {
 onActivated(async () => {
   // 页面重新激活时，重新加载后端URL，然后获取推理服务和标注数据
   await loadCameraServiceUrl()
+  await fetchInitialData()
   await fetchInferenceServices()
   await fetchProductAnnotations()
+  restoreSelectedCamera()
+  await fetchModbusStatus()
 })
 
 const openProductModal = () => {
   newProductName.value = ''
   newProductModel.value = ''
+  newProductCameraId.value = selectedCameraId.value
   showProductModal.value = true
 }
 
@@ -596,9 +608,11 @@ const confirmAddProduct = async () => {
   const name = newProductName.value.trim()
   if (!name) return
 
-  const newProduct = {
+  const cameraId = newProductCameraId.value && newProductCameraId.value !== '__none__' ? newProductCameraId.value : undefined
+  const newProduct: any = {
     name,
-    model: newProductModel.value.trim() || `M-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+    model: newProductModel.value.trim() || `M-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    cameraId: cameraId || null
   }
 
   try {
@@ -696,6 +710,96 @@ const selectedSystemCamera = ref<string>('')
 const cameraIpInput = ref('')
 const isLoadingSystemCameras = ref(false)
 
+// 相机操作下拉菜单状态
+const openCameraMenuId = ref<string | number | null>(null)
+const toggleCameraMenu = (camId: string | number) => { openCameraMenuId.value = openCameraMenuId.value === camId ? null : camId }
+const closeCameraMenu = () => { openCameraMenuId.value = null }
+
+// 侧边栏宽度拖拽调整
+const sidebarWidth = ref(380)
+const isResizing = ref(false)
+
+const startResize = (e: MouseEvent) => {
+  isResizing.value = true
+  document.addEventListener('mousemove', onResize)
+  document.addEventListener('mouseup', stopResize)
+  e.preventDefault()
+}
+
+const onResize = (e: MouseEvent) => {
+  if (!isResizing.value) return
+  const w = window.innerWidth - e.clientX
+  sidebarWidth.value = Math.max(260, Math.min(560, w))
+}
+
+const stopResize = () => {
+  isResizing.value = false
+  document.removeEventListener('mousemove', onResize)
+  document.removeEventListener('mouseup', stopResize)
+  localStorage.setItem('sidebarWidth', String(sidebarWidth.value))
+}
+
+// 恢复保存的侧边栏宽度
+const restoreSidebarWidth = () => {
+  const saved = localStorage.getItem('sidebarWidth')
+  if (saved) {
+    const w = Number(saved)
+    if (Number.isFinite(w) && w >= 260 && w <= 560) sidebarWidth.value = w
+  }
+}
+
+// 各区域高度拖拽调整 (camera/image/product/prediction)
+const sectionHeights = ref({
+  camera: 160,
+  image: 280,
+  products: 200,
+  predictions: 260,
+})
+const isResizingSection = ref<string | null>(null)
+let _resizeStartY = 0
+let _resizeStartHeight = 0
+
+const startSectionResize = (section: string, e: MouseEvent) => {
+  isResizingSection.value = section
+  _resizeStartY = e.clientY
+  _resizeStartHeight = (sectionHeights.value as any)[section] || 200
+  document.addEventListener('mousemove', onSectionResize)
+  document.addEventListener('mouseup', stopSectionResize)
+  e.preventDefault()
+}
+
+const onSectionResize = (e: MouseEvent) => {
+  if (!isResizingSection.value) return
+  const delta = e.clientY - _resizeStartY
+  const newH = Math.max(80, Math.min(600, _resizeStartHeight + delta));
+  (sectionHeights.value as any)[isResizingSection.value] = Math.round(newH)
+}
+
+const stopSectionResize = () => {
+  if (isResizingSection.value) {
+    localStorage.setItem('sectionHeights', JSON.stringify(sectionHeights.value))
+  }
+  isResizingSection.value = null
+  document.removeEventListener('mousemove', onSectionResize)
+  document.removeEventListener('mouseup', stopSectionResize)
+}
+
+const restoreSectionHeights = () => {
+  try {
+    const saved = localStorage.getItem('sectionHeights')
+    if (saved) {
+      const h = JSON.parse(saved)
+      if (h && typeof h === 'object') {
+        for (const key of ['camera', 'image', 'products', 'predictions']) {
+          if (key in h && Number.isFinite(h[key]) && h[key] >= 80) {
+            (sectionHeights.value as any)[key] = h[key]
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
 // Network Camera
 const showNetworkCameraModal = ref(false)
 const networkCameraId = ref('')
@@ -712,6 +816,9 @@ const cameraPreviewUrl = ref('')
 
 // Camera Config Edit
 const showCameraConfigModal = ref(false)
+const showCameraManagerDialog = ref(false)
+const dialogTab = ref<'camera' | 'modbus'>('camera')
+const showModbusDetail = ref(false)
 const editingCamera = ref<any>(null)
 const editingCameraConfig = ref({
   ip: '',
@@ -1212,7 +1319,15 @@ const handleSelectProduct = async (id: string) => {
   }
 
   await fetchProductAnnotations()
-  restoreSelectedCamera()
+
+  // 优先使用产品绑定的相机，其次恢复上次选择的相机
+  if (product?.cameraId && cameras.value.find(c => c.id === product.cameraId)) {
+    selectedCameraId.value = product.cameraId
+    saveSelectedCamera()
+    loadCameraSettingsToForm(cameras.value.find(c => c.id === product.cameraId)!)
+  } else {
+    restoreSelectedCamera()
+  }
 }
 
 const handleEditProduct = (product: any) => {
@@ -1288,8 +1403,6 @@ const liveDetectionResults = ref<Array<{
   segmentation?: number[]
   isAnomaly?: boolean
   visible: boolean
-  yoloAnomaly?: boolean
-  dinomalyScore?: number
 }>>([])
 const livePredictionConfidence = ref(0)
 
@@ -1358,14 +1471,9 @@ const startLive = async () => {
     return
   }
 
-  if (!selectedCameraId.value) {
-    showToast('请先在相机设置中选择一个相机', 'error')
-    return
-  }
-
-  const targetCamera = cameras.value.find(c => c.id === selectedCameraId.value)
+  const targetCamera = getEffectiveCamera()
   if (!targetCamera) {
-    showToast('请先在相机设置中选择一个相机', 'error')
+    showToast('请先在产品设置中绑定相机', 'error')
     return
   }
 
@@ -1375,10 +1483,8 @@ const startLive = async () => {
   }
 
   if (targetCamera.isNetworkCamera) {
-    if (targetCamera.status !== 'online') {
-      showToast('网络相机未连接，请先连接相机', 'error')
-      return
-    }
+    const connected = await ensureCameraConnected(targetCamera)
+    if (!connected) return
     startCameraPreview(targetCamera)
     liveNetworkCamera.value = targetCamera
     mainViewState.value = 'live'
@@ -1578,8 +1684,6 @@ const runLiveInference = async () => {
         bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || r.anomaly === true || false,
-        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
-        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1593,8 +1697,6 @@ const runLiveInference = async () => {
         bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || r.anomaly === true || false,
-        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
-        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1607,8 +1709,6 @@ const runLiveInference = async () => {
         bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || false,
-        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
-        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1621,8 +1721,6 @@ const runLiveInference = async () => {
         bbox: d.bbox || d.box || [0, 0, 0, 0],
         segmentation: d.segmentation || [],
         isAnomaly: d.is_anomaly || false,
-        yoloAnomaly: d.yolo_anomaly ?? (d.anomaly_type === 'yolo_defect'),
-        dinomalyScore: d.dinomaly_score ?? 0,
         visible: true
       }))
       if (liveDetectionResults.value.length > 0) {
@@ -1667,13 +1765,227 @@ const toggleLiveInference = async () => {
   }, liveInferenceIntervalMs.value)
 }
 
-const selectedCameraId = ref<number | null>(null)
+const selectedCameraId = ref<string | null>(null)
+const selectedCamera = computed(() => cameras.value.find(c => c.id === selectedCameraId.value) || null)
+
+// Modbus 状态
+const modbusStatus = ref<{ enabled: boolean; ip: string; port: number; connected: boolean } | null>(null)
+const fetchModbusStatus = async () => {
+  if (window.electronAPI?.getModbusStatus) {
+    modbusStatus.value = await window.electronAPI.getModbusStatus()
+  }
+}
+
+// Modbus 配置（在对话框内直接编辑）
+const modbusConfigForm = ref({
+  enabled: true,
+  ip: '192.168.1.12',
+  port: 502,
+  unitId: 1,
+  buttonChannel: 1,
+  resetChannel: 2,
+  lightGreen: 0,
+  lightYellow: 1,
+  lightRed: 2,
+  buzzer: 3,
+})
+const isSavingModbus = ref(false)
+
+const loadModbusConfig = async () => {
+  if (!window.electronAPI?.getSettings) return
+  const settings = await window.electronAPI.getSettings()
+  if (settings.modbusSettings) {
+    const m = settings.modbusSettings
+    modbusConfigForm.value = {
+      enabled: m.enabled !== false,
+      ip: m.ip || '192.168.1.12',
+      port: m.port || 502,
+      unitId: m.unitId || 1,
+      buttonChannel: m.buttonChannel ?? 1,
+      resetChannel: m.resetChannel ?? 2,
+      lightGreen: m.lightGreen ?? 0,
+      lightYellow: m.lightYellow ?? 1,
+      lightRed: m.lightRed ?? 2,
+      buzzer: m.buzzer ?? 3,
+    }
+  }
+}
+
+// 确定按钮：保存配置并测试连接
+const handleConfirmDialog = async () => {
+  isSavingModbus.value = true
+  try {
+    // 始终保存 Modbus 配置
+    await saveModbusConfig()
+    // 如果 Modbus 启用，测试连接
+    if (modbusConfigForm.value.enabled && window.electronAPI?.restartModbus) {
+      const result = await window.electronAPI.restartModbus()
+      if (result.connected) {
+        modbusStatus.value = { ...modbusStatus.value!, connected: true }
+        showToast('Modbus 连接成功', 'info')
+        showCameraManagerDialog.value = false
+      } else {
+        modbusStatus.value = { ...modbusStatus.value!, connected: false }
+        showToast('Modbus 连接失败，请检查配置', 'error')
+      }
+    } else {
+      // Modbus 禁用，直接关闭
+      showCameraManagerDialog.value = false
+    }
+  } catch (err) {
+    console.error('Failed:', err)
+    showToast('操作失败', 'error')
+  } finally {
+    isSavingModbus.value = false
+  }
+}
+
+const saveModbusConfig = async () => {
+  if (!window.electronAPI?.saveSettings) return
+  try {
+    const settings = await window.electronAPI.getSettings()
+    await window.electronAPI.saveSettings({
+      ...settings,
+      modbusSettings: {
+        enabled: modbusConfigForm.value.enabled,
+        ip: modbusConfigForm.value.ip,
+        port: Number(modbusConfigForm.value.port),
+        unitId: Number(modbusConfigForm.value.unitId),
+        buttonChannel: Number(modbusConfigForm.value.buttonChannel),
+        resetChannel: Number(modbusConfigForm.value.resetChannel),
+        lightGreen: Number(modbusConfigForm.value.lightGreen),
+        lightYellow: Number(modbusConfigForm.value.lightYellow),
+        lightRed: Number(modbusConfigForm.value.lightRed),
+        buzzer: Number(modbusConfigForm.value.buzzer),
+      }
+    })
+    await fetchModbusStatus()
+  } catch (err) {
+    console.error('Failed to save modbus config:', err)
+    throw err
+  }
+}
 
 const saveSelectedCamera = () => {
   if (selectedCameraId.value) {
     localStorage.setItem('selectedCameraId', String(selectedCameraId.value))
   }
 }
+
+// 获取当前产品绑定的相机ID，优先产品绑定的，其次全局选中的
+const getEffectiveCameraId = () => {
+  const product = products.value.find(p => p.id === selectedProductId.value)
+  return product?.cameraId || selectedCameraId.value
+}
+
+const getEffectiveCamera = () => {
+  const id = getEffectiveCameraId()
+  if (!id) return null
+  return cameras.value.find(c => c.id === id) || null
+}
+
+// 选择相机并绑定到当前产品
+const selectAndBindCamera = async (cam: any) => {
+  // 如果已选中该相机，则取消绑定
+  if (selectedCameraId.value === cam.id) {
+    await unbindCamera()
+    return
+  }
+  selectedCameraId.value = cam.id
+  saveSelectedCamera()
+  loadCameraSettingsToForm(cam)
+
+  // 更新当前产品的 cameraId 绑定
+  if (selectedProductId.value && window.electronAPI?.updateProduct) {
+    try {
+      await window.electronAPI.updateProduct(selectedProductId.value, { cameraId: cam.id })
+      const product = products.value.find(p => p.id === selectedProductId.value)
+      if (product) product.cameraId = cam.id
+      showToast(`已将相机 "${cam.name}" 绑定到当前产品`, 'info')
+    } catch (err) {
+      console.error('Failed to bind camera to product:', err)
+    }
+  }
+}
+
+// Row 2 关闭/连接按钮（固定，不随相机切换消失）
+const closeButtonText = computed(() => {
+  if (!selectedCamera.value) return t('dashboard.close')
+  if (selectedCamera.value.isNetworkCamera && selectedCamera.value.status !== 'online') return t('dashboard.connect')
+  return t('dashboard.close')
+})
+
+const handleCloseOrConnect = () => {
+  if (!selectedCamera.value) {
+    showToast('请先选择一个相机', 'info')
+    return
+  }
+  if (selectedCamera.value.isNetworkCamera) {
+    if (selectedCamera.value.status === 'online') {
+      // 关闭：断开相机 + 停止 Modbus
+      handleDisconnectCamera(selectedCamera.value)
+      if (modbusStatus.value?.enabled && window.electronAPI?.stopModbus) {
+        window.electronAPI.stopModbus().then(() => fetchModbusStatus())
+      }
+    } else {
+      // 连接：连接相机 + 重启 Modbus
+      handleConnectCamera(selectedCamera.value)
+      if (modbusStatus.value?.enabled && window.electronAPI?.restartModbus) {
+        window.electronAPI.restartModbus().then(() => fetchModbusStatus())
+      }
+    }
+  } else {
+    // USB 关闭：停止实况 + 停止 Modbus
+    stopLive()
+    if (modbusStatus.value?.enabled && window.electronAPI?.stopModbus) {
+      window.electronAPI.stopModbus().then(() => fetchModbusStatus())
+    }
+  }
+}
+
+const unbindCamera = async () => {
+  if (selectedProductId.value && window.electronAPI?.updateProduct) {
+    try {
+      await window.electronAPI.updateProduct(selectedProductId.value, { cameraId: null })
+      const product = products.value.find(p => p.id === selectedProductId.value)
+      if (product) product.cameraId = null
+      selectedCameraId.value = null
+      localStorage.removeItem('selectedCameraId')
+      showToast('已取消相机绑定', 'info')
+    } catch (err) {
+      console.error('Failed to unbind camera:', err)
+    }
+  }
+}
+
+// 确保相机已连接（自动尝试重连）
+const ensureCameraConnected = async (cam: any) => {
+  if (!cam || !cam.isNetworkCamera) return true
+  if (cam.status === 'online') return true
+  // 尝试自动连接
+  try {
+    showToast(`正在连接相机 ${cam.name}...`, 'info')
+    await handleConnectCamera(cam)
+    // 等待状态更新
+    await new Promise(r => setTimeout(r, 1500))
+    const updated = cameras.value.find(c => c.id === cam.id)
+    if (updated?.status === 'online') return true
+    showToast(`相机 ${cam.name} 连接失败，请手动连接`, 'error')
+    return false
+  } catch {
+    showToast(`相机 ${cam.name} 连接失败`, 'error')
+    return false
+  }
+}
+
+// 监听相机选择变化，自动持久化到 localStorage，确保刷新/重启后能恢复
+watch(selectedCameraId, (newId) => {
+  if (newId != null) {
+    localStorage.setItem('selectedCameraId', String(newId))
+  } else {
+    localStorage.removeItem('selectedCameraId')
+  }
+})
 
 const loadCameraSettingsToForm = (camera: any) => {
   const config = camera?.config ? JSON.parse(camera.config) : {}
@@ -1687,13 +1999,12 @@ const loadCameraSettingsToForm = (camera: any) => {
 
 const restoreSelectedCamera = () => {
   const savedCameraId = localStorage.getItem('selectedCameraId')
-  if (savedCameraId) {
-    const id = parseInt(savedCameraId, 10)
-    const camera = cameras.value.find(c => c.id === id)
-    if (camera) {
-      selectedCameraId.value = id
-      loadCameraSettingsToForm(camera)
-    }
+  if (!savedCameraId) return
+  // camera.id 是 UUID 字符串，直接比较即可
+  const camera = cameras.value.find(c => c.id === savedCameraId)
+  if (camera) {
+    selectedCameraId.value = camera.id
+    loadCameraSettingsToForm(camera)
   }
 }
 
@@ -1703,14 +2014,9 @@ const takeCapture = async (): Promise<boolean> => {
     return false
   }
 
-  if (!selectedCameraId.value) {
-    showToast('请先在相机设置中选择一个相机', 'error')
-    return false
-  }
-
-  const targetCamera = cameras.value.find(c => c.id === selectedCameraId.value)
+  const targetCamera = getEffectiveCamera()
   if (!targetCamera) {
-    showToast('请先在相机设置中选择一个相机', 'error')
+    showToast('请先在产品设置中绑定相机', 'error')
     return false
   }
 
@@ -1720,10 +2026,8 @@ const takeCapture = async (): Promise<boolean> => {
   }
 
   if (targetCamera.isNetworkCamera) {
-    if (targetCamera.status !== 'online') {
-      showToast('网络相机未连接，请先连接相机', 'error')
-      return false
-    }
+    const connected = await ensureCameraConnected(targetCamera)
+    if (!connected) return false
     return await handleCaptureFromCamera(targetCamera)
   }
 
@@ -1882,8 +2186,6 @@ const runCaptureInference = async (dataUrl: string) => {
         bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || r.box || [0, 0, 0, 0],
         segmentation: r.segmentation_in_pred || r.segmentation || [],
         isAnomaly: r.is_anomaly || r.anomaly === true || false,
-        yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
-        dinomalyScore: r.dinomaly_score ?? 0,
         visible: true,
         pos_id: r.pos_id,
         workpiece_id: r.workpiece_id,
@@ -1990,44 +2292,6 @@ const importImage = async () => {
   }
 }
 
-const exposureSliderValue = computed({
-  get: () => [exposureValue.value],
-  set: (v: number[]) => {
-    const next = Number(v?.[0] ?? 0)
-    exposureValue.value = Math.max(1, Math.min(100, Math.round(next)))
-  },
-})
-
-const gainSliderValue = computed({
-  get: () => [gainValue.value],
-  set: (v: number[]) => {
-    const next = Number(v?.[0] ?? 0)
-    gainValue.value = Math.round(Math.max(0, Math.min(1957, next)))
-  },
-})
-
-const offsetXSliderValue = computed({
-  get: () => [offsetXValue.value],
-  set: (v: number[]) => {
-    const next = Number(v?.[0] ?? 0)
-    offsetXValue.value = Math.round(next / 4) * 4
-  },
-})
-
-const offsetYSliderValue = computed({
-  get: () => [offsetYValue.value],
-  set: (v: number[]) => {
-    const next = Number(v?.[0] ?? 0)
-    offsetYValue.value = Math.round(next / 2) * 2
-  },
-})
-
-const handleGainInput = (value: string | number) => {
-  const val = typeof value === 'number' ? value : parseFloat(String(value))
-  if (!isNaN(val)) {
-    gainValue.value = Math.round(Math.max(0, Math.min(1957, val)))
-  }
-}
 
 // Prediction Actions
 const showDetectionLabels = ref(true)
@@ -2038,13 +2302,47 @@ const anomalyGroupCollapsed = ref(false)
 // 树形结构折叠状态
 const treeCollapsedState = ref<Record<string, boolean>>({})
 
+// 侧边栏区域折叠状态
+const sectionCollapsed = ref({ camera: false, settings: false, products: false, predictions: false })
+const toggleSection = (s: keyof typeof sectionCollapsed.value) => { sectionCollapsed.value[s] = !sectionCollapsed.value[s] }
+
+// 相机状态辅助函数 — 根据选中+连接状态返回样式和文本
+const isCameraAvailable = (cam: any) => {
+  // USB 相机（非网络相机）始终可用；网络相机需要 online 状态
+  if (!cam.isNetworkCamera) return cam.isEnabled !== false
+  return cam.status === 'online'
+}
+const getCameraStatusClass = (cam: any) => {
+  const isSelected = selectedCameraId.value === cam.id
+  const avail = isCameraAvailable(cam)
+  if (isSelected && avail) return 'text-green-600'
+  if (isSelected && !avail) return 'text-yellow-600'
+  return 'text-muted-foreground'
+}
+const getCameraStatusDotClass = (cam: any) => {
+  const isSelected = selectedCameraId.value === cam.id
+  const avail = isCameraAvailable(cam)
+  if (isSelected && avail) return 'bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)]'
+  if (isSelected && !avail) return 'bg-yellow-500 shadow-[0_0_6px_rgba(234,179,8,0.5)]'
+  return 'bg-gray-400'
+}
+const getCameraStatusText = (cam: any) => {
+  const isSelected = selectedCameraId.value === cam.id
+  const avail = isCameraAvailable(cam)
+  if (isSelected && avail) return t('dashboard.connected')
+  if (isSelected && !avail) return t('dashboard.disconnected')
+  return t('dashboard.notSelected')
+}
+
 // 按 anomaly_type -> category -> pos_id 层级分组的计算属性
 const groupedDetectionResults = computed(() => {
   const groups: Record<string, Record<string, Record<string, Array<{ item: typeof detectionResults.value[0]; index: number }>>>> = {}
 
   detectionResults.value.forEach((item, index) => {
     const rawType = item.anomaly_type || '未知类型'
-    const type = rawType === 'normal' ? 'OK' : 'NG'
+    // 默认只展示 NG，不展示 OK
+    if (rawType === 'normal') return
+    const type = 'NG'
     const cat = item.category || '未知类别'
     const pos = item.pos_id !== undefined ? String(item.pos_id) : '未知位置'
 
@@ -2242,6 +2540,7 @@ const confirmToggleAnomaly = () => {
 
 const handleGlobalClick = () => {
   contextMenuVisible.value = false
+  openCameraMenuId.value = null
 }
 
 // 格式化日期为 YYYY-MM-DD hh:mm:ss
@@ -2305,8 +2604,6 @@ const handleSaveRoiImages = async () => {
           modelIsAnomaly,
           userIsAnomaly,
           roiType,
-          yoloAnomaly: (det as any).yoloAnomaly ?? false,
-          dinomalyScore: (det as any).dinomalyScore ?? 0
         })
       } else {
         // FP和NORMAL类型使用前端裁剪
@@ -2351,8 +2648,6 @@ const handleSaveRoiImages = async () => {
           modelIsAnomaly,
           userIsAnomaly,
           posId,
-          isYoloAnomaly: (det as any).yoloAnomaly ?? false,
-          dinomalyScore: (det as any).dinomalyScore ?? 0,
           base64
         })
       }
@@ -2390,8 +2685,6 @@ const handleSaveRoiImages = async () => {
                   modelIsAnomaly: fnRoi.modelIsAnomaly,
                   userIsAnomaly: fnRoi.userIsAnomaly,
                   posId: fnRoi.posId,
-                  isYoloAnomaly: (fnRoi as any).yoloAnomaly ?? false,
-                  dinomalyScore: (fnRoi as any).dinomalyScore ?? 0,
                   base64: `data:image/jpeg;base64,${roiData.image_b64}`
                 })
                 console.log('[FN ROI] Successfully added ROI image')
@@ -2611,8 +2904,6 @@ const autoSaveRoiImages = async (imageUrl: string, results: any[], taskUuid: str
         modelIsAnomaly: modelIsAnomaly,
         userIsAnomaly: modelIsAnomaly,
         posId: det.pos_id != null ? String(det.pos_id) : undefined,
-        isYoloAnomaly: det.yoloAnomaly ?? false,
-        dinomalyScore: det.dinomalyScore ?? 0,
         base64
       })
     }
@@ -2688,9 +2979,11 @@ const captureAndInfer = async () => {
     return
   }
 
-  let targetCamera = enabledCameras.find(c => c.id === selectedCameraId.value)
-  if (!targetCamera) {
+  let targetCamera = getEffectiveCamera()
+  if (!targetCamera || targetCamera.isEnabled === false) {
     targetCamera = enabledCameras[0]
+  }
+  if (targetCamera) {
     selectedCameraId.value = targetCamera.id
   }
 
@@ -2900,9 +3193,7 @@ const runInference = async () => {
             bbox: r.bbox_clipped || r.bbox_in_pred || r.bbox || [0, 0, 0, 0],
             segmentation: r.segmentation_in_pred || r.segmentation || [],
             isAnomaly: r.is_anomaly || r.isAnomaly || false,
-            yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
-            dinomalyScore: r.dinomaly_score ?? 0,
-            error: r.error || 0,
+                    error: r.error || 0,
             threshold: r.threshold || 0,
             alignmentStrategy: r.alignment_strategy || wp.alignment_strategy || 'ORB',
             visible: true,
@@ -2952,9 +3243,7 @@ const runInference = async () => {
             bbox: r.bbox || r.bbox_clipped || [0, 0, 0, 0],
             segmentation: r.segmentation_in_pred || r.segmentation || [],
             isAnomaly: r.is_anomaly || r.isAnomaly || false,
-            yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
-            dinomalyScore: r.dinomaly_score ?? 0,
-            error: r.error || 0,
+                    error: r.error || 0,
             threshold: r.threshold || 0,
             alignmentStrategy: r.alignment_strategy || wp.alignment_strategy || 'ORB',
             visible: true,
@@ -2987,9 +3276,7 @@ const runInference = async () => {
           bbox: r.bbox_clipped || r.bbox || [0, 0, 0, 0],
           segmentation: r.segmentation_in_pred || r.segmentation || [],
           isAnomaly: r.is_anomaly || false,
-          yoloAnomaly: r.yolo_anomaly ?? (r.anomaly_type === 'yolo_defect'),
-          dinomalyScore: r.dinomaly_score ?? 0,
-          error: r.error || 0,
+              error: r.error || 0,
           threshold: r.threshold || 0,
           alignmentStrategy: r.alignment_strategy || 'ORB',
           visible: true,
@@ -3011,9 +3298,7 @@ const runInference = async () => {
           score: (d.score || d.confidence || d.probability || 0) * 100,
           bbox: d.bbox || d.box || [0, 0, 0, 0],
           isAnomaly: d.is_anomaly || false,
-          yoloAnomaly: d.yolo_anomaly ?? (d.anomaly_type === 'yolo_defect'),
-          dinomalyScore: d.dinomaly_score ?? 0,
-          visible: true
+              visible: true
         }))
         if (detectionResults.value.length > 0) {
           const maxScore = Math.max(...detectionResults.value.map(r => r.score))
@@ -3279,6 +3564,8 @@ onBeforeUnmount(() => {
   delete window.__externalCapture
   document.removeEventListener('fullscreenchange', syncFullscreenState)
   document.removeEventListener('click', handleGlobalClick)
+  document.removeEventListener('mousemove', onResize)
+  document.removeEventListener('mouseup', stopResize)
   viewerResizeObserver?.disconnect()
   viewerResizeObserver = null
   if (inferenceAbortController) {
@@ -3315,8 +3602,8 @@ onMounted(() => {
       </div>
     </header>
 
-    <div class="flex-1 grid grid-cols-3 overflow-hidden w-full min-w-0">
-      <main class="col-span-2 bg-muted/20 relative  flex flex-col h-full">
+    <div class="flex-1 flex overflow-hidden w-full min-w-0" :class="{ 'select-none': isResizing }">
+      <main class="flex-1 min-w-0 bg-muted/20 relative flex flex-col h-full">
         <div v-if="mainViewState === 'empty'" class="flex-1 p-8 flex items-center justify-center">
           <div class="text-center space-y-4 max-w-md">
             <div class="w-20 h-20 bg-muted rounded-full flex items-center justify-center mx-auto opacity-50">
@@ -3359,19 +3646,6 @@ onMounted(() => {
               
               <UiButton variant="ghost" size="icon" class="h-8 w-8" title="全屏" @click="toggleFullscreen">
                 <component :is="viewerIsFullscreen ? Minimize2 : Maximize2" class="h-4 w-4" />
-              </UiButton>
-
-              <Separator orientation="vertical" class="h-6 mx-1" />
-
-              <UiButton
-                variant="ghost"
-                size="icon"
-                class="h-8 w-8"
-                title="保存ROI"
-                :disabled="detectionResults.length === 0 || !selectedProductId"
-                @click="handleSaveRoiImages"
-              >
-                <Download class="h-4 w-4" />
               </UiButton>
             </div>
           </div>
@@ -3485,239 +3759,221 @@ onMounted(() => {
         </div>
       </main>
 
-      <aside class="col-span-1 bg-card flex flex-col h-full overflow-hidden">
-        <Tabs v-model="activeTab" class="flex flex-col h-full">
-          <!-- Tabs Header -->
-          <div class="border-b bg-muted/30 shrink-0">
-            <TabsList class="w-full h-10 rounded-none bg-transparent p-0">
-              <TabsTrigger
-                value="image"
-                class="flex-1 h-10 gap-2 text-xs font-bold uppercase tracking-wider border-b-2 border-transparent text-muted-foreground hover:bg-muted/50 data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:bg-background rounded-none px-0 py-0 shadow-none data-[state=active]:shadow-none"
-              >
-                <ImageIcon class="h-3.5 w-3.5" />
-                {{ t('dashboard.imageSettings') }}
-              </TabsTrigger>
-              <TabsTrigger
-                value="camera"
-                class="flex-1 h-10 gap-2 text-xs font-bold uppercase tracking-wider border-b-2 border-transparent text-muted-foreground hover:bg-muted/50 data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:bg-background rounded-none px-0 py-0 shadow-none data-[state=active]:shadow-none"
-              >
-                <Camera class="h-3.5 w-3.5" />
-                {{ t('dashboard.cameraSettings') }}
-              </TabsTrigger>
-            </TabsList>
-          </div>
-
-          <!-- Dynamic Settings Area -->
-          <section class="flex-[2] border-b flex flex-col min-h-0 overflow-hidden">
-              <TabsContent value="image" class="flex-1 overflow-auto p-4 space-y-5">
-              <!-- Exposure & Gain -->
-              <div class="space-y-4">
-                <div class="space-y-2">
-                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
-                    <span>{{ t('dashboard.exposure') }}</span>
-                    <div class="flex items-center gap-0.5 text-primary">
-                      <Input
-                        type="number"
-                        v-model.number="exposureValue"
-                        min="1"
-                        max="2000"
-                        class="h-7 w-20 px-2 py-1 text-xs text-right font-mono"
-                      />
-                    </div>
-                  </div>
-                  <Slider v-model="exposureSliderValue" :max="100" :min="1" :step="1" />
-                </div>
-                <div class="space-y-2">
-                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
-                    <span>{{ t('dashboard.gain') }}</span>
-                    <div class="flex items-center gap-0.5 text-primary">
-                      <Input
-                        type="number"
-                        v-model.number="gainValue"
-                        step="10"
-                        min="0"
-                        max="1957"
-                        class="h-7 w-16 px-2 py-1 text-xs text-right font-mono"
-                      />
-                    </div>
-                  </div>
-                  <Slider v-model="gainSliderValue" :max="1957" :step="1" />
-                </div>
-                <div class="space-y-2">
-                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
-                    <span>偏移X</span>
-                    <div class="flex items-center gap-0.5 text-primary">
-                      <Input
-                        type="number"
-                        v-model.number="offsetXValue"
-                        step="4"
-                        min="-1000"
-                        max="1000"
-                        class="h-7 w-20 px-2 py-1 text-xs text-right font-mono"
-                      />
-                      <span class="font-mono lowercase">px</span>
-                    </div>
-                  </div>
-                  <Slider v-model="offsetXSliderValue" :max="1000" :min="-1000" :step="4" />
-                </div>
-                <div class="space-y-2">
-                  <div class="flex justify-between text-[11px] font-bold text-muted-foreground uppercase tracking-wider items-center">
-                    <span>偏移Y</span>
-                    <div class="flex items-center gap-0.5 text-primary">
-                      <Input
-                        type="number"
-                        v-model.number="offsetYValue"
-                        step="2"
-                        min="-1000"
-                        max="1000"
-                        class="h-7 w-20 px-2 py-1 text-xs text-right font-mono"
-                      />
-                      <span class="font-mono lowercase">px</span>
-                    </div>
-                  </div>
-                  <Slider v-model="offsetYSliderValue" :max="1000" :min="-1000" :step="2" />
-                </div>
+      <div class="w-1.5 cursor-col-resize hover:bg-primary/50 bg-border shrink-0 transition-colors active:bg-primary" @mousedown="startResize" />
+      <aside :style="{ width: sidebarWidth + 'px' }" class="shrink-0 bg-card flex flex-col h-full overflow-hidden">
+          <!-- Camera Settings Section -->
+          <section class="border-b flex flex-col min-h-0 overflow-hidden" :class="sectionCollapsed.camera ? 'shrink-0' : ''" :style="sectionCollapsed.camera ? {} : { height: sectionHeights.camera + 'px' }">
+            <button class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0 hover:bg-muted/50 transition-colors w-full" @click="toggleSection('camera')">
+              <div class="flex items-center gap-2">
+                <Camera class="h-4 w-4 text-primary" />
+                <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.cameraSettings') }}</span>
               </div>
-
-              <!-- Image Actions Grid -->
-              <div class="grid grid-cols-2 gap-2 pt-2">
-                <UiButton 
-                  variant="outline" 
-                  size="sm" 
-                  class="h-14 flex flex-col gap-1 text-[10px] font-bold"
-                  :class="{ 'bg-primary/10 border-primary text-primary': mainViewState === 'live' }"
-                  @click="startLive"
-                >
-                  <Video class="h-4 w-4" :class="mainViewState === 'live' ? 'text-primary' : 'text-primary'" />
-                  {{ t('dashboard.live') }}
-                </UiButton>
-                <UiButton
-                  variant="outline"
-                  size="sm"
-                  class="h-14 flex flex-col gap-1 text-[10px] font-bold"
-                  :disabled="isInferring || !selectedProductId"
-                  @click="takeCapture"
-                >
-                  <Loader2 v-if="isInferring && selectedProductHasImage && selectedProductHasAnnotation" class="h-4 w-4 animate-spin text-primary" />
-                  <CameraIcon v-else class="h-4 w-4 text-primary" />
-                  {{ selectedProductHasImage && selectedProductHasAnnotation ? (isInferring ? '识别中...' : '拍照识别') : '添加产品图' }}
-                </UiButton>
-
-                <UiButton variant="outline" size="sm" class="h-14 flex flex-col gap-1 text-[10px] font-bold" @click="startInference">
-                  <Wand2 class="h-4 w-4" />
-                  选择图片推理
-                </UiButton>
+              <ChevronRight class="h-4 w-4 text-muted-foreground transition-transform duration-200" :class="{ 'rotate-90': !sectionCollapsed.camera }" />
+            </button>
+            <div v-show="!sectionCollapsed.camera" class="flex-1 overflow-auto p-3">
+              <!-- Camera Display (devices list) -->
+              <div class="border border-gray-300 rounded-md overflow-hidden">
+                <table class="w-full border-collapse">
+                  <tbody>
+                    <!-- Camera device row -->
+                    <tr>
+                      <td class="border-r border-gray-300 border-b border-gray-300 px-3 h-10">
+                        <div class="flex items-center gap-2 min-w-0" v-if="selectedCamera">
+                          <div :class="['w-1.5 h-1.5 rounded-full shrink-0', getCameraStatusDotClass(selectedCamera)]"></div>
+                          <span class="text-xs font-medium truncate">{{ selectedCamera.name }}</span>
+                          <Wifi v-if="selectedCamera.isNetworkCamera" class="h-3 w-3 text-blue-500 shrink-0" />
+                        </div>
+                      </td>
+                      <td class="border-r-2 border-gray-400 border-b border-gray-300 px-4 h-10 text-center">
+                        <div v-if="selectedCamera" :class="['w-3 h-3 rounded-full mx-auto', getCameraStatusDotClass(selectedCamera)]"></div>
+                      </td>
+                      <td class="border-b border-gray-300 px-2 h-10 w-[88px]">
+                        <UiButton class="h-7 text-[10px] font-bold px-2 bg-blue-600 hover:bg-blue-700 text-white w-full" @click.stop="showCameraManagerDialog = true">
+                          <Settings class="h-3 w-3 mr-1" />{{ t('dashboard.settings') }}
+                        </UiButton>
+                      </td>
+                    </tr>
+                    <!-- Close & Modbus row -->
+                    <tr>
+                      <td class="border-r border-gray-300 px-3 h-10">
+                        <div class="flex items-center gap-2 min-w-0" v-if="modbusStatus?.enabled">
+                          <div :class="['w-1.5 h-1.5 rounded-full shrink-0', modbusStatus?.connected ? 'bg-green-500' : 'bg-yellow-500']"></div>
+                          <span class="text-xs font-medium truncate">Modbus</span>
+                        </div>
+                      </td>
+                      <td class="border-r-2 border-gray-400 px-4 h-10 text-center">
+                        <div v-if="modbusStatus?.enabled" :class="['w-3 h-3 rounded-full mx-auto', modbusStatus?.connected ? 'bg-green-500' : 'bg-yellow-500']"></div>
+                      </td>
+                      <td class="px-2 h-10 w-[88px]">
+                        <UiButton class="h-7 text-[10px] font-bold px-2 bg-blue-600 hover:bg-blue-700 text-white w-full" @click.stop="handleCloseOrConnect">
+                          {{ closeButtonText }}
+                        </UiButton>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
-            </TabsContent>
-
-            <TabsContent value="camera" class="flex-1 overflow-auto p-4 space-y-4">
-              <!-- Camera List -->
-              <div v-for="cam in cameras" :key="cam.id"
-                class="p-3 rounded-lg border space-y-3 relative group cursor-pointer transition-all"
-                :class="selectedCameraId === cam.id ? 'border-primary bg-primary/10' : 'bg-muted/10 hover:border-primary/50'"
-                @click="selectedCameraId = cam.id; saveSelectedCamera(); loadCameraSettingsToForm(cam)"
-              >
-                <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <div :class="['w-2 h-2 rounded-full', cam.status === 'online' || cam.isEnabled !== false ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500']"></div>
-                    <span class="text-xs font-bold">{{ cam.name }}</span>
-                    <Wifi v-if="cam.isNetworkCamera" class="h-3 w-3 text-blue-500" />
-                    <div v-if="selectedCameraId === cam.id" class="px-1.5 py-0.5 bg-primary text-primary-foreground text-[9px] rounded">当前</div>
-                  </div>
-                  <div class="flex items-center gap-1">
-                    <UiButton v-if="cam.isNetworkCamera" variant="ghost" size="icon" class="h-6 w-6" @click.stop="cam.status === 'online' ? handleDisconnectCamera(cam) : handleConnectCamera(cam)">
-                      <component :is="cam.status === 'online' ? Unplug : Plug" :class="['h-3 w-3', cam.status === 'online' ? 'text-green-600' : 'text-muted-foreground']" />
-                    </UiButton>
-                    <UiButton v-if="cam.isNetworkCamera && cam.status === 'online'" variant="ghost" size="icon" class="h-6 w-6" @click.stop="handleCaptureFromCamera(cam)">
-                      <Aperture class="h-3 w-3 text-primary" />
-                    </UiButton>
-                    <UiButton v-if="cam.isNetworkCamera && cam.status === 'online'" variant="ghost" size="icon" class="h-6 w-6" @click.stop="startCameraPreview(cam)">
-                      <Video class="h-3 w-3 text-blue-500" />
-                    </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-6 w-6" @click.stop="openCameraConfig(cam)" title="配置">
-                      <Settings class="h-3 w-3 text-muted-foreground" />
-                    </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-6 w-6" @click.stop="toggleCameraEnabled(cam)">
-                      <component :is="cam.isEnabled !== false ? Power : PowerOff" :class="['h-3 w-3', cam.isEnabled !== false ? 'text-green-600' : 'text-red-500']" />
-                    </UiButton>
-                    <UiButton variant="ghost" size="icon" class="h-6 w-6 text-destructive hover:bg-destructive/10" @click.stop="handleRemoveCamera(cam)">
-                      <Trash2 class="h-3 w-3" />
-                    </UiButton>
-                  </div>
-                </div>
-                <div class="grid grid-cols-2 gap-y-2 text-[10px]">
-                  <div class="text-muted-foreground uppercase font-bold tracking-tight">状态</div>
-                  <div class="text-right font-mono" :class="cam.status === 'online' || cam.isEnabled !== false ? 'text-green-600' : 'text-red-500'">{{ cam.status === 'online' ? '已连接' : (cam.isEnabled !== false ? '已启用' : '已禁用') }}</div>
-                  <div class="text-muted-foreground uppercase font-bold tracking-tight">IP</div>
-                  <div class="text-right font-mono">{{ cam.ip }}</div>
-                  <div v-if="cam.resolution" class="text-muted-foreground uppercase font-bold tracking-tight">分辨率</div>
-                  <div v-if="cam.resolution" class="text-right font-mono">{{ cam.resolution }}</div>
-                </div>
-              </div>
-
-              <UiButton variant="outline" class="w-full h-10 border-dashed gap-2 text-xs font-bold" @click="openCameraTypeModal">
-                <Plus class="h-3.5 w-3.5" />
-                {{ t('dashboard.add') }}
-              </UiButton>
-            </TabsContent>
+            </div>
           </section>
 
+          <!-- Resize: camera ↔ image -->
+          <div
+            v-show="!sectionCollapsed.camera && !sectionCollapsed.settings"
+            class="h-1.5 cursor-row-resize hover:bg-primary/50 bg-border shrink-0 transition-colors active:bg-primary relative z-10"
+            @mousedown="startSectionResize('camera', $event)"
+          />
+
+          <!-- Image Settings Section -->
+          <section class="border-b flex flex-col min-h-0 overflow-hidden" :class="sectionCollapsed.settings ? 'shrink-0' : ''" :style="sectionCollapsed.settings ? {} : { height: sectionHeights.image + 'px' }">
+            <button class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0 hover:bg-muted/50 transition-colors w-full" @click="toggleSection('settings')">
+              <div class="flex items-center gap-2">
+                <Settings2 class="h-4 w-4 text-primary" />
+                <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.imageSettings') }}</span>
+              </div>
+              <ChevronRight class="h-4 w-4 text-muted-foreground transition-transform duration-200" :class="{ 'rotate-90': !sectionCollapsed.settings }" />
+            </button>
+            <div v-show="!sectionCollapsed.settings" class="flex-1 overflow-auto p-4 space-y-4">
+              <!-- 参数 + 操作按钮网格 -->
+              <div class="border border-border rounded-md overflow-hidden">
+                <div class="grid grid-cols-4 border-b border-border">
+                  <div class="p-2 border-r border-border flex items-center">
+                    <UiButton class="w-full h-10 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold" @click="startLive">
+                      <Video class="h-4 w-4 mr-1" />{{ t('dashboard.live') }}
+                    </UiButton>
+                  </div>
+                  <div class="p-2 border-r-2 border-r-border/60 flex items-center">
+                    <UiButton class="w-full h-10 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold" :disabled="isInferring || !selectedProductId" @click="takeCapture">
+                      <Loader2 v-if="isInferring && selectedProductHasImage && selectedProductHasAnnotation" class="h-4 w-4 mr-1 animate-spin" />
+                      <CameraIcon v-else class="h-4 w-4 mr-1" />
+                      {{ selectedProductHasImage && selectedProductHasAnnotation ? (isInferring ? '识别中' : '拍照识别') : '添加产品图' }}
+                    </UiButton>
+                  </div>
+                  <div class="p-2 border-r border-border flex items-center">
+                    <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">{{ t('dashboard.exposure') }}</span>
+                  </div>
+                  <div class="p-2 flex items-center justify-center">
+                    <div class="flex items-center gap-0 w-full">
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-r-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="exposureValue = Math.max(1, exposureValue - 1)"><Minus class="h-3 w-3" /></UiButton>
+                      <Input type="number" v-model.number="exposureValue" min="1" max="2000" class="h-7 w-full text-center font-mono text-[10px] rounded-none border-x-0 focus:z-10" />
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-l-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="exposureValue = Math.min(2000, exposureValue + 1)"><Plus class="h-3 w-3" /></UiButton>
+                    </div>
+                  </div>
+                </div>
+                <div class="grid grid-cols-4 border-b border-border">
+                  <div class="p-2 border-r border-border flex items-center">
+                    <UiButton class="w-full h-10 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold" @click="startInference"><Wand2 class="h-4 w-4 mr-1" />选择图片推理</UiButton>
+                  </div>
+                  <div class="p-2 border-r-2 border-r-border/60" />
+                  <div class="p-2 border-r border-border flex items-center">
+                    <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">{{ t('dashboard.gain') }}</span>
+                  </div>
+                  <div class="p-2 flex items-center justify-center">
+                    <div class="flex items-center gap-0 w-full">
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-r-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="gainValue = Math.round(Math.max(0, gainValue - Math.max(1, Math.round(gainValue * 0.1))))"><Minus class="h-3 w-3" /></UiButton>
+                      <Input type="number" v-model.number="gainValue" min="0" max="1957" class="h-7 w-full text-center font-mono text-[10px] rounded-none border-x-0 focus:z-10" />
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-l-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="gainValue = Math.round(Math.min(1957, gainValue + Math.max(1, Math.round(gainValue * 0.1))))"><Plus class="h-3 w-3" /></UiButton>
+                    </div>
+                  </div>
+                </div>
+                <div class="grid grid-cols-4 border-b border-border">
+                  <div class="p-2 border-r border-border flex items-center">
+                    <UiButton class="w-full h-10 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold" :disabled="detectionResults.length === 0 || !selectedProductId" @click="handleSaveRoiImages">
+                      <Download class="h-4 w-4 mr-1" />保存误报图
+                    </UiButton>
+                  </div>
+                  <div class="p-2 border-r-2 border-r-border/60" />
+                  <div class="p-2 border-r border-border flex items-center"><span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">偏移X</span></div>
+                  <div class="p-2 flex items-center justify-center">
+                    <div class="flex items-center gap-0 w-full">
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-r-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="offsetXValue = Math.round(Math.max(-1000, offsetXValue - 4) / 4) * 4"><Minus class="h-3 w-3" /></UiButton>
+                      <Input type="number" v-model.number="offsetXValue" step="4" min="-1000" max="1000" class="h-7 w-full text-center font-mono text-[10px] rounded-none border-x-0 focus:z-10" />
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-l-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="offsetXValue = Math.round(Math.min(1000, offsetXValue + 4) / 4) * 4"><Plus class="h-3 w-3" /></UiButton>
+                    </div>
+                  </div>
+                </div>
+                <div class="grid grid-cols-4">
+                  <div class="p-2 border-r border-border" />
+                  <div class="p-2 border-r-2 border-r-border/60" />
+                  <div class="p-2 border-r border-border flex items-center"><span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">偏移Y</span></div>
+                  <div class="p-2 flex items-center justify-center">
+                    <div class="flex items-center gap-0 w-full">
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-r-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="offsetYValue = Math.max(-1000, offsetYValue - 2)"><Minus class="h-3 w-3" /></UiButton>
+                      <Input type="number" v-model.number="offsetYValue" step="2" min="-1000" max="1000" class="h-7 w-full text-center font-mono text-[10px] rounded-none border-x-0 focus:z-10" />
+                      <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-l-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="offsetYValue = Math.min(1000, offsetYValue + 2)"><Plus class="h-3 w-3" /></UiButton>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Resize: image ↔ product -->
+          <div
+            v-show="!sectionCollapsed.settings && !sectionCollapsed.products"
+            class="h-1.5 cursor-row-resize hover:bg-primary/50 bg-border shrink-0 transition-colors active:bg-primary relative z-10"
+            @mousedown="startSectionResize('image', $event)"
+          />
+
           <!-- Product List -->
-          <section class="flex-1 border-b flex flex-col min-h-0">
-            <div class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0">
+          <section class="border-b flex flex-col min-h-0" :class="sectionCollapsed.products ? 'shrink-0' : ''" :style="sectionCollapsed.products ? {} : { height: sectionHeights.products + 'px' }">
+            <button class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0 hover:bg-muted/50 transition-colors w-full" @click="toggleSection('products')">
               <div class="flex items-center gap-2">
                 <List class="h-4 w-4 text-primary" />
                 <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.productList') }}</span>
               </div>
-              <UiButton variant="ghost" size="icon" class="h-6 w-6 text-primary hover:bg-primary/10" @click="openProductModal">
-                <Plus class="h-3.5 w-3.5" />
-              </UiButton>
-            </div>
-            <div class="flex-1 overflow-y-auto p-2">
+              <div class="flex items-center gap-1">
+                <UiButton variant="ghost" size="icon" class="h-6 w-6 text-primary hover:bg-primary/10" @click.stop="openProductModal">
+                  <Plus class="h-3.5 w-3.5" />
+                </UiButton>
+                <ChevronRight class="h-4 w-4 text-muted-foreground transition-transform duration-200" :class="{ 'rotate-90': !sectionCollapsed.products }" />
+              </div>
+            </button>
+            <div v-show="!sectionCollapsed.products" class="flex-1 overflow-y-auto p-2">
               <div class="space-y-1">
                 <div
                   v-for="product in products"
                   :key="product.id"
-                  class="group p-2 text-xs rounded cursor-pointer flex items-center gap-3 transition-all border border-transparent"
-                  :class="selectedProductId === product.id ? 'bg-primary/10 border-primary/20 shadow-sm' : 'hover:bg-muted'"
+                  class="group p-2.5 text-xs rounded-md cursor-pointer flex items-center gap-3 transition-all duration-150 border"
+                  :class="selectedProductId === product.id ? 'bg-primary/10 border-primary/30 shadow-sm' : 'border-transparent hover:bg-muted/60 hover:border-border/50 hover:shadow-sm'"
                   @click="handleSelectProduct(product.id)"
                   @dblclick="handleProductDoubleClick(product)"
                 >
                   <div
-                    class="w-8 h-8 rounded shrink-0 flex items-center justify-center transition-colors"
-                    :class="selectedProductId === product.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground/40'"
+                    class="w-8 h-8 rounded-md shrink-0 flex items-center justify-center transition-all duration-150"
+                    :class="selectedProductId === product.id ? 'bg-primary text-primary-foreground shadow-sm' : 'bg-muted/50 text-muted-foreground/50 group-hover:bg-muted group-hover:text-muted-foreground'"
                   >
                     <Package class="h-4 w-4" />
                   </div>
                   <div class="flex-1 min-w-0">
-                    <div class="font-bold truncate" :class="{ 'text-primary': selectedProductId === product.id }">{{ product.name }}</div>
+                    <div class="font-semibold truncate text-[12px] transition-colors duration-150" :class="selectedProductId === product.id ? 'text-primary' : 'group-hover:text-foreground'">{{ product.name }}</div>
+
                   </div>
-                  <div class="flex items-center gap-1">
+                  <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
                     <div v-if="selectedProductId === product.id" class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse mr-1"></div>
-                    <UiButton 
-                      variant="ghost" 
-                      size="icon" 
-                      class="h-6 w-6 text-primary hover:bg-primary/10"
+                    <UiButton
+                      variant="ghost"
+                      size="icon"
+                      class="h-6 w-6 hover:bg-primary/10"
                       @click.stop="viewProductImage(product)"
                       :title="'查看图片'"
                     >
-                      <Eye class="h-3 w-3" />
+                      <Eye class="h-3 w-3 text-muted-foreground hover:text-primary transition-colors" />
                     </UiButton>
-                    <UiButton 
-                      variant="ghost" 
-                      size="icon" 
-                      class="h-6 w-6 text-primary hover:bg-primary/10"
+                    <UiButton
+                      variant="ghost"
+                      size="icon"
+                      class="h-6 w-6 hover:bg-primary/10"
                       @click.stop="handleEditProduct(product)"
                     >
-                      <Pencil class="h-3 w-3" />
+                      <Pencil class="h-3 w-3 text-muted-foreground hover:text-primary transition-colors" />
                     </UiButton>
-                    <UiButton 
-                      variant="ghost" 
-                      size="icon" 
-                      class="h-6 w-6 text-destructive hover:bg-destructive/10"
+                    <UiButton
+                      variant="ghost"
+                      size="icon"
+                      class="h-6 w-6 hover:bg-destructive/10"
                       @click.stop="openDeleteModal(product)"
                     >
-                      <Trash2 class="h-3 w-3" />
+                      <Trash2 class="h-3 w-3 text-muted-foreground hover:text-destructive transition-colors" />
                     </UiButton>
                   </div>
                 </div>
@@ -3725,31 +3981,39 @@ onMounted(() => {
             </div>
           </section>
 
+          <!-- Resize: product ↔ prediction -->
+          <div
+            v-show="!sectionCollapsed.products && !sectionCollapsed.predictions"
+            class="h-1.5 cursor-row-resize hover:bg-primary/50 bg-border shrink-0 transition-colors active:bg-primary relative z-10"
+            @mousedown="startSectionResize('products', $event)"
+          />
+
           <!-- Prediction Results -->
-          <section class="flex-[1.5] flex flex-col min-h-0 overflow-hidden">
-            <div class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0">
+          <section class="flex flex-col min-h-0 overflow-hidden" :class="sectionCollapsed.predictions ? 'shrink-0' : ''" :style="sectionCollapsed.predictions ? {} : { height: sectionHeights.predictions + 'px' }">
+            <button class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0 hover:bg-muted/50 transition-colors w-full" @click="toggleSection('predictions')">
               <div class="flex items-center gap-2">
                 <BarChart3 class="h-4 w-4 text-primary" />
                 <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.predictionResults') }}</span>
               </div>
               <div class="flex items-center gap-1">
-                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionBoxes ? 'text-primary' : 'text-muted-foreground'" @click="showDetectionBoxes = !showDetectionBoxes" :title="showDetectionBoxes ? '隐藏标注框' : '显示标注框'">
+                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionBoxes ? 'text-primary' : 'text-muted-foreground'" @click.stop="showDetectionBoxes = !showDetectionBoxes" :title="showDetectionBoxes ? '隐藏标注框' : '显示标注框'">
                   <component :is="showDetectionBoxes ? Square : Square" class="h-3 w-3" />
                 </UiButton>
-                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionLabels ? 'text-primary' : 'text-muted-foreground'" @click="showDetectionLabels = !showDetectionLabels" :title="showDetectionLabels ? '隐藏标签' : '显示标签'">
+                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionLabels ? 'text-primary' : 'text-muted-foreground'" @click.stop="showDetectionLabels = !showDetectionLabels" :title="showDetectionLabels ? '隐藏标签' : '显示标签'">
                   <component :is="showDetectionLabels ? Eye : EyeOff" class="h-3 w-3" />
                 </UiButton>
-                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click="clearResults">
+                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click.stop="clearResults">
                   <RotateCcw class="h-3 w-3" />
                   {{ t('dashboard.clear') }}
                 </UiButton>
+                <ChevronRight class="h-4 w-4 text-muted-foreground transition-transform duration-200 ml-1" :class="{ 'rotate-90': !sectionCollapsed.predictions }" />
               </div>
-            </div>
-            <div class="flex-1 overflow-y-auto p-3 min-h-0">
+            </button>
+            <div v-show="!sectionCollapsed.predictions" class="flex-1 overflow-y-auto p-3 min-h-0">
               <!-- 目标检测结果 - 树形展示 -->
               <div v-if="detectionResults.length > 0" class="space-y-2">
                 <!-- 遍历 anomaly_type -->
-                <div v-for="(categories, anomalyType) in groupedDetectionResults" :key="anomalyType" class="border border-border rounded-lg overflow-hidden">
+                <div v-for="(categories, anomalyType) in groupedDetectionResults" :key="anomalyType" class="rounded-md overflow-hidden mb-2" :class="anomalyType === 'NG' || anomalyType === 'anomaly' ? 'bg-destructive/5 border border-destructive/20' : 'bg-muted/20 border border-border/50'">
                   <!-- 第一层: anomaly_type -->
                   <button
                     @click="treeCollapsedState['type_' + anomalyType] = !treeCollapsedState['type_' + anomalyType]"
@@ -3765,11 +4029,11 @@ onMounted(() => {
                   </button>
 
                   <!-- 第二层: category -->
-                  <div v-show="!treeCollapsedState['type_' + anomalyType]" class="border-t border-border">
-                    <div v-for="(posIds, category) in categories" :key="category" class="border-b border-border/50 last:border-b-0">
+                  <div v-show="!treeCollapsedState['type_' + anomalyType]" class="divide-y divide-border/20">
+                    <div v-for="(posIds, category) in categories" :key="category">
                       <button
                         @click="treeCollapsedState['cat_' + anomalyType + '_' + category] = !treeCollapsedState['cat_' + anomalyType + '_' + category]"
-                        class="w-full px-3 py-2 pl-8 flex items-center justify-between hover:bg-muted/30 transition-colors"
+                        class="w-full px-3 py-1.5 pl-8 flex items-center justify-between hover:bg-muted/20 transition-colors border-l-2 border-transparent hover:border-border/50"
                       >
                         <div class="flex items-center gap-2">
                           <ChevronRight
@@ -3781,11 +4045,11 @@ onMounted(() => {
                       </button>
 
                       <!-- 第三层: pos_id -->
-                      <div v-show="!treeCollapsedState['cat_' + anomalyType + '_' + category]" class="border-t border-border/30">
-                        <div v-for="(items, posId) in posIds" :key="posId" class="border-b border-border/30 last:border-b-0">
+                      <div v-show="!treeCollapsedState['cat_' + anomalyType + '_' + category]">
+                        <div v-for="(items, posId) in posIds" :key="posId">
                           <button
                             @click="treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] = !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]"
-                            class="w-full px-3 py-1.5 pl-12 flex items-center justify-between hover:bg-muted/20 transition-colors"
+                            class="w-full px-3 py-1.5 pl-12 flex items-center justify-between hover:bg-muted/10 transition-colors border-l border-border/30"
                           >
                             <div class="flex items-center gap-2">
                               <ChevronRight
@@ -3797,12 +4061,12 @@ onMounted(() => {
                           </button>
 
                           <!-- 叶子节点: 显示 anomaly_score -->
-                          <div v-show="!treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]" class="border-t border-border/20">
+                          <div v-show="!treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]" class="divide-y divide-border/20">
                             <div
                               v-for="({ item, index: itemIndex }, idx) in items"
                               :key="idx"
                               @dblclick="highlightDetectionBox(itemIndex)"
-                              class="px-3 py-1.5 pl-16 flex items-center justify-between hover:bg-muted/10 cursor-pointer group"
+                              class="px-3 py-1.5 pl-16 flex items-center justify-between hover:bg-muted/10 cursor-pointer group transition-colors border-l border-transparent hover:border-primary/20"
                             >
                               <div class="flex items-center gap-2">
                                 <button
@@ -3872,7 +4136,6 @@ onMounted(() => {
               </div>
             </div>
           </section>
-        </Tabs>
       </aside>
     </div>
 
@@ -3891,6 +4154,20 @@ onMounted(() => {
               autofocus
               @keyup.enter="confirmAddProduct"
             />
+          </div>
+          <div class="space-y-1.5">
+            <Label class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">绑定相机</Label>
+            <Select v-model="newProductCameraId">
+              <SelectTrigger class="h-9 text-xs">
+                <SelectValue placeholder="选择相机（可选）" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">不绑定相机</SelectItem>
+                <SelectItem v-for="cam in cameras" :key="cam.id" :value="cam.id">
+                  {{ cam.name }} {{ cam.isNetworkCamera ? '(网络)' : '' }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </UiCardContent>
 
@@ -4172,8 +4449,141 @@ onMounted(() => {
       </UiCard>
     </div>
 
+    <!-- Camera Manager Dialog -->
+    <Dialog :open="showCameraManagerDialog" @update:open="(v) => { if (!v && showCameraConfigModal) return; showCameraManagerDialog = v }">
+      <DialogContent class="w-[420px] h-[520px] max-h-[80vh] flex flex-col p-0 gap-0">
+        <!-- Header -->
+        <DialogHeader class="px-5 py-4 border-b shrink-0 relative">
+          <DialogTitle class="text-base">相机设置</DialogTitle>
+          <DialogDescription class="text-xs">管理相机连接与 Modbus 外设</DialogDescription>
+          <UiButton variant="ghost" size="icon" class="h-7 w-7 absolute right-3 top-3 rounded-full hover:bg-muted" @click="showCameraManagerDialog = false">
+            <X class="h-4 w-4" />
+          </UiButton>
+        </DialogHeader>
+        <!-- Tab bar -->
+        <div class="px-5 py-2 shrink-0 border-b">
+          <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 w-fit">
+            <button class="px-3 py-1.5 text-xs font-medium rounded-sm transition-colors" :class="dialogTab === 'camera' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="dialogTab = 'camera'">相机</button>
+            <button class="px-3 py-1.5 text-xs font-medium rounded-sm transition-colors" :class="dialogTab === 'modbus' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="dialogTab = 'modbus'">Modbus</button>
+          </div>
+        </div>
+
+        <!-- Camera Tab -->
+        <div v-show="dialogTab === 'camera'" class="flex-1 overflow-y-auto divide-y divide-gray-100">
+          <div
+            v-for="cam in cameras"
+            :key="cam.id"
+            class="px-5 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors"
+            :class="selectedCameraId === cam.id ? 'bg-primary/5' : ''"
+          >
+            <div :class="['w-2 h-2 rounded-full shrink-0', getCameraStatusDotClass(cam)]"></div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-1.5">
+                <span class="text-sm font-medium truncate">{{ cam.name }}</span>
+                <Wifi v-if="cam.isNetworkCamera" class="h-3 w-3 text-blue-500 shrink-0" />
+              </div>
+              <div class="text-[11px] text-muted-foreground">{{ cam.ip }}</div>
+            </div>
+            <UiButton variant="outline" size="sm" class="h-7 text-[10px] px-2 shrink-0" @click="openCameraConfig(cam)">
+              <Settings class="h-3 w-3 mr-1" />{{ t('dashboard.configure') }}
+            </UiButton>
+            <UiButton
+              variant="default"
+              size="sm"
+              class="h-7 text-[10px] px-3 shrink-0"
+              @click="selectAndBindCamera(cam)"
+            >
+              {{ selectedCameraId === cam.id ? '取消选用' : '选用' }}
+            </UiButton>
+          </div>
+          <div v-if="cameras.length === 0" class="px-5 py-12 text-center text-sm text-muted-foreground">
+            暂无相机，请先添加
+          </div>
+          <!-- 新增按钮放在列表下方 -->
+          <div class="px-5 py-2">
+            <UiButton variant="outline" class="w-full h-8 border-dashed gap-2 text-xs font-bold" @click="openCameraTypeModal">
+              <Plus class="h-3.5 w-3.5" />
+              {{ t('dashboard.add') }}
+            </UiButton>
+          </div>
+        </div>
+
+        <!-- Modbus Tab -->
+        <div v-show="dialogTab === 'modbus'" class="flex-1 overflow-y-auto divide-y divide-gray-100">
+          <!-- Modbus 设备列表项 -->
+          <div class="px-5 py-3 flex items-center gap-3">
+            <div :class="['w-2 h-2 rounded-full shrink-0', modbusStatus?.connected ? 'bg-green-500' : modbusStatus?.enabled ? 'bg-yellow-500' : 'bg-gray-400']"></div>
+            <div class="flex-1 min-w-0">
+              <span class="text-sm font-medium">Modbus</span>
+              <div class="text-[11px] text-muted-foreground">{{ modbusConfigForm.ip }}:{{ modbusConfigForm.port }}</div>
+            </div>
+            <span class="text-[11px] shrink-0" :class="modbusStatus?.connected ? 'text-green-600' : modbusStatus?.enabled ? 'text-yellow-600' : 'text-muted-foreground'">
+              {{ modbusStatus?.enabled ? (modbusStatus?.connected ? '已连接' : '未连接') : '未启用' }}
+            </span>
+            <UiButton variant="default" size="sm" class="h-7 text-[10px] px-2 shrink-0" @click="modbusConfigForm.enabled = !modbusConfigForm.enabled">
+              {{ modbusConfigForm.enabled ? '已启用' : '已禁用' }}
+            </UiButton>
+            <UiButton variant="outline" size="sm" class="h-7 text-[10px] px-2 shrink-0" @click="dialogTab = 'modbus'; showModbusDetail = !showModbusDetail">
+              <Settings class="h-3 w-3 mr-1" />配置
+            </UiButton>
+          </div>
+          <!-- Modbus 配置详情（展开） -->
+          <div v-if="showModbusDetail" class="px-5 py-4 space-y-3 bg-muted/20">
+            <div class="grid grid-cols-2 gap-2">
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground">IP 地址</Label>
+                <Input v-model="modbusConfigForm.ip" class="h-7 text-[11px] font-mono" />
+              </div>
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground">端口</Label>
+                <Input v-model.number="modbusConfigForm.port" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground">从站 ID</Label>
+                <Input v-model.number="modbusConfigForm.unitId" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground">拍照 DI</Label>
+                <Input v-model.number="modbusConfigForm.buttonChannel" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground">复位 DI</Label>
+                <Input v-model.number="modbusConfigForm.resetChannel" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+            </div>
+            <div class="grid grid-cols-4 gap-2 pt-1 border-t">
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground"><span class="inline-block w-2 h-2 bg-green-500 rounded-full mr-1"></span>绿灯</Label>
+                <Input v-model.number="modbusConfigForm.lightGreen" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground"><span class="inline-block w-2 h-2 bg-yellow-500 rounded-full mr-1"></span>黄灯</Label>
+                <Input v-model.number="modbusConfigForm.lightYellow" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground"><span class="inline-block w-2 h-2 bg-red-500 rounded-full mr-1"></span>红灯</Label>
+                <Input v-model.number="modbusConfigForm.lightRed" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+              <div class="space-y-0.5">
+                <Label class="text-[10px] text-muted-foreground"><span class="inline-block w-2 h-2 bg-amber-700 rounded-full mr-1"></span>蜂鸣器</Label>
+                <Input v-model.number="modbusConfigForm.buzzer" type="number" class="h-7 text-[11px] font-mono" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <DialogFooter class="px-5 py-3 border-t shrink-0 flex-row justify-end">
+          <UiButton class="h-8 text-xs px-6" :disabled="isSavingModbus" @click="handleConfirmDialog">
+            <Loader2 v-if="isSavingModbus" class="h-3 w-3 mr-1 animate-spin" />
+            确定
+          </UiButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     <!-- Camera Config Modal -->
-    <div v-if="showCameraConfigModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+    <div v-if="showCameraConfigModal" class="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" @click.self="showCameraConfigModal = false">
       <UiCard class="w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200">
         <UiCardHeader class="space-y-2">
           <UiCardTitle class="text-lg flex items-center gap-2">

@@ -13,10 +13,10 @@
           <Calendar class="w-4 h-4 text-muted-foreground" />
           <Select v-model="selectedDate" :open="isDateSelectOpen" @update:open="isDateSelectOpen = $event" @update:model-value="filterRois">
             <SelectTrigger class="h-8 w-[160px] text-xs">
-              <SelectValue placeholder="选择日期" />
+              <SelectValue :placeholder="t('training.roiSelector.selectDate')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部日期</SelectItem>
+              <SelectItem value="all">{{ t('training.roiSelector.allDates') }}</SelectItem>
               <SelectItem v-for="date in availableDates" :key="date" :value="date">
                 {{ date }}
               </SelectItem>
@@ -29,10 +29,10 @@
           <Tag class="w-4 h-4 text-muted-foreground" />
           <Select v-model="selectedCategory" :open="isCategorySelectOpen" @update:open="isCategorySelectOpen = $event" @update:model-value="filterRois">
             <SelectTrigger class="h-8 w-[140px] text-xs">
-              <SelectValue placeholder="选择类别" />
+              <SelectValue :placeholder="t('training.roiSelector.selectCategory')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部类别</SelectItem>
+              <SelectItem value="all">{{ t('training.roiSelector.allCategories') }}</SelectItem>
               <SelectItem v-for="cat in availableCategories" :key="cat" :value="cat">
                 {{ cat }}
               </SelectItem>
@@ -45,12 +45,12 @@
           <Filter class="w-4 h-4 text-muted-foreground" />
           <Select v-model="selectedType" :open="isTypeSelectOpen" @update:open="isTypeSelectOpen = $event" @update:model-value="filterRois">
             <SelectTrigger class="h-8 w-[120px] text-xs">
-              <SelectValue placeholder="选择类型" />
+              <SelectValue :placeholder="t('training.roiSelector.selectType')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部</SelectItem>
-              <SelectItem value="FP">误检 (FP)</SelectItem>
-              <SelectItem value="FN">漏检 (FN)</SelectItem>
+              <SelectItem value="all">{{ t('training.roiSelector.allTypes') }}</SelectItem>
+              <SelectItem value="FP">{{ t('training.retrain.fp') }}</SelectItem>
+              <SelectItem value="FN">{{ t('training.retrain.fn') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -60,16 +60,16 @@
         <!-- 统计信息 -->
         <div class="text-xs text-muted-foreground">
           <template v-if="deleteMode">
-            待删除 {{ deleteSelected.size }} / {{ filteredRois.length }}
+            {{ t('training.roiSelector.deleting') }} {{ deleteSelected.size }} / {{ filteredRois.length }}
           </template>
           <template v-else>
-            已选择 {{ localSelected.length }} / {{ filteredRois.length }}
+            {{ t('training.roiSelector.selected') }} {{ localSelected.length }} / {{ filteredRois.length }}
           </template>
         </div>
 
         <!-- 全选/取消全选 -->
         <Button variant="outline" size="sm" class="h-8 text-xs" @click="toggleSelectAll">
-          {{ isAllSelected ? '取消全选' : '全选' }}
+          {{ isAllSelected ? t('training.roiSelector.deselectAll') : t('training.roiSelector.selectAll') }}
         </Button>
 
         <!-- 删除模式切换 -->
@@ -80,7 +80,7 @@
           @click="toggleDeleteMode"
         >
           <Trash2 class="w-3 h-3 mr-1" />
-          {{ deleteMode ? '退出删除' : '删除' }}
+          {{ deleteMode ? t('training.roiSelector.exitDelete') : t('training.roiSelector.delete') }}
         </Button>
       </div>
 
@@ -93,7 +93,7 @@
             <div class="flex items-center gap-2 sticky top-0 bg-background py-2 z-10">
               <Calendar class="w-4 h-4 text-muted-foreground" />
               <h3 class="text-sm font-medium">{{ group.date }}</h3>
-              <Badge variant="secondary" class="text-xs">{{ group.rois.length }} 个</Badge>
+              <Badge variant="secondary" class="text-xs">{{ t('training.roiSelector.itemsCount', { count: group.rois.length }) }}</Badge>
               <div class="flex-1 border-b border-dashed border-muted"></div>
             </div>
 
@@ -116,7 +116,7 @@
                   />
                   <div v-else class="w-full h-full flex flex-col items-center justify-center text-muted-foreground gap-1">
                     <ImageOff class="w-8 h-8" />
-                    <span v-if="roi.filePath && roi.fileExists === false" class="text-[10px] text-destructive">文件丢失</span>
+                    <span v-if="roi.filePath && roi.fileExists === false" class="text-[10px] text-destructive">{{ t('training.roiSelector.fileMissing') }}</span>
                   </div>
 
                   <!-- 选中标记 (选择模式) -->
@@ -141,18 +141,10 @@
                   <div class="flex items-center justify-between gap-1">
                     <span class="text-[10px] truncate flex-1 min-w-0" :title="roi.category">{{ roi.category }}</span>
                     <Badge
-                      v-if="roi.roiType === 'FP'"
-                      :variant="roi.isYoloAnomaly ? 'outline' : 'destructive'"
-                      :class="roi.isYoloAnomaly ? 'text-[8px] px-0.5 py-0 h-4 leading-none shrink-0 text-amber-600 border-amber-300' : 'text-[8px] px-0.5 py-0 h-4 leading-none shrink-0'"
-                    >
-                      {{ roi.isYoloAnomaly ? 'YOLO' : 'DIN' }}
-                    </Badge>
-                    <Badge
-                      v-else
-                      :variant="roi.roiType === 'FN' ? 'warning' : 'secondary'"
+                      :variant="roi.roiType === 'FP' ? 'destructive' : roi.roiType === 'FN' ? 'warning' : 'secondary'"
                       class="text-[8px] px-0.5 py-0 h-4 leading-none shrink-0"
                     >
-                      {{ roi.roiType }}
+                      {{ roi.roiType === 'FP' ? t('training.retrain.fp') : roi.roiType === 'FN' ? t('training.retrain.fn') : roi.roiType }}
                     </Badge>
                   </div>
                   <div class="text-[10px] text-muted-foreground mt-1">
@@ -168,7 +160,7 @@
         <div v-else class="flex flex-col items-center justify-center py-12 text-muted-foreground">
           <ImageOff class="w-12 h-12 mb-4 opacity-50" />
           <p class="text-sm">{{ emptyText }}</p>
-          <p class="text-xs mt-1">尝试调整筛选条件</p>
+          <p class="text-xs mt-1">{{ t('training.roiSelector.adjustFilter') }}</p>
         </div>
       </div>
 
@@ -176,7 +168,7 @@
       <DialogFooter class="px-6 py-4 border-t gap-3">
         <template v-if="deleteMode">
           <Button variant="outline" @click="toggleDeleteMode">
-            取消
+            {{ t('common.cancel') }}
           </Button>
           <Button
             variant="destructive"
@@ -185,15 +177,15 @@
           >
             <Loader2 v-if="isDeleting" class="w-4 h-4 mr-2 animate-spin" />
             <Trash2 v-else class="w-4 h-4 mr-2" />
-            {{ isDeleting ? '删除中...' : `删除所选 (${deleteSelected.size})` }}
+            {{ isDeleting ? t('training.roiSelector.deletingBtn') : t('training.roiSelector.deletingCount', { count: deleteSelected.size }) }}
           </Button>
         </template>
         <template v-else>
           <Button variant="outline" @click="$emit('update:open', false)">
-            取消
+            {{ t('common.cancel') }}
           </Button>
           <Button @click="confirmSelection">
-            确认选择 ({{ localSelected.length }})
+            {{ t('training.roiSelector.selectedCount', { count: localSelected.length }) }}
           </Button>
         </template>
       </DialogFooter>
@@ -206,19 +198,19 @@
       <DialogHeader>
         <DialogTitle class="flex items-center gap-2 text-destructive">
           <Trash2 class="w-5 h-5" />
-          确认删除
+          {{ t('training.roiSelector.confirmDelete') }}
         </DialogTitle>
         <DialogDescription>
-          确定要删除选中的 {{ deleteSelected.size }} 个 ROI 吗？此操作不可撤销，会同时删除磁盘上的图片文件。
+          {{ t('training.roiSelector.confirmDeleteMessage', { count: deleteSelected.size }) }}
         </DialogDescription>
       </DialogHeader>
       <DialogFooter class="gap-3">
         <Button variant="outline" class="flex-1" @click="showDeleteConfirm = false" :disabled="isDeleting">
-          取消
+          {{ t('common.cancel') }}
         </Button>
         <Button variant="destructive" class="flex-1" @click="executeBatchDelete" :disabled="isDeleting">
           <Loader2 v-if="isDeleting" class="w-4 h-4 mr-2 animate-spin" />
-          确认删除
+          {{ t('training.roiSelector.deleteBtn') }}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -241,6 +233,9 @@ import SelectItem from "@/components/ui/select/SelectItem.vue";
 import SelectTrigger from "@/components/ui/select/SelectTrigger.vue";
 import SelectValue from "@/components/ui/select/SelectValue.vue";
 import { Calendar, Tag, Filter, Check, ImageOff, Trash2, X, Loader2 } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface RoiImage {
   id: string
@@ -252,7 +247,6 @@ interface RoiImage {
   createdAt: string | Date
   usedInRetrain: boolean
   fileExists?: boolean
-  isYoloAnomaly?: boolean
 }
 
 const props = defineProps<{

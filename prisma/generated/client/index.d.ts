@@ -1574,6 +1574,7 @@ export namespace Prisma {
     name: string | null
     model: string | null
     lastImagePath: string | null
+    cameraId: string | null
     schemeId: string | null
     createdAt: Date | null
     updatedAt: Date | null
@@ -1584,6 +1585,7 @@ export namespace Prisma {
     name: string | null
     model: string | null
     lastImagePath: string | null
+    cameraId: string | null
     schemeId: string | null
     createdAt: Date | null
     updatedAt: Date | null
@@ -1594,6 +1596,7 @@ export namespace Prisma {
     name: number
     model: number
     lastImagePath: number
+    cameraId: number
     schemeId: number
     createdAt: number
     updatedAt: number
@@ -1606,6 +1609,7 @@ export namespace Prisma {
     name?: true
     model?: true
     lastImagePath?: true
+    cameraId?: true
     schemeId?: true
     createdAt?: true
     updatedAt?: true
@@ -1616,6 +1620,7 @@ export namespace Prisma {
     name?: true
     model?: true
     lastImagePath?: true
+    cameraId?: true
     schemeId?: true
     createdAt?: true
     updatedAt?: true
@@ -1626,6 +1631,7 @@ export namespace Prisma {
     name?: true
     model?: true
     lastImagePath?: true
+    cameraId?: true
     schemeId?: true
     createdAt?: true
     updatedAt?: true
@@ -1709,6 +1715,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath: string | null
+    cameraId: string | null
     schemeId: string | null
     createdAt: Date
     updatedAt: Date
@@ -1736,6 +1743,7 @@ export namespace Prisma {
     name?: boolean
     model?: boolean
     lastImagePath?: boolean
+    cameraId?: boolean
     schemeId?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -1749,6 +1757,7 @@ export namespace Prisma {
     name?: boolean
     model?: boolean
     lastImagePath?: boolean
+    cameraId?: boolean
     schemeId?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -1760,6 +1769,7 @@ export namespace Prisma {
     name?: boolean
     model?: boolean
     lastImagePath?: boolean
+    cameraId?: boolean
     schemeId?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -1771,12 +1781,13 @@ export namespace Prisma {
     name?: boolean
     model?: boolean
     lastImagePath?: boolean
+    cameraId?: boolean
     schemeId?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }
 
-  export type ProductOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "name" | "model" | "lastImagePath" | "schemeId" | "createdAt" | "updatedAt", ExtArgs["result"]["product"]>
+  export type ProductOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "name" | "model" | "lastImagePath" | "cameraId" | "schemeId" | "createdAt" | "updatedAt", ExtArgs["result"]["product"]>
   export type ProductInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     scheme?: boolean | Product$schemeArgs<ExtArgs>
     annotations?: boolean | Product$annotationsArgs<ExtArgs>
@@ -1800,6 +1811,7 @@ export namespace Prisma {
       name: string
       model: string
       lastImagePath: string | null
+      cameraId: string | null
       schemeId: string | null
       createdAt: Date
       updatedAt: Date
@@ -2232,6 +2244,7 @@ export namespace Prisma {
     readonly name: FieldRef<"Product", 'String'>
     readonly model: FieldRef<"Product", 'String'>
     readonly lastImagePath: FieldRef<"Product", 'String'>
+    readonly cameraId: FieldRef<"Product", 'String'>
     readonly schemeId: FieldRef<"Product", 'String'>
     readonly createdAt: FieldRef<"Product", 'DateTime'>
     readonly updatedAt: FieldRef<"Product", 'DateTime'>
@@ -10720,6 +10733,7 @@ export namespace Prisma {
     name: 'name',
     model: 'model',
     lastImagePath: 'lastImagePath',
+    cameraId: 'cameraId',
     schemeId: 'schemeId',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
@@ -10929,6 +10943,7 @@ export namespace Prisma {
     name?: StringFilter<"Product"> | string
     model?: StringFilter<"Product"> | string
     lastImagePath?: StringNullableFilter<"Product"> | string | null
+    cameraId?: StringNullableFilter<"Product"> | string | null
     schemeId?: StringNullableFilter<"Product"> | string | null
     createdAt?: DateTimeFilter<"Product"> | Date | string
     updatedAt?: DateTimeFilter<"Product"> | Date | string
@@ -10941,6 +10956,7 @@ export namespace Prisma {
     name?: SortOrder
     model?: SortOrder
     lastImagePath?: SortOrderInput | SortOrder
+    cameraId?: SortOrderInput | SortOrder
     schemeId?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -10956,6 +10972,7 @@ export namespace Prisma {
     name?: StringFilter<"Product"> | string
     model?: StringFilter<"Product"> | string
     lastImagePath?: StringNullableFilter<"Product"> | string | null
+    cameraId?: StringNullableFilter<"Product"> | string | null
     schemeId?: StringNullableFilter<"Product"> | string | null
     createdAt?: DateTimeFilter<"Product"> | Date | string
     updatedAt?: DateTimeFilter<"Product"> | Date | string
@@ -10968,6 +10985,7 @@ export namespace Prisma {
     name?: SortOrder
     model?: SortOrder
     lastImagePath?: SortOrderInput | SortOrder
+    cameraId?: SortOrderInput | SortOrder
     schemeId?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -10984,6 +11002,7 @@ export namespace Prisma {
     name?: StringWithAggregatesFilter<"Product"> | string
     model?: StringWithAggregatesFilter<"Product"> | string
     lastImagePath?: StringNullableWithAggregatesFilter<"Product"> | string | null
+    cameraId?: StringNullableWithAggregatesFilter<"Product"> | string | null
     schemeId?: StringNullableWithAggregatesFilter<"Product"> | string | null
     createdAt?: DateTimeWithAggregatesFilter<"Product"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"Product"> | Date | string
@@ -11658,6 +11677,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     scheme?: AnnotationSchemeCreateNestedOneWithoutProductsInput
@@ -11669,6 +11689,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     schemeId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -11680,6 +11701,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     scheme?: AnnotationSchemeUpdateOneWithoutProductsNestedInput
@@ -11691,6 +11713,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     schemeId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -11702,6 +11725,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     schemeId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -11712,6 +11736,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -11721,6 +11746,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     schemeId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -12584,6 +12610,7 @@ export namespace Prisma {
     name?: SortOrder
     model?: SortOrder
     lastImagePath?: SortOrder
+    cameraId?: SortOrder
     schemeId?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -12594,6 +12621,7 @@ export namespace Prisma {
     name?: SortOrder
     model?: SortOrder
     lastImagePath?: SortOrder
+    cameraId?: SortOrder
     schemeId?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -12604,6 +12632,7 @@ export namespace Prisma {
     name?: SortOrder
     model?: SortOrder
     lastImagePath?: SortOrder
+    cameraId?: SortOrder
     schemeId?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -13753,6 +13782,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     annotations?: AnnotationCreateNestedManyWithoutProductInput
@@ -13763,6 +13793,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     annotations?: AnnotationUncheckedCreateNestedManyWithoutProductInput
@@ -13801,6 +13832,7 @@ export namespace Prisma {
     name?: StringFilter<"Product"> | string
     model?: StringFilter<"Product"> | string
     lastImagePath?: StringNullableFilter<"Product"> | string | null
+    cameraId?: StringNullableFilter<"Product"> | string | null
     schemeId?: StringNullableFilter<"Product"> | string | null
     createdAt?: DateTimeFilter<"Product"> | Date | string
     updatedAt?: DateTimeFilter<"Product"> | Date | string
@@ -13811,6 +13843,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     scheme?: AnnotationSchemeCreateNestedOneWithoutProductsInput
@@ -13821,6 +13854,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     schemeId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -13847,6 +13881,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     scheme?: AnnotationSchemeUpdateOneWithoutProductsNestedInput
@@ -13857,6 +13892,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     schemeId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -13899,6 +13935,7 @@ export namespace Prisma {
     name: string
     model: string
     lastImagePath?: string | null
+    cameraId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -13908,6 +13945,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     annotations?: AnnotationUpdateManyWithoutProductNestedInput
@@ -13918,6 +13956,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     annotations?: AnnotationUncheckedUpdateManyWithoutProductNestedInput
@@ -13928,6 +13967,7 @@ export namespace Prisma {
     name?: StringFieldUpdateOperationsInput | string
     model?: StringFieldUpdateOperationsInput | string
     lastImagePath?: NullableStringFieldUpdateOperationsInput | string | null
+    cameraId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }

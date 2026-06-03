@@ -253,19 +253,27 @@ class ButtonMonitor {
     this.lastResetState = false;
     this.errorState = false;
     this.running = false;
+    this.connected = false;
   }
 
-  async connect() {
+  async connect(timeoutMs = 5000) {
     try {
-      await this.client.connectTCP(this.ip, { port: this.port });
-      await this.client.setID(this.unit);
-      // TCP手握成功不代表有真实 Modbus 设备，通过实际读取验证
-      await this.client.readDiscreteInputs(modbusConfig.buttonChannel, 1);
+      const connectPromise = (async () => {
+        await this.client.connectTCP(this.ip, { port: this.port });
+        await this.client.setID(this.unit);
+        await this.client.readDiscreteInputs(modbusConfig.buttonChannel, 1);
+      })();
+      await Promise.race([
+        connectPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('连接超时')), timeoutMs))
+      ]);
       log.info(`[ButtonMonitor] Modbus 已连接并验证: ${this.ip}:${this.port}`);
+      this.connected = true;
       return true;
     } catch (err) {
       log.error(`[ButtonMonitor] Modbus 连接/验证失败: ${err.message}`);
       try { this.client.close(); } catch (_) {}
+      this.connected = false;
       return false;
     }
   }
@@ -300,14 +308,7 @@ class ButtonMonitor {
     }
   }
 
-  async run(pollInterval = 100) {
-    if (!this.client.isOpen) {
-      if (!(await this.connect())) {
-        log.error('[ButtonMonitor] 无法连接 Modbus 模块，按钮监控未启动');
-        return;
-      }
-    }
-
+  async pollLoop(pollInterval = 100) {
     this.running = true;
     await this.lightOn(modbusConfig.lightGreen);  // 绿灯：系统就绪
     log.info(`[ButtonMonitor] 开始监控按钮（拍照: DI${modbusConfig.buttonChannel}, 复位: DI${modbusConfig.resetChannel}），轮询间隔 ${pollInterval}ms`);
@@ -403,6 +404,7 @@ class ButtonMonitor {
 
   async stop() {
     this.running = false;
+    this.connected = false;
     try {
       await this.allOff();
       this.client.close();
@@ -484,11 +486,40 @@ app.whenReady().then(async () => {
       return;
     }
     buttonMonitor = new ButtonMonitor(modbusConfig.ip, modbusConfig.port, modbusConfig.unitId);
-    buttonMonitor.run(100).catch(err => log.error('[ButtonMonitor] 启动异常:', err));
+    // 先尝试连接，等待结果
+    const connected = await buttonMonitor.connect();
+    if (connected) {
+      // 连接成功，启动后台轮询
+      buttonMonitor.running = true;
+      buttonMonitor.pollLoop(100).catch(err => log.error('[ButtonMonitor] 轮询异常:', err));
+      log.info('[ButtonMonitor] Modbus 连接成功，监控已启动');
+    } else {
+      log.error('[ButtonMonitor] Modbus 连接失败，监控未启动');
+    }
   }
 
   // 初始启动
   startButtonMonitor();
+
+  ipcMain.handle('modbus:status', () => {
+    return {
+      enabled: modbusConfig.enabled ?? false,
+      ip: modbusConfig.ip,
+      port: modbusConfig.port,
+      connected: buttonMonitor ? buttonMonitor.connected : false
+    };
+  });
+
+  ipcMain.handle('modbus:stop', async () => {
+    await stopButtonMonitor();
+    return { success: true };
+  });
+
+  ipcMain.handle('modbus:restart', async () => {
+    await startButtonMonitor();
+    const connected = buttonMonitor ? buttonMonitor.connected : false;
+    return { success: true, connected };
+  });
 
   ipcMain.handle('settings:get', () => {
     return appSettings;
@@ -523,11 +554,11 @@ app.whenReady().then(async () => {
         imageSettings: updated.imageSettings ? JSON.parse(updated.imageSettings) : { exposure: 67, gain: 1.2 },
         modbusSettings: updated.modbusSettings ? JSON.parse(updated.modbusSettings) : { ...modbusConfig }
       };
-      // 应用新的 Modbus 配置并重启监控（如需要）
+      // 应用新的 Modbus 配置
       if (appSettings.modbusSettings) {
         Object.assign(modbusConfig, appSettings.modbusSettings);
       }
-      startButtonMonitor();
+      // 不在此处等待连接，由 modbus:restart IPC 显式控制
       // 重新初始化相机服务，使用新的后端URL
       await initCameraService(appSettings.backendUrl);
       return true;
@@ -621,6 +652,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('db:add-product', async (event, product) => {
     return await prisma.product.create({
       data: product
+    });
+  });
+
+  ipcMain.handle('db:update-product', async (event, { id, data }) => {
+    return await prisma.product.update({
+      where: { id },
+      data
     });
   });
 
@@ -1159,8 +1197,6 @@ app.whenReady().then(async () => {
               category: category,
               modelIsAnomaly: img.modelIsAnomaly ?? img.isAnomaly,
               userIsAnomaly: img.userIsAnomaly ?? img.isAnomaly,
-              isYoloAnomaly: img.isYoloAnomaly ?? false,
-              dinomalyScore: img.dinomalyScore ?? null,
               roiType: roiType,
               filePath: filePath,
               fileName: fileName,
@@ -1229,71 +1265,62 @@ app.whenReady().then(async () => {
   // 获取可用的ROI列表
   ipcMain.handle('storage:get-available-rois', async (event, { productId, baseTaskUuid, roiType }) => {
     try {
-      // 获取基础模型的重训记录，获取其任务链和generation
-      const baseTask = await prisma.trainingRecord.findFirst({
-        where: { 
-          taskUuid: baseTaskUuid,
-          isRetrain: true
-        }
-      });
-      
-      // 基础模型的generation和任务链
-      const baseGeneration = baseTask?.generation ?? 0;
-      const baseTaskChain = baseTask?.taskChain || '';
-      
-      // 构建祖先任务列表（包括基础模型本身）
-      // taskChain 格式: "taskuuid1,taskuuid2,taskuuid3"
-      const ancestorTasks = baseTaskChain 
-        ? [...baseTaskChain.split(','), baseTaskUuid]
-        : [baseTaskUuid];
+      const fs = require('fs');
 
-      // 查询条件：
-      // 1. 属于当前产品
-      // 2. generation <= 基础模型的generation（即该版本之前产生的ROI）
+      // 构建基础查询条件
       const whereClause = {
         productId: String(productId),
-        generation: {
-          lte: baseGeneration  // 小于等于基础模型的generation
-        }
       };
 
       if (roiType) {
         whereClause.roiType = roiType;
       }
 
-      // 获取所有候选ROI
+      // 如果指定了 baseTaskUuid，进行 generation 和祖先任务过滤
+      if (baseTaskUuid) {
+        const baseTask = await prisma.trainingRecord.findFirst({
+          where: {
+            taskUuid: baseTaskUuid,
+            isRetrain: true
+          }
+        });
+
+        const baseGeneration = baseTask?.generation ?? 0;
+        const baseTaskChain = baseTask?.taskChain || '';
+
+        const ancestorTasks = baseTaskChain
+          ? [...baseTaskChain.split(','), baseTaskUuid]
+          : [baseTaskUuid];
+
+        whereClause.generation = { lte: baseGeneration };
+
+        const allRois = await prisma.roiImage.findMany({
+          where: whereClause,
+          orderBy: { createdAt: 'desc' }
+        });
+
+        const availableRois = allRois.filter(roi => {
+          if (!roi.usedInRetrain || !roi.usedTaskUuid) return true;
+          if (roi.usedTaskUuid === baseTaskUuid) return false;
+          if (ancestorTasks.includes(roi.usedTaskUuid)) return true;
+          return true;
+        });
+
+        const roisWithFileCheck = availableRois.map(roi => ({
+          ...roi,
+          fileExists: fs.existsSync(roi.filePath)
+        }));
+
+        return { success: true, rois: roisWithFileCheck };
+      }
+
+      // 未指定 baseTaskUuid：返回该 product 下所有 ROI，不做 generation 过滤
       const allRois = await prisma.roiImage.findMany({
         where: whereClause,
         orderBy: { createdAt: 'desc' }
       });
 
-      const fs = require('fs');
-
-      // 过滤：排除被当前版本（baseTaskUuid）使用过的ROI
-      // 但保留被祖先版本（taskChain中的任务）使用过的ROI
-      const availableRois = allRois.filter(roi => {
-        if (!roi.usedInRetrain || !roi.usedTaskUuid) {
-          // 未被任何重训使用过的ROI，可用
-          return true;
-        }
-
-        // 检查这个ROI被哪个任务使用过
-        // 如果被当前选择的基础模型使用过，则不可用
-        if (roi.usedTaskUuid === baseTaskUuid) {
-          return false;
-        }
-
-        // 如果被祖先任务使用过，仍然可用（因为是之前版本使用的）
-        if (ancestorTasks.includes(roi.usedTaskUuid)) {
-          return true;
-        }
-
-        // 被其他分支的任务使用过，也显示出来（用户可以选择是否使用）
-        return true;
-      });
-
-      // 检查文件是否存在，添加 fileExists 标记
-      const roisWithFileCheck = availableRois.map(roi => ({
+      const roisWithFileCheck = allRois.map(roi => ({
         ...roi,
         fileExists: fs.existsSync(roi.filePath)
       }));
@@ -1378,11 +1405,9 @@ app.whenReady().then(async () => {
           labelName: firstPathId,  // 使用 pathId 作为 labelName
           modelName: `retrain_${data.newTaskUuid}`,
           config: JSON.stringify({
-            encoderName: data.encoderName,
-            decoderDepth: data.decoderDepth,
-            epochs: data.epochs,
-            batchSize: data.batchSize,
-            freezeEncoder: data.freezeEncoder
+            yoloEpochs: data.yoloEpochs,
+            yoloBatch: data.yoloBatch,
+            yoloImgsz: data.yoloImgsz
           }),
           status: 'pending',
           isRetrain: true,
@@ -1392,11 +1417,9 @@ app.whenReady().then(async () => {
           generation: data.generation || 1,
           fpCount: data.fpCount || 0,
           fnCount: data.fnCount || 0,
-          yoloFpCount: data.yoloFpCount || 0,
-          encoderName: data.encoderName,
-          decoderDepth: data.decoderDepth,
-          epochs: data.epochs,
-          freezeEncoder: data.freezeEncoder
+          yoloEpochs: data.yoloEpochs,
+          yoloBatch: data.yoloBatch,
+          yoloImgsz: data.yoloImgsz
         }
       });
 

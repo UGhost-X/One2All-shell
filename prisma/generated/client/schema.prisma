@@ -17,6 +17,7 @@ model Product {
   name          String
   model         String
   lastImagePath String?
+  cameraId      String?
   scheme        AnnotationScheme? @relation(fields: [schemeId], references: [id])
   schemeId      String?
   annotations   Annotation[]

@@ -3,7 +3,7 @@ import { computed, ref, onMounted, onUnmounted, inject, watch, onActivated } fro
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
-import { Play, Square, Trash2, RefreshCw, Box, Loader2, FolderOpen, CheckCircle, XCircle, FileText, X } from 'lucide-vue-next'
+import { Play, Square, RefreshCw, Box, Loader2, FolderOpen, CheckCircle, XCircle, FileText, X } from 'lucide-vue-next'
 import Switch from '@/components/ui/switch/Switch.vue'
 
 import UiButton from '@/components/ui/button/Button.vue'
@@ -453,12 +453,9 @@ const deleteService = async (serviceId: string) => {
 
     if (res.ok || res.status === 404) {
       toast?.success(t('deploy.messages.deleteSuccess'))
-      const serviceIndex = services.value.findIndex(s => s.service_id === serviceId)
-      if (serviceIndex > -1) {
-        services.value.splice(serviceIndex, 1)
-      }
       removeServiceLogPolling(serviceId)
       delete serviceLogs.value[serviceId]
+      await loadServices()
       const hasServicesToCheck = services.value.some(s =>
         s.status !== 'running' && s.status !== 'stopped'
       )
@@ -471,12 +468,7 @@ const deleteService = async (serviceId: string) => {
     }
   } catch (err) {
     console.error('Failed to delete service:', err)
-    const serviceIndex = services.value.findIndex(s => s.service_id === serviceId)
-    if (serviceIndex > -1) {
-      services.value.splice(serviceIndex, 1)
-    }
-    removeServiceLogPolling(serviceId)
-    delete serviceLogs.value[serviceId]
+    toast?.error(t('deploy.messages.deleteFailed'))
   } finally {
     deletingId.value = null
   }
@@ -787,25 +779,14 @@ watch(() => route.query.productId, async (newProductId) => {
                     <template v-else>
                       <UiButton
                         size="sm"
-                        variant="outline"
-                        class="h-7 text-xs px-2"
-                        @click="stopService(getServiceForUuid(model.task_uuid).service_id)"
-                        :disabled="stoppingId === getServiceForUuid(model.task_uuid).service_id"
-                      >
-                        <Loader2 v-if="stoppingId === getServiceForUuid(model.task_uuid).service_id" class="h-3 w-3 mr-1 animate-spin" />
-                        <Square v-else class="h-3 w-3 mr-1" />
-                        {{ t('deploy.stopService') }}
-                      </UiButton>
-                      <UiButton
-                        size="sm"
                         variant="destructive"
                         class="h-7 text-xs px-2"
                         @click="deleteService(getServiceForUuid(model.task_uuid).service_id)"
                         :disabled="deletingId === getServiceForUuid(model.task_uuid).service_id"
                       >
                         <Loader2 v-if="deletingId === getServiceForUuid(model.task_uuid).service_id" class="h-3 w-3 mr-1 animate-spin" />
-                        <Trash2 v-else class="h-3 w-3 mr-1" />
-                        {{ t('deploy.deleteService') }}
+                        <Square v-else class="h-3 w-3 mr-1" />
+                        {{ t('deploy.stopService') }}
                       </UiButton>
                     </template>
                   </div>

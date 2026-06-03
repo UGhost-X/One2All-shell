@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Database
   getProducts: () => ipcRenderer.invoke('db:get-products'),
   addProduct: (product) => ipcRenderer.invoke('db:add-product', product),
+  updateProduct: (id, data) => ipcRenderer.invoke('db:update-product', { id, data }),
   deleteProduct: (id) => ipcRenderer.invoke('db:delete-product', id),
   getCameras: () => ipcRenderer.invoke('db:get-cameras'),
   addCamera: (camera) => ipcRenderer.invoke('db:add-camera', camera),
@@ -28,6 +29,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveAnnotations: (productId, imagePath, data) => ipcRenderer.invoke('db:save-annotations', { productId, imagePath, data }),
   openFile: () => ipcRenderer.invoke('dialog:open-file'),
   selectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
+  getModbusStatus: () => ipcRenderer.invoke('modbus:status'),
+  stopModbus: () => ipcRenderer.invoke('modbus:stop'),
+  restartModbus: () => ipcRenderer.invoke('modbus:restart'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
   saveImage: (data) => ipcRenderer.invoke('storage:save-image', data),
