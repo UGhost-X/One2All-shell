@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, XCircle, Camera, Box, SkipForward } from 'lucide-vue-next'
+import { CheckCircle2, XCircle, Camera, Box, SkipForward, AlertCircle } from 'lucide-vue-next'
 
 interface StepResultSummary {
   stepIndex: number
@@ -11,6 +11,7 @@ interface StepResultSummary {
   anomalyCount: number
   errorMessage?: string
   inferenceSkipped?: boolean
+  hasDetections?: boolean
 }
 
 defineProps<{
@@ -34,6 +35,7 @@ const emit = defineEmits<{
       >
         <!-- 状态图标 -->
         <SkipForward v-if="r.inferenceSkipped" class="h-4 w-4 text-yellow-500 shrink-0" />
+        <AlertCircle v-else-if="r.status === 'completed' && !r.hasDetections" class="h-4 w-4 text-yellow-500 shrink-0" />
         <CheckCircle2 v-else-if="r.status === 'completed' && !r.isAnomaly" class="h-4 w-4 text-green-500 shrink-0" />
         <AlertTriangle v-else-if="r.status === 'completed' && r.isAnomaly" class="h-4 w-4 text-red-500 shrink-0" />
         <XCircle v-else-if="r.status === 'failed'" class="h-4 w-4 text-red-500 shrink-0" />
@@ -54,6 +56,9 @@ const emit = defineEmits<{
             </span>
             <span v-if="r.inferenceSkipped" class="text-yellow-600">
               推理已跳过
+            </span>
+            <span v-else-if="r.status === 'completed' && !r.hasDetections" class="text-yellow-600">
+              未检出工件
             </span>
             <span v-else-if="r.status === 'completed'">
               {{ r.isAnomaly ? `检出 ${r.anomalyCount} 个缺陷` : '无异常' }}

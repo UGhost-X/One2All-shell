@@ -279,16 +279,19 @@ const loadTaskSnapshot = async (taskIdOrUuid: string) => {
       if (monitorTaskId.value === storageKey || monitorTaskId.value === 'all') {
         monitorLogs.value = groupLogs.value[storageKey]
       }
+      // 清除 logs 避免 applyMonitorPayload 重复 concat
+      delete data.logs
+      delete data.new_logs
     }
-    
+
     if (data.metrics && Array.isArray(data.metrics)) {
       mergeMetricPoints(storageKey, data.metrics, 'replace')
     }
-    
+
     if (data.eval_metrics && Array.isArray(data.eval_metrics)) {
       groupEvalMetrics.value[storageKey] = data.eval_metrics
     }
-    
+
     applyMonitorPayload(storageKey, data)
   } catch {
   }

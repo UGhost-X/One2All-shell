@@ -4421,7 +4421,8 @@ onMounted(() => {
                     isAnomaly: r.isAnomaly,
                     anomalyCount: r.anomalyCount,
                     errorMessage: r.errorMessage,
-                    inferenceSkipped: r.inferenceSkipped
+                    inferenceSkipped: r.inferenceSkipped,
+                    hasDetections: r.hasDetections
                   }))"
                   @select-step="viewStepImage"
                 />

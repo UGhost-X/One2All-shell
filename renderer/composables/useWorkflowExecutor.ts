@@ -50,6 +50,8 @@ export interface StepResult {
   duration?: number
   /** 推理服务未启动/不可用，跳过推理 */
   inferenceSkipped?: boolean
+  /** 是否检测到了工件（detections.length > 0） */
+  hasDetections?: boolean
 }
 
 export function useWorkflowExecutor() {
@@ -419,8 +421,9 @@ export function useWorkflowExecutor() {
         workflowStepIndex: stepIndex,
         workflowStepName: step.product?.name || `步骤 ${stepIndex + 1}`
       }))
-      result.isAnomaly = detections.some(d => d.isAnomaly)
-      result.anomalyCount = detections.filter(d => d.isAnomaly).length
+      result.hasDetections = detections.length > 0
+      result.isAnomaly = !result.hasDetections || detections.some(d => d.isAnomaly)
+      result.anomalyCount = !result.hasDetections ? 0 : detections.filter(d => d.isAnomaly).length
       result.status = 'completed'
     } catch (err: any) {
       if (err.name === 'AbortError') {
