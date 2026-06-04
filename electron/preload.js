@@ -59,6 +59,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateRetrainTask: (data) => ipcRenderer.invoke('storage:update-retrain-task', data),
   getRetrainTasks: (data) => ipcRenderer.invoke('storage:get-retrain-tasks', data),
   getRetrainTask: (data) => ipcRenderer.invoke('storage:get-retrain-task', data),
+  // Workflow Management
+  listWorkflows: () => ipcRenderer.invoke('workflow:list'),
+  getWorkflow: (id) => ipcRenderer.invoke('workflow:get', id),
+  createWorkflow: (data) => ipcRenderer.invoke('workflow:create', data),
+  updateWorkflow: (data) => ipcRenderer.invoke('workflow:update', data),
+  deleteWorkflow: (id) => ipcRenderer.invoke('workflow:delete', id),
+  saveStepResult: (data) => ipcRenderer.invoke('workflow:save-step-result', data),
+  getExecution: (id) => ipcRenderer.invoke('workflow:get-execution', id),
+  listExecutions: (workflowId) => ipcRenderer.invoke('workflow:list-executions', workflowId),
+  createExecution: (data) => ipcRenderer.invoke('workflow:create-execution', data),
+  updateExecution: (data) => ipcRenderer.invoke('workflow:update-execution', data),
 });
 
 window.addEventListener('DOMContentLoaded', () => {

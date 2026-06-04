@@ -242,6 +242,48 @@ exports.Prisma.RoiImageScalarFieldEnum = {
   updatedAt: 'updatedAt'
 };
 
+exports.Prisma.WorkflowScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  description: 'description',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+};
+
+exports.Prisma.WorkflowStepScalarFieldEnum = {
+  id: 'id',
+  workflowId: 'workflowId',
+  orderIndex: 'orderIndex',
+  cameraId: 'cameraId',
+  productId: 'productId',
+  timeoutMs: 'timeoutMs'
+};
+
+exports.Prisma.WorkflowExecutionScalarFieldEnum = {
+  id: 'id',
+  workflowId: 'workflowId',
+  status: 'status',
+  startedAt: 'startedAt',
+  completedAt: 'completedAt'
+};
+
+exports.Prisma.WorkflowStepResultScalarFieldEnum = {
+  id: 'id',
+  executionId: 'executionId',
+  stepId: 'stepId',
+  stepOrderIndex: 'stepOrderIndex',
+  cameraId: 'cameraId',
+  productId: 'productId',
+  status: 'status',
+  imagePath: 'imagePath',
+  inferenceResult: 'inferenceResult',
+  isAnomaly: 'isAnomaly',
+  anomalyCount: 'anomalyCount',
+  errorMessage: 'errorMessage',
+  startedAt: 'startedAt',
+  completedAt: 'completedAt'
+};
+
 exports.Prisma.SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -261,7 +303,11 @@ exports.Prisma.ModelName = {
   Camera: 'Camera',
   TrainingRecord: 'TrainingRecord',
   AppSettings: 'AppSettings',
-  RoiImage: 'RoiImage'
+  RoiImage: 'RoiImage',
+  Workflow: 'Workflow',
+  WorkflowStep: 'WorkflowStep',
+  WorkflowExecution: 'WorkflowExecution',
+  WorkflowStepResult: 'WorkflowStepResult'
 };
 
 /**

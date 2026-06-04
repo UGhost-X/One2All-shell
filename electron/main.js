@@ -1855,6 +1855,139 @@ app.whenReady().then(async () => {
   // 所有 IPC handler 注册完成后，初始化相机服务
   initCameraService(appSettings.backendUrl);
 
+  // ========== 识别工作流 IPC handlers ==========
+
+  // 查询所有工作流（含步骤）
+  ipcMain.handle('workflow:list', async () => {
+    return await prisma.workflow.findMany({
+      include: { steps: { orderBy: { orderIndex: 'asc' } } },
+      orderBy: { updatedAt: 'desc' }
+    });
+  });
+
+  // 查询单个工作流
+  ipcMain.handle('workflow:get', async (event, id) => {
+    return await prisma.workflow.findUnique({
+      where: { id },
+      include: { steps: { orderBy: { orderIndex: 'asc' } } }
+    });
+  });
+
+  // 创建工作流 + 步骤
+  ipcMain.handle('workflow:create', async (event, { name, description, steps }) => {
+    const workflow = await prisma.workflow.create({
+      data: {
+        name,
+        description,
+        steps: {
+          create: steps.map((s) => ({
+            orderIndex: s.orderIndex,
+            cameraId: s.cameraId || null,
+            productId: s.productId || null,
+            timeoutMs: s.timeoutMs || 30000
+          }))
+        }
+      },
+      include: { steps: { orderBy: { orderIndex: 'asc' } } }
+    });
+    return workflow;
+  });
+
+  // 更新工作流（删旧步骤 + 建新步骤）
+  ipcMain.handle('workflow:update', async (event, { id, name, description, steps }) => {
+    // 删除旧步骤
+    await prisma.workflowStep.deleteMany({ where: { workflowId: id } });
+    // 更新工作流并创建新步骤
+    const workflow = await prisma.workflow.update({
+      where: { id },
+      data: {
+        name,
+        description,
+        steps: {
+          create: steps.map((s) => ({
+            orderIndex: s.orderIndex,
+            cameraId: s.cameraId || null,
+            productId: s.productId || null,
+            timeoutMs: s.timeoutMs || 30000
+          }))
+        }
+      },
+      include: { steps: { orderBy: { orderIndex: 'asc' } } }
+    });
+    return workflow;
+  });
+
+  // 删除工作流
+  ipcMain.handle('workflow:delete', async (event, id) => {
+    await prisma.workflow.delete({ where: { id } });
+    return { success: true };
+  });
+
+  // 保存步骤执行结果
+  ipcMain.handle('workflow:save-step-result', async (event, data) => {
+    return await prisma.workflowStepResult.create({
+      data: {
+        executionId: data.executionId,
+        stepId: data.stepId,
+        stepOrderIndex: data.stepOrderIndex,
+        cameraId: data.cameraId || null,
+        productId: data.productId || null,
+        status: data.status || 'pending',
+        imagePath: data.imagePath || null,
+        inferenceResult: data.inferenceResult || null,
+        isAnomaly: data.isAnomaly ?? null,
+        anomalyCount: data.anomalyCount ?? null,
+        errorMessage: data.errorMessage || null,
+        startedAt: data.startedAt ? new Date(data.startedAt) : null,
+        completedAt: data.completedAt ? new Date(data.completedAt) : null
+      }
+    });
+  });
+
+  // 查询单次执行记录（含步骤结果）
+  ipcMain.handle('workflow:get-execution', async (event, id) => {
+    return await prisma.workflowExecution.findUnique({
+      where: { id },
+      include: {
+        workflow: true,
+        stepResults: { orderBy: { stepOrderIndex: 'asc' } }
+      }
+    });
+  });
+
+  // 列出工作流的执行历史
+  ipcMain.handle('workflow:list-executions', async (event, workflowId) => {
+    return await prisma.workflowExecution.findMany({
+      where: { workflowId },
+      include: {
+        stepResults: { orderBy: { stepOrderIndex: 'asc' } }
+      },
+      orderBy: { startedAt: 'desc' }
+    });
+  });
+
+  // ========== 工作流执行时创建 execution 记录 ==========
+  ipcMain.handle('workflow:create-execution', async (event, { workflowId }) => {
+    return await prisma.workflowExecution.create({
+      data: {
+        workflowId,
+        status: 'running'
+      }
+    });
+  });
+
+  // 更新执行记录状态
+  ipcMain.handle('workflow:update-execution', async (event, { id, status }) => {
+    const data = { status };
+    if (status === 'completed' || status === 'failed') {
+      data.completedAt = new Date();
+    }
+    return await prisma.workflowExecution.update({
+      where: { id },
+      data
+    });
+  });
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow(staticPort);
   });

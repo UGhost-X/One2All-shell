@@ -61,8 +61,91 @@ declare global {
       updateRetrainTask: (data: { taskId: string; status: string; message?: string }) => Promise<{ success: boolean; task?: TrainingRecord; error?: string }>
       getRetrainTasks: (data: { productId?: string; baseTaskUuid?: string }) => Promise<{ success: boolean; tasks?: TrainingRecord[]; error?: string }>
       getRetrainTask: (data: { taskUuid: string }) => Promise<{ success: boolean; task?: TrainingRecord; error?: string }>
+      // Workflow Management
+      listWorkflows: () => Promise<Workflow[]>
+      getWorkflow: (id: string) => Promise<Workflow | null>
+      createWorkflow: (data: { name: string; description?: string; steps: WorkflowStepInput[] }) => Promise<Workflow>
+      updateWorkflow: (data: { id: string; name: string; description?: string; steps: WorkflowStepInput[] }) => Promise<Workflow>
+      deleteWorkflow: (id: string) => Promise<{ success: boolean }>
+      saveStepResult: (data: WorkflowStepResultInput) => Promise<WorkflowStepResult>
+      getExecution: (id: string) => Promise<WorkflowExecution | null>
+      listExecutions: (workflowId: string) => Promise<WorkflowExecution[]>
+      createExecution: (data: { workflowId: string }) => Promise<WorkflowExecution>
+      updateExecution: (data: { id: string; status: string }) => Promise<WorkflowExecution>
     }
   }
+}
+
+// ========== Workflow Types ==========
+
+interface WorkflowStepInput {
+  orderIndex: number
+  cameraId: string | null
+  productId: string | null
+  timeoutMs?: number
+}
+
+interface WorkflowStep {
+  id: string
+  workflowId: string
+  orderIndex: number
+  cameraId: string | null
+  productId: string | null
+  timeoutMs: number
+  camera?: any
+  product?: any
+}
+
+interface Workflow {
+  id: string
+  name: string
+  description?: string
+  steps: WorkflowStep[]
+  createdAt: string
+  updatedAt: string
+}
+
+interface WorkflowStepResult {
+  id: string
+  executionId: string
+  stepId: string
+  stepOrderIndex: number
+  cameraId?: string
+  productId?: string
+  status: string
+  imagePath?: string
+  inferenceResult?: string
+  isAnomaly?: boolean
+  anomalyCount?: number
+  errorMessage?: string
+  startedAt?: string
+  completedAt?: string
+}
+
+interface WorkflowStepResultInput {
+  executionId: string
+  stepId: string
+  stepOrderIndex: number
+  cameraId?: string
+  productId?: string
+  status: string
+  imagePath?: string
+  inferenceResult?: string
+  isAnomaly?: boolean
+  anomalyCount?: number
+  errorMessage?: string
+  startedAt?: string
+  completedAt?: string
+}
+
+interface WorkflowExecution {
+  id: string
+  workflowId: string
+  status: string
+  startedAt: string
+  completedAt?: string
+  workflow?: Workflow
+  stepResults?: WorkflowStepResult[]
 }
 
 interface RoiImage {

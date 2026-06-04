@@ -2,7 +2,7 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Settings2, Pin, PinOff, Settings, Home, Edit3, Zap, Server } from 'lucide-vue-next'
+import { Settings2, Pin, PinOff, Settings, Home, Edit3, Zap, Server, Workflow } from 'lucide-vue-next'
 import UiButton from '@/components/ui/button/Button.vue'
 
 const { t } = useI18n()
@@ -52,7 +52,8 @@ const navItems = computed(() => [
   { key: 'home', label: t('common.home'), to: '/', icon: Home },
   { key: 'annotation', label: t('common.dataAnnotation'), to: '/annotation', icon: Edit3 },
   { key: 'training', label: t('common.dataTraining'), to: '/training', icon: Zap },
-  { key: 'deploy', label: t('common.serviceDeployment'), to: '/deploy', icon: Server }
+  { key: 'deploy', label: t('common.serviceDeployment'), to: '/deploy', icon: Server },
+  { key: 'workflow', label: '工作流', to: '/workflow', icon: Workflow }
 ])
 
 const isActive = (path: string) => {

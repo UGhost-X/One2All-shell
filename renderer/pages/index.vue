@@ -41,10 +41,13 @@ import {
   Usb,
   AlertTriangle,
   MoreVertical,
-  X
+  X,
+  Workflow,
+  Play,
+  StopCircle
 } from 'lucide-vue-next'
 import { computed, ref, onBeforeUnmount, onMounted, onActivated, watch, nextTick, inject } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import Input from '@/components/ui/input/Input.vue'
 import Label from '@/components/ui/label/Label.vue'
 import Separator from '@/components/ui/separator/Separator.vue'
@@ -67,11 +70,27 @@ import UiCardDescription from '@/components/ui/card/CardDescription.vue'
 import UiCardContent from '@/components/ui/card/CardContent.vue'
 import UiCardFooter from '@/components/ui/card/CardFooter.vue'
 
+import { useWorkflowExecutor } from '../composables/useWorkflowExecutor'
+import WorkflowSelector from '../components/WorkflowSelector.vue'
+import WorkflowExecutionProgress from '../components/WorkflowExecutionProgress.vue'
+import WorkflowResultSummary from '../components/WorkflowResultSummary.vue'
+
 definePageMeta({ name: 'HomePage' })
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const globalToast = inject<any>('toast')
+
+// ====== 工作流 ======
+const workflowList = ref<Array<{ id: string; name: string; description?: string; stepCount: number }>>([])
+const activeWorkflowId = ref<string | null>(null)
+const activeWorkflowSteps = ref<any[]>([])
+const workflowStepImages = ref<Record<number, { dataUrl: string; detections: any[] }>>({})
+const viewingStepIndex = ref<number>(-1)
+const showWorkflowGrid = ref(true)  // 是否显示工作流步骤网格（点击步骤放大，点击空白回网格）
+const workflowExecutor = useWorkflowExecutor()
+const selectedPredictionStep = ref<number | null>(null)  // 预测结果区域选中的步骤
 
 // Toast State
 const showToast = (message: string, type: 'info' | 'error' = 'info') => {
@@ -147,6 +166,17 @@ const viewerImageStyle = computed(() => {
   const img = viewerImageNatural.value
   if (!img) return {}
   return { width: `${img.w}px`, height: `${img.h}px` }
+})
+
+// 工作流网格布局计算
+const workflowGridLayout = computed(() => {
+  const stepCount = Object.keys(workflowStepImages.value).length
+  if (stepCount <= 1) return { cols: 1, rows: 1 }
+  if (stepCount === 2) return { cols: 2, rows: 1 }
+  if (stepCount <= 4) return { cols: 2, rows: 2 }
+  if (stepCount <= 6) return { cols: 3, rows: 2 }
+  if (stepCount <= 9) return { cols: 3, rows: 3 }
+  return { cols: 4, rows: Math.ceil(stepCount / 4) }
 })
 
 const viewerZoomLabel = computed(() => `${Math.round(viewerZoom.value * 100)}%`)
@@ -294,6 +324,10 @@ const handleMainImageLoad = (e: Event) => {
   if (!imgEl) return
   viewerImageNatural.value = { w: imgEl.naturalWidth || imgEl.width, h: imgEl.naturalHeight || imgEl.height }
   updateViewerViewportSize()
+  // 图片加载完成后重绘检测框（确保 canvas 尺寸与图片匹配）
+  if (detectionResults.value.length > 0) {
+    nextTick(() => drawDetectionBoxes())
+  }
 }
 
 const captureScreenshot = async () => {
@@ -517,6 +551,68 @@ const fetchInferenceServices = async () => {
  * 返回 { success: boolean, error?: string }，主进程据此控制指示灯
  */
 async function externalCapture() {
+  // 检查 localStorage 中是否有启用的工作流
+  const enabledWorkflowId = localStorage.getItem('activeWorkflowId')
+  if (!enabledWorkflowId) {
+    return { success: false, error: '没有启用的工作流' }
+  }
+
+  // 如果 activeWorkflowId 与启用的工作流不一致，重新加载
+  if (activeWorkflowId.value !== enabledWorkflowId) {
+    await loadWorkflowList()
+    const enabledWorkflow = workflowList.value.find(wf => wf.id === enabledWorkflowId)
+    if (!enabledWorkflow) {
+      localStorage.removeItem('activeWorkflowId')
+      return { success: false, error: '启用的工作流已不存在' }
+    }
+    await selectWorkflow(enabledWorkflowId)
+  }
+
+  // 工作流模式：委托给工作流执行器
+  if (activeWorkflowId.value) {
+    const workflow = {
+      id: activeWorkflowId.value,
+      name: '',
+      steps: activeWorkflowSteps.value
+    }
+    try {
+      const result = await workflowExecutor.executeWorkflow(workflow)
+      // 将结果存入全局检测结果供 UI 展示
+      detectionResults.value = result.allDetections.map(d => ({
+        label: d.label,
+        score: d.score,
+        bbox: d.bbox,
+        segmentation: d.segmentation,
+        isAnomaly: d.isAnomaly,
+        visible: true,
+        anomaly_type: d.anomaly_type,
+        category: d.category,
+        pos_id: d.pos_id,
+        workpiece_id: d.workpiece_id,
+        workpiece_key: d.workpiece_key,
+        workflowStepIndex: d.workflowStepIndex
+      } as any))
+      // 存储每步的图片，用于切换查看
+      workflowStepImages.value = {}
+      workflowExecutor.stepResults.value.forEach((r, i) => {
+        if (r.dataUrl) {
+          workflowStepImages.value[i] = {
+            dataUrl: r.dataUrl,
+            detections: r.detections
+          }
+        }
+      })
+      // 工作流结果不替换主视图的产品图，只在网格区域展示
+      viewingStepIndex.value = -1
+      showWorkflowGrid.value = true
+      // 推理被跳过的步骤也视为不成功，避免硬件指示灯误报 OK
+      return { success: result.success && result.inferenceSkippedCount === 0 }
+    } catch (err: any) {
+      return { success: false, error: err?.message || '工作流执行失败' }
+    }
+  }
+
+  // 单品模式（原有逻辑）
   if (!selectedProductId.value) {
     showToast('请先选择一个产品', 'error')
     return { success: false, error: '请先在界面中选择一个产品' }
@@ -538,8 +634,6 @@ async function externalCapture() {
 
   try {
     const ok = await takeCapture()
-    // 防御：等待推理（含 autoSaveRoiImages）彻底完成再返回
-    // takeCapture 内部已 await runCaptureInference，此处轮询 isInferring 作为兜底
     if (isInferring.value) {
       await new Promise<void>((resolve) => {
         const check = setInterval(() => {
@@ -554,6 +648,186 @@ async function externalCapture() {
   } catch (err: any) {
     showToast(err?.message || '拍照失败', 'error')
     return { success: false, error: err?.message || '拍照失败' }
+  }
+}
+
+// ====== 工作流执行 (UI触发) ======
+async function startWorkflowExecution() {
+  if (!activeWorkflowId.value) {
+    showToast('请先选择一个工作流', 'error')
+    return
+  }
+
+  const workflow = {
+    id: activeWorkflowId.value,
+    name: '',
+    steps: activeWorkflowSteps.value
+  }
+
+  try {
+    const result = await workflowExecutor.executeWorkflow(workflow)
+    detectionResults.value = result.allDetections.map(d => ({
+      label: d.label,
+      score: d.score,
+      bbox: d.bbox,
+      segmentation: d.segmentation,
+      isAnomaly: d.isAnomaly,
+      visible: true,
+      anomaly_type: d.anomaly_type,
+      category: d.category,
+      pos_id: d.pos_id,
+      workpiece_id: d.workpiece_id,
+      workpiece_key: d.workpiece_key,
+      workflowStepIndex: d.workflowStepIndex
+    } as any))
+
+    workflowStepImages.value = {}
+    workflowExecutor.stepResults.value.forEach((r, i) => {
+      if (r.dataUrl) {
+        workflowStepImages.value[i] = { dataUrl: r.dataUrl, detections: r.detections }
+      }
+    })
+
+    // 工作流结果不替换主视图的产品图，只在网格区域展示
+    viewingStepIndex.value = -1
+    showWorkflowGrid.value = true
+
+    // 显示预检警告
+    if (result.preflightWarnings?.length > 0) {
+      result.preflightWarnings.forEach(w => showToast(w, 'error'))
+    }
+
+    if (workflowExecutor.failedSteps.value > 0) {
+      showToast('工作流执行有步骤失败', 'error')
+    } else if (result.inferenceSkippedCount > 0) {
+      const totalSteps = workflowExecutor.stepResults.value.length
+      showToast(`工作流执行完成 — ${result.inferenceSkippedCount}/${totalSteps} 个步骤推理服务自动启动失败，已跳过推理`, 'error')
+    } else if (workflowExecutor.overallAnomaly.value) {
+      showToast(`工作流执行完成 — 检出 ${workflowExecutor.totalAnomalyCount.value} 个缺陷`, 'info')
+    } else {
+      showToast('工作流执行完成 — OK', 'info')
+    }
+  } catch (err: any) {
+    showToast(err?.message || '工作流执行失败', 'error')
+  }
+}
+
+async function abortWorkflow() {
+  workflowExecutor.abort()
+  showToast('工作流已取消', 'info')
+}
+
+// 切换查看不同步骤的预测结果（在预测结果区域显示）
+function viewStepImage(stepIndex: number) {
+  const img = workflowStepImages.value[stepIndex]
+  if (img) {
+    selectedPredictionStep.value = stepIndex
+    showWorkflowGrid.value = false
+    viewingStepIndex.value = stepIndex
+    mainViewUrl.value = img.dataUrl
+    mainViewState.value = 'image'
+    // 只显示当前步骤的检测结果
+    detectionResults.value = img.detections.map(d => ({
+      ...d,
+      visible: true
+    } as any))
+  }
+}
+
+// 返回步骤列表
+function backToStepList() {
+  selectedPredictionStep.value = null
+  detectionResults.value = []
+}
+
+// 从单步放大视图回到工作流网格
+function backToWorkflowGrid() {
+  showWorkflowGrid.value = true
+  detectionResults.value = []
+  // 清除检测画布
+  if (detectionCanvasRef.value) {
+    const ctx = detectionCanvasRef.value.getContext('2d')
+    if (ctx) {
+      ctx.clearRect(0, 0, detectionCanvasRef.value.width, detectionCanvasRef.value.height)
+    }
+  }
+}
+
+// 加载工作流列表
+async function loadWorkflowList() {
+  try {
+    const api = (window as any).electronAPI
+    if (!api?.listWorkflows) return
+    const list = await api.listWorkflows()
+    workflowList.value = (list || []).map((wf: any) => ({
+      id: wf.id,
+      name: wf.name,
+      description: wf.description,
+      stepCount: (wf.steps || []).length
+    }))
+  } catch (err) {
+    console.error('加载工作流列表失败:', err)
+  }
+}
+
+// 加载工作流详情（步骤）
+async function loadWorkflowSteps(workflowId: string) {
+  try {
+    const api = (window as any).electronAPI
+    if (!api?.getWorkflow) return
+    const wf = await api.getWorkflow(workflowId)
+    if (wf?.steps) {
+      // 预加载相机和产品信息
+      const [camList, prodList] = await Promise.all([
+        api.getCameras ? api.getCameras() : Promise.resolve([]),
+        api.getProducts ? api.getProducts() : Promise.resolve([])
+      ])
+      activeWorkflowSteps.value = wf.steps.map((s: any) => ({
+        ...s,
+        camera: camList.find((c: any) => c.id === s.cameraId) || null,
+        product: prodList.find((p: any) => p.id === s.productId) || null
+      }))
+    }
+  } catch (err) {
+    console.error('加载工作流步骤失败:', err)
+  }
+}
+
+// 工作流推理入口
+async function startWorkflowInference() {
+  // 从 localStorage 读取启用的工作流
+  const enabledWorkflowId = localStorage.getItem('activeWorkflowId')
+  if (!enabledWorkflowId) {
+    showToast('没有启用的工作流，请先到工作流配置页面启用工作流', 'error')
+    return
+  }
+
+  // 加载工作流列表
+  await loadWorkflowList()
+
+  // 检查启用的工作流是否仍然存在
+  const enabledWorkflow = workflowList.value.find(wf => wf.id === enabledWorkflowId)
+  if (!enabledWorkflow) {
+    showToast('启用的工作流已不存在，请重新配置', 'error')
+    localStorage.removeItem('activeWorkflowId')
+    return
+  }
+
+  // 选择启用的工作流并执行
+  await selectWorkflow(enabledWorkflowId)
+  // 启动工作流执行
+  await startWorkflowExecution()
+}
+
+// 选择工作流
+async function selectWorkflow(id: string | null) {
+  activeWorkflowId.value = id
+  if (id) {
+    await loadWorkflowSteps(id)
+    localStorage.setItem('activeWorkflowId', id)
+  } else {
+    activeWorkflowSteps.value = []
+    localStorage.removeItem('activeWorkflowId')
   }
 }
 
@@ -582,6 +856,19 @@ onMounted(async () => {
     restoreSectionHeights()
     await fetchModbusStatus()
     await loadModbusConfig()
+
+    // 加载工作流列表（用于 externalCapture）
+    await loadWorkflowList()
+    // 如果 localStorage 中有启用的工作流，则加载它（用于 externalCapture）
+    const enabledWorkflowId = localStorage.getItem('activeWorkflowId')
+    if (enabledWorkflowId) {
+      const enabledWorkflow = workflowList.value.find(wf => wf.id === enabledWorkflowId)
+      if (enabledWorkflow) {
+        await selectWorkflow(enabledWorkflowId)
+      } else {
+        localStorage.removeItem('activeWorkflowId')
+      }
+    }
   }
   window.__externalCapture = externalCapture
   document.addEventListener('fullscreenchange', syncFullscreenState)
@@ -1107,6 +1394,8 @@ const handleCaptureFromCamera = async (camera: any): Promise<boolean> => {
           if (selectedProductHasImage.value && selectedProductHasAnnotation.value) {
             await runCaptureInference(dataUrl)
           } else {
+            clearResults()  // 非推理拍照也清除旧检测结果
+
             const savedPath = await window.electronAPI.saveImage({
               productId: selectedProductId.value,
               fileName,
@@ -1296,6 +1585,10 @@ const handleSelectProduct = async (id: string) => {
   selectedProductId.value = id
   localStorage.setItem('selectedProductId', String(id))
   clearResults()
+  // 切换产品时清除工作流上次执行的图片和步骤状态
+  workflowStepImages.value = {}
+  viewingStepIndex.value = -1
+  showWorkflowGrid.value = true
   const product = products.value.find(p => p.id === id)
 
   if (product?.lastImagePath && window.electronAPI?.loadImage) {
@@ -2014,6 +2307,9 @@ const takeCapture = async (): Promise<boolean> => {
     return false
   }
 
+  // 清除旧结果（工作流残留等），确保新拍照不会叠加旧检测框
+  clearResults()
+
   const targetCamera = getEffectiveCamera()
   if (!targetCamera) {
     showToast('请先在产品设置中绑定相机', 'error')
@@ -2096,6 +2392,7 @@ const takeCapture = async (): Promise<boolean> => {
     if (selectedProductHasImage.value && selectedProductHasAnnotation.value) {
       await runCaptureInference(dataUrl)
     } else {
+      clearResults()  // 非推理拍照也清除旧检测结果
       const fileName = `capture_${Date.now()}.jpg`
       if (window.electronAPI?.saveImage) {
         try {
@@ -2127,6 +2424,14 @@ const takeCapture = async (): Promise<boolean> => {
 }
 
 const runCaptureInference = async (dataUrl: string) => {
+  // 清除旧结果，确保推理结果不会与工作流残留叠加
+  clearResults()
+  workflowExecutor.stepResults.value = []
+  selectedPredictionStep.value = null
+  workflowStepImages.value = {}
+  viewingStepIndex.value = -1
+  showWorkflowGrid.value = true
+
   await fetchInferenceServices()
 
   if (inferenceServices.value.length === 0) {
@@ -2420,6 +2725,13 @@ const clearResults = () => {
   if (breatheAnimationId) {
     cancelAnimationFrame(breatheAnimationId)
     breatheAnimationId = null
+  }
+  // 清除检测画布上的绘制内容
+  if (detectionCanvasRef.value) {
+    const ctx = detectionCanvasRef.value.getContext('2d')
+    if (ctx) {
+      ctx.clearRect(0, 0, detectionCanvasRef.value.width, detectionCanvasRef.value.height)
+    }
   }
 }
 
@@ -3652,7 +3964,62 @@ onMounted(() => {
 
           <!-- Canvas Area -->
           <div class="flex-1 p-6 min-h-0 border-r">
+            <!-- 工作流多步骤网格展示 -->
             <div
+              v-if="Object.keys(workflowStepImages).length > 0 && showWorkflowGrid"
+              class="w-full h-full rounded-lg bg-background/40 overflow-hidden shadow-2xl select-none"
+            >
+              <div
+                class="w-full h-full grid gap-2 p-2"
+                :style="{
+                  gridTemplateColumns: `repeat(${workflowGridLayout.cols}, 1fr)`,
+                  gridTemplateRows: `repeat(${workflowGridLayout.rows}, 1fr)`
+                }"
+              >
+                <div
+                  v-for="(img, stepIdx) in workflowStepImages"
+                  :key="stepIdx"
+                  class="relative rounded-lg overflow-hidden bg-black/5 border border-border/50 cursor-pointer hover:border-primary/60 hover:shadow-lg transition-all active:scale-[0.98]"
+                  @click="viewStepImage(Number(stepIdx))"
+                >
+                  <img
+                    :src="img.dataUrl"
+                    class="w-full h-full object-contain pointer-events-none"
+                    :alt="`步骤 ${Number(stepIdx) + 1}`"
+                  />
+                  <div class="absolute top-2 left-2 bg-primary/90 text-primary-foreground px-2 py-0.5 rounded text-xs font-bold">
+                    步骤 {{ Number(stepIdx) + 1 }}
+                  </div>
+                  <div
+                    v-if="workflowExecutor.stepResults.value[Number(stepIdx)]?.status === 'failed'"
+                    class="absolute top-2 right-2 bg-red-600 text-white px-2 py-0.5 rounded text-xs font-bold"
+                  >
+                    失败
+                  </div>
+                  <div
+                    v-else-if="workflowExecutor.stepResults.value[Number(stepIdx)]?.inferenceSkipped"
+                    class="absolute top-2 right-2 bg-yellow-500 text-white px-2 py-0.5 rounded text-xs font-bold"
+                  >
+                    跳过
+                  </div>
+                  <div
+                    v-else-if="workflowExecutor.stepResults.value[Number(stepIdx)]?.isAnomaly"
+                    class="absolute top-2 right-2 bg-red-500 text-white px-2 py-0.5 rounded text-xs font-bold"
+                  >
+                    NG
+                  </div>
+                  <div
+                    v-else-if="workflowExecutor.stepResults.value[Number(stepIdx)]?.status === 'completed'"
+                    class="absolute top-2 right-2 bg-green-500 text-white px-2 py-0.5 rounded text-xs font-bold"
+                  >
+                    OK
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- 单图展示（单品模式或工作流单步） -->
+            <div
+              v-else
               ref="viewerViewportRef"
               class="relative w-full h-full rounded-lg bg-background/40 overflow-hidden shadow-2xl select-none touch-none"
               :class="viewerIsPanning ? 'cursor-grabbing' : 'cursor-grab'"
@@ -3662,6 +4029,22 @@ onMounted(() => {
               @pointercancel="onViewerPointerUp"
               @wheel.prevent="onViewerWheel"
             >
+              <!-- 工作流单步放大：返回网格按钮 -->
+              <div
+                v-if="Object.keys(workflowStepImages).length > 0 && !showWorkflowGrid"
+                class="absolute top-3 left-3 z-10"
+                @pointerdown.stop
+              >
+                <UiButton
+                  variant="secondary"
+                  size="sm"
+                  class="h-8 gap-1.5 text-xs font-bold shadow-md bg-background/80 backdrop-blur-sm hover:bg-background"
+                  @click.stop="backToWorkflowGrid"
+                >
+                  <ChevronRight class="h-3.5 w-3.5 rotate-180" />
+                  返回网格
+                </UiButton>
+              </div>
               <div class="absolute left-1/2 top-1/2 will-change-transform" :style="viewerTransformStyle">
                 <img
                   ref="viewerImageRef"
@@ -3835,6 +4218,7 @@ onMounted(() => {
             <div v-show="!sectionCollapsed.settings" class="flex-1 overflow-auto p-4 space-y-4">
               <!-- 参数 + 操作按钮网格 -->
               <div class="border border-border rounded-md overflow-hidden">
+                <!-- 第一行 -->
                 <div class="grid grid-cols-4 border-b border-border">
                   <div class="p-2 border-r border-border flex items-center">
                     <UiButton class="w-full h-10 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold" @click="startLive">
@@ -3891,7 +4275,7 @@ onMounted(() => {
                     </div>
                   </div>
                 </div>
-                <div class="grid grid-cols-4">
+                <div class="grid grid-cols-4 border-b border-border">
                   <div class="p-2 border-r border-border" />
                   <div class="p-2 border-r-2 border-r-border/60" />
                   <div class="p-2 border-r border-border flex items-center"><span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">偏移Y</span></div>
@@ -3902,6 +4286,21 @@ onMounted(() => {
                       <UiButton variant="ghost" size="icon" class="h-7 w-7 rounded-l-none shrink-0 bg-blue-600 hover:bg-blue-700 text-white" @click="offsetYValue = Math.min(1000, offsetYValue + 2)"><Plus class="h-3 w-3" /></UiButton>
                     </div>
                   </div>
+                </div>
+                <!-- 工作流按钮行 -->
+                <div class="grid grid-cols-4">
+                  <div class="p-2 border-r border-border flex items-center">
+                    <UiButton class="w-full h-10 bg-green-600 hover:bg-green-700 text-white text-xs font-bold" @click="router.push('/workflow')">
+                      <Settings2 class="h-4 w-4 mr-1" />工作流配置
+                    </UiButton>
+                  </div>
+                  <div class="p-2 border-r-2 border-r-border/60 flex items-center">
+                    <UiButton class="w-full h-10 bg-green-600 hover:bg-green-700 text-white text-xs font-bold" @click="startWorkflowInference">
+                      <Play class="h-4 w-4 mr-1" />工作流推理
+                    </UiButton>
+                  </div>
+                  <div class="p-2 border-r border-border" />
+                  <div class="p-2" />
                 </div>
               </div>
             </div>
@@ -3984,117 +4383,147 @@ onMounted(() => {
           <!-- Resize: product ↔ prediction -->
           <div
             v-show="!sectionCollapsed.products && !sectionCollapsed.predictions"
-            class="h-1.5 cursor-row-resize hover:bg-primary/50 bg-border shrink-0 transition-colors active:bg-primary relative z-10"
+            class="h-1.5 cursor-row-resize hover:bg-primary/50 bg-border shrink-0 transition-colors active:bg-primary relative z-10 bg"
             @mousedown="startSectionResize('products', $event)"
           />
 
           <!-- Prediction Results -->
-          <section class="flex flex-col min-h-0 overflow-hidden" :class="sectionCollapsed.predictions ? 'shrink-0' : ''" :style="sectionCollapsed.predictions ? {} : { height: sectionHeights.predictions + 'px' }">
-            <button class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0 hover:bg-muted/50 transition-colors w-full" @click="toggleSection('predictions')">
-              <div class="flex items-center gap-2">
-                <BarChart3 class="h-4 w-4 text-primary" />
-                <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.predictionResults') }}</span>
-              </div>
-              <div class="flex items-center gap-1">
-                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionBoxes ? 'text-primary' : 'text-muted-foreground'" @click.stop="showDetectionBoxes = !showDetectionBoxes" :title="showDetectionBoxes ? '隐藏标注框' : '显示标注框'">
-                  <component :is="showDetectionBoxes ? Square : Square" class="h-3 w-3" />
-                </UiButton>
-                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionLabels ? 'text-primary' : 'text-muted-foreground'" @click.stop="showDetectionLabels = !showDetectionLabels" :title="showDetectionLabels ? '隐藏标签' : '显示标签'">
-                  <component :is="showDetectionLabels ? Eye : EyeOff" class="h-3 w-3" />
-                </UiButton>
-                <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click.stop="clearResults">
-                  <RotateCcw class="h-3 w-3" />
-                  {{ t('dashboard.clear') }}
-                </UiButton>
-                <ChevronRight class="h-4 w-4 text-muted-foreground transition-transform duration-200 ml-1" :class="{ 'rotate-90': !sectionCollapsed.predictions }" />
-              </div>
-            </button>
-            <div v-show="!sectionCollapsed.predictions" class="flex-1 overflow-y-auto p-3 min-h-0">
-              <!-- 目标检测结果 - 树形展示 -->
-              <div v-if="detectionResults.length > 0" class="space-y-2">
-                <!-- 遍历 anomaly_type -->
-                <div v-for="(categories, anomalyType) in groupedDetectionResults" :key="anomalyType" class="rounded-md overflow-hidden mb-2" :class="anomalyType === 'NG' || anomalyType === 'anomaly' ? 'bg-destructive/5 border border-destructive/20' : 'bg-muted/20 border border-border/50'">
-                  <!-- 第一层: anomaly_type -->
-                  <button
-                    @click="treeCollapsedState['type_' + anomalyType] = !treeCollapsedState['type_' + anomalyType]"
-                    class="w-full px-3 py-2 flex items-center justify-between bg-muted/50 hover:bg-muted transition-colors"
-                  >
-                    <div class="flex items-center gap-2">
-                      <ChevronRight
-                        class="h-4 w-4 text-muted-foreground transition-transform duration-200"
-                        :class="{ 'rotate-90': !treeCollapsedState['type_' + anomalyType] }"
-                      />
-                      <span class="text-xs font-semibold text-foreground">{{ anomalyType }}</span>
-                    </div>
-                  </button>
+           <section class="flex flex-col min-h-0 overflow-hidden" :class="sectionCollapsed.predictions ? 'shrink-0' : 'flex-1'" :style="sectionCollapsed.predictions ? {} : { flex: '1' }">
+              <button class="h-10 px-4 flex items-center justify-between bg-muted/30 border-b shrink-0 hover:bg-muted/50 transition-colors w-full" @click="toggleSection('predictions')">
+                <div class="flex items-center gap-2">
+                  <BarChart3 class="h-4 w-4 text-primary" />
+                  <span class="text-xs font-bold uppercase tracking-wider text-muted-foreground">{{ t('dashboard.predictionResults') }}</span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionBoxes ? 'text-primary' : 'text-muted-foreground'" @click.stop="showDetectionBoxes = !showDetectionBoxes" :title="showDetectionBoxes ? '隐藏标注框' : '显示标注框'">
+                    <component :is="showDetectionBoxes ? Square : Square" class="h-3 w-3" />
+                  </UiButton>
+                  <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 transition-colors" :class="showDetectionLabels ? 'text-primary' : 'text-muted-foreground'" @click.stop="showDetectionLabels = !showDetectionLabels" :title="showDetectionLabels ? '隐藏标签' : '显示标签'">
+                    <component :is="showDetectionLabels ? Eye : EyeOff" class="h-3 w-3" />
+                  </UiButton>
+                  <UiButton variant="ghost" size="sm" class="h-6 px-2 text-[10px] font-bold gap-1 text-muted-foreground hover:text-destructive transition-colors" @click.stop="clearResults">
+                    <RotateCcw class="h-3 w-3" />
+                    {{ t('dashboard.clear') }}
+                  </UiButton>
+                  <ChevronRight class="h-4 w-4 text-muted-foreground transition-transform duration-200 ml-1" :class="{ 'rotate-90': !sectionCollapsed.predictions }" />
+                </div>
+              </button>
 
-                  <!-- 第二层: category -->
-                  <div v-show="!treeCollapsedState['type_' + anomalyType]" class="divide-y divide-border/20">
-                    <div v-for="(posIds, category) in categories" :key="category">
+              <div v-show="!sectionCollapsed.predictions" class="flex-1 flex flex-col min-h-0 overflow-hidden">
+
+                <!-- 步骤列表（未选中步骤时显示） -->
+                <WorkflowResultSummary
+                  v-if="workflowExecutor.stepResults.value.length > 0 && selectedPredictionStep === null"
+                  class="flex-1 min-h-0"
+                  :results="workflowExecutor.stepResults.value.map(r => ({
+                    stepIndex: r.stepIndex,
+                    status: r.status,
+                    isAnomaly: r.isAnomaly,
+                    anomalyCount: r.anomalyCount,
+                    errorMessage: r.errorMessage,
+                    inferenceSkipped: r.inferenceSkipped
+                  }))"
+                  @select-step="viewStepImage"
+                />
+
+                <!-- 选中步骤后的检测结果树 -->
+                <div v-if="selectedPredictionStep !== null" class="flex-1 flex flex-col min-h-0 overflow-hidden p-3">
+                  <!-- 返回按钮 -->
+                  <div class="flex items-center gap-2 mb-3 pb-2 border-b shrink-0">
+                    <UiButton variant="outline" size="sm" class="h-7 text-xs" @click="backToStepList">
+                      <ChevronRight class="h-3.5 w-3.5 rotate-180 mr-1" />
+                      返回步骤列表
+                    </UiButton>
+                    <span class="text-sm font-medium">步骤 {{ selectedPredictionStep + 1 }} 检测结果</span>
+                  </div>
+
+                  <!-- 检测结果树 -->
+                  <div v-if="detectionResults.length > 0" class="flex-1 min-h-0 overflow-y-auto space-y-2">
+                    <!-- 遍历 anomaly_type -->
+                    <div v-for="(categories, anomalyType) in groupedDetectionResults" :key="anomalyType" class="rounded-md overflow-hidden mb-2" :class="anomalyType === 'NG' || anomalyType === 'anomaly' ? 'bg-destructive/5 border border-destructive/20' : 'bg-muted/20 border border-border/50'">
+                      <!-- 第一层: anomaly_type -->
                       <button
-                        @click="treeCollapsedState['cat_' + anomalyType + '_' + category] = !treeCollapsedState['cat_' + anomalyType + '_' + category]"
-                        class="w-full px-3 py-1.5 pl-8 flex items-center justify-between hover:bg-muted/20 transition-colors border-l-2 border-transparent hover:border-border/50"
+                        @click="treeCollapsedState['type_' + anomalyType] = !treeCollapsedState['type_' + anomalyType]"
+                        class="w-full px-3 py-2 flex items-center justify-between bg-muted/50 hover:bg-muted transition-colors"
                       >
                         <div class="flex items-center gap-2">
                           <ChevronRight
-                            class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
-                            :class="{ 'rotate-90': !treeCollapsedState['cat_' + anomalyType + '_' + category] }"
+                            class="h-4 w-4 text-muted-foreground transition-transform duration-200"
+                            :class="{ 'rotate-90': !treeCollapsedState['type_' + anomalyType] }"
                           />
-                          <span class="text-xs text-foreground">{{ category }}</span>
+                          <span class="text-xs font-semibold text-foreground">{{ anomalyType }}</span>
                         </div>
                       </button>
 
-                      <!-- 第三层: pos_id -->
-                      <div v-show="!treeCollapsedState['cat_' + anomalyType + '_' + category]">
-                        <div v-for="(items, posId) in posIds" :key="posId">
+                      <!-- 第二层: category -->
+                      <div v-show="!treeCollapsedState['type_' + anomalyType]" class="divide-y divide-border/20">
+                        <div v-for="(posIds, category) in categories" :key="category">
                           <button
-                            @click="treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] = !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]"
-                            class="w-full px-3 py-1.5 pl-12 flex items-center justify-between hover:bg-muted/10 transition-colors border-l border-border/30"
+                            @click="treeCollapsedState['cat_' + anomalyType + '_' + category] = !treeCollapsedState['cat_' + anomalyType + '_' + category]"
+                            class="w-full px-3 py-1.5 pl-8 flex items-center justify-between hover:bg-muted/20 transition-colors border-l-2 border-transparent hover:border-border/50"
                           >
                             <div class="flex items-center gap-2">
                               <ChevronRight
-                                class="h-3 w-3 text-muted-foreground transition-transform duration-200"
-                                :class="{ 'rotate-90': !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] }"
+                                class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
+                                :class="{ 'rotate-90': !treeCollapsedState['cat_' + anomalyType + '_' + category] }"
                               />
-                              <span class="text-[11px] text-muted-foreground">位置ID: {{ posId }}</span>
+                              <span class="text-xs text-foreground">{{ category }}</span>
                             </div>
                           </button>
 
-                          <!-- 叶子节点: 显示 anomaly_score -->
-                          <div v-show="!treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]" class="divide-y divide-border/20">
-                            <div
-                              v-for="({ item, index: itemIndex }, idx) in items"
-                              :key="idx"
-                              @dblclick="highlightDetectionBox(itemIndex)"
-                              class="px-3 py-1.5 pl-16 flex items-center justify-between hover:bg-muted/10 cursor-pointer group transition-colors border-l border-transparent hover:border-primary/20"
-                            >
-                              <div class="flex items-center gap-2">
-                                <button
-                                  @click.stop="item.visible = !item.visible"
-                                  class="flex items-center justify-center transition-colors hover:opacity-70"
+                          <!-- 第三层: pos_id -->
+                          <div v-show="!treeCollapsedState['cat_' + anomalyType + '_' + category]">
+                            <div v-for="(items, posId) in posIds" :key="posId">
+                              <button
+                                @click="treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] = !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]"
+                                class="w-full px-3 py-1.5 pl-12 flex items-center justify-between hover:bg-muted/10 transition-colors border-l border-border/30"
+                              >
+                                <div class="flex items-center gap-2">
+                                  <ChevronRight
+                                    class="h-3 w-3 text-muted-foreground transition-transform duration-200"
+                                    :class="{ 'rotate-90': !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] }"
+                                  />
+                                  <span class="text-[11px] text-muted-foreground">位置ID: {{ posId }}</span>
+                                </div>
+                              </button>
+
+                              <!-- 叶子节点: 显示 anomaly_score -->
+                              <div v-show="!treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]" class="divide-y divide-border/20">
+                                <div
+                                  v-for="({ item, index: itemIndex }, idx) in items"
+                                  :key="idx"
+                                  @dblclick="highlightDetectionBox(itemIndex)"
+                                  class="px-3 py-1.5 pl-16 flex items-center justify-between hover:bg-muted/10 cursor-pointer group transition-colors border-l border-transparent hover:border-primary/20"
                                 >
-                                  <Eye v-if="item.visible" class="h-3 w-3 text-muted-foreground" />
-                                  <EyeOff v-else class="h-3 w-3 text-muted-foreground/50" />
-                                </button>
-                                <span class="text-[11px] text-muted-foreground">异常得分:</span>
-                              </div>
-                              <div class="flex items-center gap-2">
-                                <UiButton
-                                  variant="ghost"
-                                  size="sm"
-                                  class="h-5 px-2 text-[10px] font-bold gap-1"
-                                  :class="item.isAnomaly ? 'text-red-500 hover:text-red-600 hover:bg-red-50' : 'text-green-500 hover:text-green-600 hover:bg-green-50'"
-                                  @click.stop="handleToggleAnomalyWithConfirm(itemIndex, !item.isAnomaly)"
-                                >
-                                  <span class="w-1.5 h-1.5 rounded-full" :class="item.isAnomaly ? 'bg-red-500' : 'bg-green-500'"></span>
-                                  {{ item.isAnomaly ? 'NG' : 'OK' }}
-                                </UiButton>
-                                <span
-                                  class="text-[11px] font-mono font-medium"
-                                  :class="item.isAnomaly ? 'text-red-500' : 'text-green-500'"
-                                >
-                                  {{ (item.score / 100).toFixed(2) }}
-                                </span>
+                                  <div class="flex items-center gap-2">
+                                    <button
+                                      @click.stop="item.visible = !item.visible"
+                                      class="flex items-center justify-center transition-colors hover:opacity-70"
+                                    >
+                                      <Eye v-if="item.visible" class="h-3 w-3 text-muted-foreground" />
+                                      <EyeOff v-else class="h-3 w-3 text-muted-foreground/50" />
+                                    </button>
+                                    <span class="text-[11px] text-muted-foreground">异常得分:</span>
+                                  </div>
+                                  <div class="flex items-center gap-2">
+                                    <UiButton
+                                      variant="ghost"
+                                      size="sm"
+                                      class="h-5 px-2 text-[10px] font-bold gap-1"
+                                      :class="item.isAnomaly ? 'text-red-500 hover:text-red-600 hover:bg-red-50' : 'text-green-500 hover:text-green-600 hover:bg-green-50'"
+                                      @click.stop="handleToggleAnomalyWithConfirm(itemIndex, !item.isAnomaly)"
+                                    >
+                                      <span class="w-1.5 h-1.5 rounded-full" :class="item.isAnomaly ? 'bg-red-500' : 'bg-green-500'"></span>
+                                      {{ item.isAnomaly ? 'NG' : 'OK' }}
+                                    </UiButton>
+                                    <span
+                                      class="text-[11px] font-mono font-medium"
+                                      :class="item.isAnomaly ? 'text-red-500' : 'text-green-500'"
+                                    >
+                                      {{ (item.score / 100).toFixed(2) }}
+                                    </span>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -4103,39 +4532,133 @@ onMounted(() => {
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <!-- 分类结果 -->
-              <div v-else-if="predictionResults.length > 0" class="space-y-4">
-                <div v-if="predictionConfidence !== null" class="p-4 rounded-xl bg-primary/5 border border-primary/10">
-                  <div class="flex items-center gap-2 mb-1">
-                    <Sparkles class="h-3.5 w-3.5 text-primary" />
-                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest">置信度评分</span>
-                  </div>
-                  <div class="text-3xl font-black tracking-tighter text-primary">{{ predictionConfidence.toFixed(1) }}<span class="text-lg text-primary/60">%</span></div>
+                <!-- 无检测结果提示 -->
+                <div v-else-if="selectedPredictionStep !== null && detectionResults.length === 0" class="flex-1 flex items-center justify-center text-muted-foreground">
+                  <p class="text-sm">该步骤没有检测结果</p>
                 </div>
 
-                <div class="space-y-2">
-                  <div v-for="(item, index) in predictionResults.filter(r => r.label !== '工件主体')" :key="item.label" class="p-3 rounded-xl bg-muted/30 border border-muted/50 hover:bg-muted/50 hover:border-muted/70 transition-all">
-                    <div class="flex items-center justify-between">
+                <!-- 拍照识别的检测结果树 -->
+                <div v-else-if="detectionResults.length > 0 && workflowExecutor.stepResults.value.length === 0" class="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
+                  <!-- 遍历 anomaly_type -->
+                  <div v-for="(categories, anomalyType) in groupedDetectionResults" :key="anomalyType" class="rounded-md overflow-hidden mb-2" :class="anomalyType === 'NG' || anomalyType === 'anomaly' ? 'bg-destructive/5 border border-destructive/20' : 'bg-muted/20 border border-border/50'">
+                    <!-- 第一层: anomaly_type -->
+                    <button
+                      @click="treeCollapsedState['type_' + anomalyType] = !treeCollapsedState['type_' + anomalyType]"
+                      class="w-full px-3 py-2 flex items-center justify-between bg-muted/50 hover:bg-muted transition-colors"
+                    >
                       <div class="flex items-center gap-2">
-                        <div class="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">{{ index + 1 }}</div>
-                        <span class="text-xs font-semibold text-foreground">{{ item.label }}</span>
+                        <ChevronRight
+                          class="h-4 w-4 text-muted-foreground transition-transform duration-200"
+                          :class="{ 'rotate-90': !treeCollapsedState['type_' + anomalyType] }"
+                        />
+                        <span class="text-xs font-semibold text-foreground">{{ anomalyType }}</span>
                       </div>
-                      <span class="text-xs font-mono font-bold text-primary">{{ item.score.toFixed(1) }}%</span>
+                    </button>
+
+                    <!-- 第二层: category -->
+                    <div v-show="!treeCollapsedState['type_' + anomalyType]" class="divide-y divide-border/20">
+                      <div v-for="(posIds, category) in categories" :key="category">
+                        <button
+                          @click="treeCollapsedState['cat_' + anomalyType + '_' + category] = !treeCollapsedState['cat_' + anomalyType + '_' + category]"
+                          class="w-full px-3 py-1.5 pl-8 flex items-center justify-between hover:bg-muted/20 transition-colors border-l-2 border-transparent hover:border-border/50"
+                        >
+                          <div class="flex items-center gap-2">
+                            <ChevronRight
+                              class="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200"
+                              :class="{ 'rotate-90': !treeCollapsedState['cat_' + anomalyType + '_' + category] }"
+                            />
+                            <span class="text-xs text-foreground">{{ category }}</span>
+                          </div>
+                        </button>
+
+                        <!-- 第三层: pos_id -->
+                        <div v-show="!treeCollapsedState['cat_' + anomalyType + '_' + category]">
+                          <div v-for="(items, posId) in posIds" :key="posId">
+                            <button
+                              @click="treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] = !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]"
+                              class="w-full px-3 py-1.5 pl-12 flex items-center justify-between hover:bg-muted/10 transition-colors border-l border-border/30"
+                            >
+                              <div class="flex items-center gap-2">
+                                <ChevronRight
+                                  class="h-3 w-3 text-muted-foreground transition-transform duration-200"
+                                  :class="{ 'rotate-90': !treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId] }"
+                                />
+                                <span class="text-[11px] text-muted-foreground">位置ID: {{ posId }}</span>
+                              </div>
+                            </button>
+
+                            <!-- 叶子节点: 显示 anomaly_score -->
+                            <div v-show="!treeCollapsedState['pos_' + anomalyType + '_' + category + '_' + posId]" class="divide-y divide-border/20">
+                              <div
+                                v-for="({ item, index: itemIndex }, idx) in items"
+                                :key="idx"
+                                @dblclick="highlightDetectionBox(itemIndex)"
+                                class="px-3 py-1.5 pl-16 flex items-center justify-between hover:bg-muted/10 cursor-pointer group transition-colors border-l border-transparent hover:border-primary/20"
+                              >
+                                <div class="flex items-center gap-2">
+                                  <button
+                                    @click.stop="item.visible = !item.visible"
+                                    class="flex items-center justify-center transition-colors hover:opacity-70"
+                                  >
+                                    <Eye v-if="item.visible" class="h-3 w-3 text-muted-foreground" />
+                                    <EyeOff v-else class="h-3 w-3 text-muted-foreground/50" />
+                                  </button>
+                                  <span class="text-[11px] text-muted-foreground">异常得分:</span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                  <UiButton
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-5 px-2 text-[10px] font-bold gap-1"
+                                    :class="item.isAnomaly ? 'text-red-500 hover:text-red-600 hover:bg-red-50' : 'text-green-500 hover:text-green-600 hover:bg-green-50'"
+                                    @click.stop="handleToggleAnomalyWithConfirm(itemIndex, !item.isAnomaly)"
+                                  >
+                                    <span class="w-1.5 h-1.5 rounded-full" :class="item.isAnomaly ? 'bg-red-500' : 'bg-green-500'"></span>
+                                    {{ item.isAnomaly ? 'NG' : 'OK' }}
+                                  </UiButton>
+                                  <span
+                                    class="text-[11px] font-mono font-medium"
+                                    :class="item.isAnomaly ? 'text-red-500' : 'text-green-500'"
+                                  >
+                                    {{ (item.score / 100).toFixed(2) }}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div v-else class="h-full flex flex-col items-center justify-center text-muted-foreground/40 space-y-3 py-12">
-                <div class="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center">
-                  <BarChart3 class="h-8 w-8" />
+                <!-- 分类结果 -->
+                <div v-else-if="predictionResults.length > 0" class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+                  <div v-if="predictionConfidence !== null" class="p-4 rounded-xl bg-primary/5 border border-primary/10">
+                    <div class="flex items-center gap-2 mb-1">
+                      <Sparkles class="h-3.5 w-3.5 text-primary" />
+                      <span class="text-[10px] font-bold text-primary uppercase tracking-widest">置信度评分</span>
+                    </div>
+                    <div class="text-3xl font-black tracking-tighter text-primary">{{ predictionConfidence.toFixed(1) }}<span class="text-lg text-primary/60">%</span></div>
+                  </div>
+
+                  <div class="space-y-2">
+                    <div v-for="(item, index) in predictionResults.filter(r => r.label !== '工件主体')" :key="item.label" class="p-3 rounded-xl bg-muted/30 border border-muted/50 hover:bg-muted/50 hover:border-muted/70 transition-all">
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                          <div class="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">{{ index + 1 }}</div>
+                          <span class="text-xs font-semibold text-foreground">{{ item.label }}</span>
+                        </div>
+                        <span class="text-xs font-mono font-bold text-primary">{{ item.score.toFixed(1) }}%</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <p class="text-xs font-bold uppercase tracking-wider">暂无预测数据</p>
+
               </div>
-            </div>
-          </section>
+            </section>
+            
       </aside>
     </div>
 
@@ -4756,6 +5279,15 @@ onMounted(() => {
     </div>
 
     <input ref="inferenceFileInput" type="file" accept="image/*" class="hidden" @change="handleInferenceFileChange" />
+
+    <!-- 工作流执行进度浮层 -->
+    <WorkflowExecutionProgress
+      :is-executing="workflowExecutor.isExecuting.value"
+      :current-step-index="workflowExecutor.currentStepIndex.value"
+      :step-statuses="workflowExecutor.stepStatuses"
+      :total-steps="activeWorkflowSteps.length"
+      @cancel="abortWorkflow"
+    />
   </div>
 </template>
 

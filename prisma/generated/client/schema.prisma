@@ -21,6 +21,7 @@ model Product {
   scheme        AnnotationScheme? @relation(fields: [schemeId], references: [id])
   schemeId      String?
   annotations   Annotation[]
+  workflowSteps WorkflowStep[]
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 }
@@ -62,15 +63,16 @@ model DatasetVersion {
 }
 
 model Camera {
-  id              String   @id @default(uuid())
+  id              String         @id @default(uuid())
   name            String
   ip              String
-  status          String   @default("offline")
+  status          String         @default("offline")
   config          String? // JSON string or additional info
-  isEnabled       Boolean  @default(true)
-  isNetworkCamera Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isEnabled       Boolean        @default(true)
+  isNetworkCamera Boolean        @default(false)
+  workflowSteps   WorkflowStep[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 }
 
 model TrainingRecord {
@@ -173,4 +175,67 @@ model RoiImage {
   @@index([roiType])
   @@index([usedInRetrain])
   @@index([usedTaskUuid])
+}
+
+// ========== 识别工作流模型 ==========
+
+model Workflow {
+  id          String              @id @default(uuid())
+  name        String              @unique
+  description String?
+  steps       WorkflowStep[]
+  executions  WorkflowExecution[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model WorkflowStep {
+  id         String   @id @default(uuid())
+  workflowId String
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  orderIndex Int // 执行顺序 (0, 1, 2...)
+  cameraId   String? // 使用哪个相机拍照
+  camera     Camera?  @relation(fields: [cameraId], references: [id], onDelete: SetNull)
+  productId  String? // 使用哪个产品的模型推理
+  product    Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  timeoutMs  Int      @default(30000)
+
+  @@unique([workflowId, orderIndex])
+  @@index([workflowId])
+  @@index([cameraId])
+  @@index([productId])
+}
+
+model WorkflowExecution {
+  id          String               @id @default(uuid())
+  workflowId  String
+  workflow    Workflow             @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  status      String               @default("running") // running | completed | failed
+  startedAt   DateTime             @default(now())
+  completedAt DateTime?
+  stepResults WorkflowStepResult[]
+
+  @@index([workflowId])
+  @@index([status])
+}
+
+model WorkflowStepResult {
+  id              String            @id @default(uuid())
+  executionId     String
+  execution       WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  stepId          String // FK to WorkflowStep.id
+  stepOrderIndex  Int
+  cameraId        String?
+  productId       String?
+  status          String            @default("pending") // pending | capturing | inferring | completed | failed
+  imagePath       String? // 该步骤拍照保存的图片路径
+  inferenceResult String? // 推理结果 JSON
+  isAnomaly       Boolean? // 该步骤是否检出异常
+  anomalyCount    Int? // 检出缺陷数量
+  errorMessage    String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  @@index([executionId])
+  @@index([stepId])
 }
