@@ -2605,6 +2605,7 @@ const loadAvailableRois = async () => {
     })
     if (fpResult?.success) {
       fpRois.value = fpResult.rois || []
+      selectedFpRois.value = fpRois.value.map(r => r.id)
     }
 
     const fnResult = await window.electronAPI?.getAvailableRois({
@@ -2613,6 +2614,7 @@ const loadAvailableRois = async () => {
     })
     if (fnResult?.success) {
       fnRois.value = fnResult.rois || []
+      selectedFnRois.value = fnRois.value.map(r => r.id)
     }
   } catch (err) {
     console.error('Failed to load ROIs:', err)
